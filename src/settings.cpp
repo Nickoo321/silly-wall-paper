@@ -173,6 +173,7 @@ static void BuildDefs() {
         { L"Pause on fullscreen app",           &g_pauseOnFullscreen,L"general",  L"pause_on_fullscreen" },
         { L"Pause on maximized app",            &g_pauseOnMaximized, L"general",  L"pause_on_maximized" },
         { L"Preset interlude cycling",          &g_cycleEnabled,     L"cycle",    L"enabled" },
+        { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second" },
         { L"Start with Windows",                nullptr,             nullptr,     nullptr },  // registry-backed
     };
 }

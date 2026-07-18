@@ -181,7 +181,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
 
     D3D12_DESCRIPTOR_HEAP_DESC hd = {};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    hd.NumDescriptors = kFrames + 1;   // +1: HDR analyzer render target
+    hd.NumDescriptors = kFrames * 2 + 1;   // backbuffers + analyzer + mirror buffers
     HR(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_rtvHeap)));
     m_rtvStride = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
@@ -461,6 +461,11 @@ void FluidRenderer::EndFrameAndPresent() {
                    (unsigned long)phr);
         m_presentBroken = true;
     }
+    if (m_mirrorChain) {
+        // interval 0: the main chain already provides vsync pacing
+        HRESULT mhr = m_mirrorChain->Present(0, 0);
+        if (FAILED(mhr)) m_mirrorBroken = true;
+    }
     m_fenceValues[m_frameIndex] = m_nextFence;
     HR(m_queue->Signal(m_fence.Get(), m_nextFence++));
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
@@ -624,6 +629,11 @@ void FluidRenderer::RenderDisplay() {
 }
 
 void FluidRenderer::BuildDisplayConstants(float out[24]) {
+    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits);
+}
+
+void FluidRenderer::BuildDisplayConstantsEx(float out[24], int w, int h,
+                                            float sdrScale, float peakNits) {
     // CSS-filter chain in reference order: saturate -> brightness -> contrast
     // -> hue-rotate. Composed into one matrix + offset. Hue-rotate preserves
     // white, so the contrast offset passes through unchanged.
@@ -653,15 +663,15 @@ void FluidRenderer::BuildDisplayConstants(float out[24]) {
     }
 
     // HDR highlight expansion: gain that carries hot dye from SDR white up to
-    // the user's peak-nits target (resolved by the shell; 0 = parity mode).
+    // the peak-nits target (resolved by the shell; 0 = parity mode).
     float peakGain = 1.0f;
-    if (m_hdrActive && m_cfg.hdrPeakNits > 0.0f) {
-        float sdrWhiteNits = 80.0f * m_sdrScale;
-        peakGain = fmaxf(1.0f, m_cfg.hdrPeakNits / fmaxf(sdrWhiteNits, 1.0f));
+    if (m_hdrActive && peakNits > 0.0f) {
+        float sdrWhiteNits = 80.0f * sdrScale;
+        peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
-    float consts[24] = { 1.0f / m_width, 1.0f / m_height,
-                         m_cfg.shading ? 1.0f : 0.0f, m_sdrScale,
+    float consts[24] = { 1.0f / w, 1.0f / h,
+                         m_cfg.shading ? 1.0f : 0.0f, sdrScale,
                          (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          M.m[0], M.m[1], M.m[2], 0,
@@ -785,6 +795,91 @@ bool FluidRenderer::ReadAnalyzerFrame(std::vector<float>& out) {
     m_anaReadback->Unmap(0, &none);
     m_anaPending = false;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Second-monitor mirror: same dye field, own swapchain + HDR mapping
+// ---------------------------------------------------------------------------
+
+void FluidRenderer::EnableMirror(HWND hwnd, int width, int height) {
+    DisableMirror();
+    m_mirrorW = width;
+    m_mirrorH = height;
+
+    DXGI_SWAP_CHAIN_DESC1 sd = {};
+    sd.Width = width;
+    sd.Height = height;
+    sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    sd.SampleDesc.Count = 1;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.BufferCount = kFrames;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    ComPtr<IDXGISwapChain1> sc1;
+    if (FAILED(m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd,
+                                                 nullptr, nullptr, &sc1)) ||
+        FAILED(sc1.As(&m_mirrorChain))) {
+        printf("mirror: swapchain creation failed\n");
+        m_mirrorChain.Reset();
+        return;
+    }
+    const DXGI_COLOR_SPACE_TYPE scRGB = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+    UINT support = 0;
+    if (SUCCEEDED(m_mirrorChain->CheckColorSpaceSupport(scRGB, &support)) &&
+        (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))
+        m_mirrorChain->SetColorSpace1(scRGB);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)(kFrames + 1) * m_rtvStride;
+    for (UINT i = 0; i < kFrames; i++) {
+        HR(m_mirrorChain->GetBuffer(i, IID_PPV_ARGS(&m_mirrorBuffers[i])));
+        m_device->CreateRenderTargetView(m_mirrorBuffers[i].Get(), nullptr, rtv);
+        rtv.ptr += m_rtvStride;
+    }
+    m_mirrorBroken = false;
+    printf("mirror enabled: %dx%d\n", width, height);
+}
+
+void FluidRenderer::DisableMirror() {
+    if (!m_mirrorChain) return;
+    WaitForGpuIdle();
+    for (UINT i = 0; i < kFrames; i++) m_mirrorBuffers[i].Reset();
+    m_mirrorChain.Reset();
+    m_mirrorBroken = false;
+    printf("mirror disabled\n");
+}
+
+void FluidRenderer::RenderMirror() {
+    UINT bi = m_mirrorChain->GetCurrentBackBufferIndex();
+
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = m_mirrorBuffers[bi].Get();
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_cmd->ResourceBarrier(1, &b);
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)(kFrames + 1 + bi) * m_rtvStride;
+    m_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    D3D12_VIEWPORT vp = { 0, 0, (float)m_mirrorW, (float)m_mirrorH, 0, 1 };
+    D3D12_RECT sc = { 0, 0, m_mirrorW, m_mirrorH };
+    m_cmd->RSSetViewports(1, &vp);
+    m_cmd->RSSetScissorRects(1, &sc);
+
+    m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
+    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    float consts[24];
+    BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 24, consts, 0);
+    m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_cmd->DrawInstanced(3, 1, 0, 0);
+
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    m_cmd->ResourceBarrier(1, &b);
 }
 
 void FluidRenderer::RenderGradient(float timeSec) {
@@ -924,6 +1019,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     }
 
     RenderDisplay();
+    if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
     if (m_anaEnabled) MaybeRenderAnalyzer();
     EndFrameAndPresent();
 
@@ -1032,6 +1128,7 @@ void FluidRenderer::PickSplatColor(float hueOffset, float out[3]) {
 // made a fresh wallpaper window; rebuild just the swapchain onto it — device,
 // sim textures, and the fluid state all survive.
 void FluidRenderer::Reattach(HWND hwnd) {
+    DisableMirror();   // its window died with the old WorkerW; shell re-enables
     WaitForGpuIdle();
     for (UINT i = 0; i < kFrames; i++) {
         m_backBuffers[i].Reset();

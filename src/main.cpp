@@ -175,6 +175,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.splatOnClick        = getB(L"behavior", L"splat_on_click", cfg.splatOnClick);
     cfg.showMouse           = getB(L"behavior", L"show_mouse", cfg.showMouse);
     cfg.fpsLimit            = getF(L"general", L"fps_limit", cfg.fpsLimit);
+    cfg.mirrorSecond        = getB(L"general", L"mirror_second", cfg.mirrorSecond);
     cfg.colorful            = getB(L"color", L"colorful", cfg.colorful);
     cfg.moreColors          = getB(L"color", L"more_colors", cfg.moreColors);
     cfg.postSaturation      = getF(L"color", L"post_saturation", cfg.postSaturation);
@@ -242,6 +243,19 @@ static HWND FindWallpaperHost() {
 
 static bool g_shuttingDown = false;
 static bool g_wallpaperLost = false;
+static bool g_destroyingMirror = false;   // intentional teardown, not shell loss
+static HMONITOR g_monitor2 = nullptr;
+static RECT g_monitor2Rect = {};
+
+static BOOL CALLBACK FindSecondMonitor(HMONITOR mon, HDC, LPRECT rc, LPARAM) {
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoW(mon, &mi);
+    if (!(mi.dwFlags & MONITORINFOF_PRIMARY)) {
+        g_monitor2 = mon;
+        g_monitor2Rect = *rc;
+    }
+    return TRUE;
+}
 
 static LRESULT CALLBACK WallpaperWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -249,6 +263,8 @@ static LRESULT CALLBACK WallpaperWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     case WM_DESTROY:
         if (g_shuttingDown) {
             PostQuitMessage(0);
+        } else if (g_destroyingMirror) {
+            // deliberate mirror teardown — not a shell restart
         } else {
             // Explorer restart tore down the WorkerW hierarchy (and us with
             // it). Don't quit — the main loop re-hooks into the new shell.
@@ -260,13 +276,14 @@ static LRESULT CALLBACK WallpaperWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-static HWND CreateWallpaperWindow(HWND host, int width, int height) {
+static HWND CreateWallpaperWindowAt(HWND host, int screenX, int screenY,
+                                    int width, int height) {
     WNDCLASSW wc = {};
     wc.lpfnWndProc = WallpaperWndProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"FluidWallpaperWnd";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    RegisterClassW(&wc);
+    RegisterClassW(&wc);   // fails harmlessly after the first call
 
     HWND hwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -276,11 +293,15 @@ static HWND CreateWallpaperWindow(HWND host, int width, int height) {
     if (!hwnd) Fail("CreateWindowExW", HRESULT_FROM_WIN32(GetLastError()));
 
     SetParent(hwnd, host);
-    POINT origin = { 0, 0 };
+    POINT origin = { screenX, screenY };
     ScreenToClient(host, &origin);
     SetWindowPos(hwnd, HWND_TOP, origin.x, origin.y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
     return hwnd;
+}
+
+static HWND CreateWallpaperWindow(HWND host, int width, int height) {
+    return CreateWallpaperWindowAt(host, 0, 0, width, height);
 }
 
 // ---------------------------------------------------------------------------
@@ -300,10 +321,17 @@ static bool IsShellOrOwnWindow(HWND hwnd) {
            wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0;
 }
 
+static bool MonitorIsOurs(HMONITOR m) {
+    if (m == g_monitor) return true;
+    return g_monitor2 && m == g_monitor2 &&
+           g_renderer && g_renderer->MirrorActive();
+}
+
 static bool FullscreenAppActive() {
     HWND fg = GetForegroundWindow();
     if (!fg || IsShellOrOwnWindow(fg)) return false;
-    if (MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != g_monitor) return false;
+    HMONITOR fgMon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    if (!MonitorIsOurs(fgMon)) return false;
 
     // Maximized windows are not fullscreen — including borderless
     // custom-titlebar apps (Electron, Windows Terminal). True fullscreen is a
@@ -314,7 +342,7 @@ static bool FullscreenAppActive() {
     if (style & WS_THICKFRAME) return false;
 
     MONITORINFO mi = { sizeof(mi) };
-    if (!GetMonitorInfoW(g_monitor, &mi)) return false;
+    if (!GetMonitorInfoW(fgMon, &mi)) return false;
     RECT r;
     if (!GetWindowRect(fg, &r)) return false;
     return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
@@ -324,7 +352,7 @@ static bool FullscreenAppActive() {
 static bool MaximizedAppActive() {
     HWND fg = GetForegroundWindow();
     if (!fg || IsShellOrOwnWindow(fg)) return false;
-    if (MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != g_monitor) return false;
+    if (!MonitorIsOurs(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST))) return false;
     return IsZoomed(fg) != FALSE;
 }
 
@@ -824,6 +852,7 @@ static void SaveFullConfig(const FluidConfig& c) {
     putI(L"behavior", L"splat_on_click", c.splatOnClick);
     putI(L"behavior", L"show_mouse", c.showMouse);
     putF(L"general", L"fps_limit", c.fpsLimit, 0);
+    putI(L"general", L"mirror_second", c.mirrorSecond);
     putI(L"color", L"colorful", c.colorful);
     putI(L"color", L"more_colors", c.moreColors);
     putF(L"color", L"post_saturation", c.postSaturation, 2);
@@ -947,6 +976,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     setvbuf(stdout, nullptr, _IONBF, 0);
 
+    // Opt the process into dark-mode common controls (same mechanism apps like
+    // Notepad++ use: uxtheme ordinal 135 = SetPreferredAppMode(AllowDark)).
+    // Makes the DarkMode_Explorer-themed buttons/checkboxes render dark faces.
+    if (HMODULE ux = LoadLibraryW(L"uxtheme.dll")) {
+        typedef int(WINAPI* FnSetPreferredAppMode)(int);
+        if (auto setMode = (FnSetPreferredAppMode)GetProcAddress(ux, MAKEINTRESOURCEA(135)))
+            setMode(1);   // AllowDark
+    }
+
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     InitSettingsPath();
     LoadSettings();
@@ -969,6 +1007,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     HWND hwnd = CreateWallpaperWindow(host, width, height);
     g_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+    EnumDisplayMonitors(nullptr, nullptr, FindSecondMonitor, 0);
+    if (g_monitor2)
+        printf("second monitor found: (%ld,%ld)-(%ld,%ld)\n",
+               g_monitor2Rect.left, g_monitor2Rect.top,
+               g_monitor2Rect.right, g_monitor2Rect.bottom);
 
     FluidRenderer renderer;
     renderer.Init(hwnd, width, height, cfg);
@@ -1022,6 +1065,47 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (g_wallpaperLost) {
                 MsgWaitForMultipleObjects(0, nullptr, FALSE, 200, QS_ALLINPUT);
                 continue;
+            }
+        }
+
+        // Second-monitor mirror lifecycle (off by default; settings checkbox)
+        {
+            static HWND mirrorWnd = nullptr;
+            static ULONGLONG lastMirrorTry = 0;
+            bool want = renderer.Config().mirrorSecond && g_monitor2 != nullptr;
+
+            if (renderer.MirrorActive() && renderer.MirrorBroken()) {
+                renderer.DisableMirror();
+                g_destroyingMirror = true;
+                if (mirrorWnd && IsWindow(mirrorWnd)) DestroyWindow(mirrorWnd);
+                g_destroyingMirror = false;
+                mirrorWnd = nullptr;
+            }
+            if (want && !renderer.MirrorActive()) {
+                ULONGLONG now3 = GetTickCount64();
+                if (now3 - lastMirrorTry >= 2000) {
+                    lastMirrorTry = now3;
+                    EnumDisplayMonitors(nullptr, nullptr, FindSecondMonitor, 0);
+                    HWND host2 = FindWallpaperHost();
+                    if (g_monitor2 && host2) {
+                        int w2 = g_monitor2Rect.right - g_monitor2Rect.left;
+                        int h2 = g_monitor2Rect.bottom - g_monitor2Rect.top;
+                        mirrorWnd = CreateWallpaperWindowAt(host2, g_monitor2Rect.left,
+                                                           g_monitor2Rect.top, w2, h2);
+                        renderer.EnableMirror(mirrorWnd, w2, h2);
+                        float max2 = 0.0f;
+                        bool hdr2 = QueryHDR(g_monitor2, &max2);
+                        float sdrW2 = GetSdrWhiteNits(g_monitor2);
+                        float peak2 = hdr2 ? (g_hdrPeakNits < 0.0f ? max2 : g_hdrPeakNits) : 0.0f;
+                        renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2);
+                    }
+                }
+            } else if (!want && renderer.MirrorActive()) {
+                renderer.DisableMirror();
+                g_destroyingMirror = true;
+                if (mirrorWnd && IsWindow(mirrorWnd)) DestroyWindow(mirrorWnd);
+                g_destroyingMirror = false;
+                mirrorWnd = nullptr;
             }
         }
 

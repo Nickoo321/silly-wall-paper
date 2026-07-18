@@ -49,6 +49,8 @@ struct FluidConfig {
     bool  splatOnClick = true;     // click burst when holdToSplat is off
     // perf
     float fpsLimit = 60.0f;
+    // second monitor: mirror the fluid there (same field, own HDR mapping)
+    bool  mirrorSecond = false;
     // wanderers (autonomous roaming splats)
     bool  wanderers = true;
     int   wandererCount = 2;
@@ -114,6 +116,15 @@ public:
     void SetResolutions(int simRes, int dyeRes);   // recreates sim textures live
     void Reattach(HWND hwnd);   // new swapchain after Explorer restart; sim state survives
     bool PresentBroken() const { return m_presentBroken; }   // window died mid-frame
+    // second-monitor mirror
+    void EnableMirror(HWND hwnd, int width, int height);
+    void DisableMirror();
+    bool MirrorActive() const { return m_mirrorChain != nullptr; }
+    bool MirrorBroken() const { return m_mirrorBroken; }
+    void SetMirrorHdr(float sdrScale, float peakNits) {
+        m_mirrorSdrScale = sdrScale;
+        m_mirrorPeakNits = peakNits;
+    }
 
     // HDR analyzer: parallel low-res render of the FINAL scRGB output
     // (post gamut/peak mapping), read back ~10x/s for the analyzer window.
@@ -143,7 +154,9 @@ private:
     void Splat(float x, float y, float dx, float dy, float r, float g, float b);
     void MultipleSplats(int amount);
     void RenderDisplay();
+    void RenderMirror();
     void BuildDisplayConstants(float out[24]);
+    void BuildDisplayConstantsEx(float out[24], int w, int h, float sdrScale, float peakNits);
     void MaybeRenderAnalyzer();
     void CreateAnalyzerResources();
     void RenderGradient(float timeSec);
@@ -211,6 +224,13 @@ private:
     // --- M3 state ---
     bool m_prevMouseDown = false;
     bool m_presentBroken = false;
+
+    // second-monitor mirror
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> m_mirrorChain;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_mirrorBuffers[3];
+    int   m_mirrorW = 0, m_mirrorH = 0;
+    float m_mirrorSdrScale = 1.0f, m_mirrorPeakNits = 0.0f;
+    bool  m_mirrorBroken = false;
     struct Wanderer {
         float x, y, heading, turn;   // random-wander state
         float cx, cy, R, phase;      // circle/figure8 state

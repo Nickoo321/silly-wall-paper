@@ -67,8 +67,10 @@ coverage governor + survivor tier, separating dart, duty-cycled hue rotation).
 
 - [x] **Bonus — HDR analyzer** *(user idea, 2026-07-14)*: tray → "HDR analyzer…". Parallel 640×360 render of the final scRGB output (post gamut/peak), 10 Hz async readback, false-color nits heat-map (log 0.05–1500), click-to-freeze, hover readout (luminance nits, max-channel nits, raw scRGB incl. negative wide-gamut values), H toggles heat-map/image. [src/analyzer.cpp](src/analyzer.cpp). Also: vortex icon embedded in exe ([src/app.rc](src/app.rc), assets/fluid.ico), desktop shortcut created, `/utf-8` compile flag (title-bar mojibake fix, applies next rebuild).
 
-- [ ] **M6 — Multi-monitor support**
-  - Render on all monitors (user said it should work on either); per-monitor swap chain + per-monitor HDR detection (OLED is believed to be primary, but don't assume)
+- [x] **M6 — Multi-monitor support (mirror mode)** *(2026-07-15)*
+  - [x] "Mirror on second monitor" (settings checkbox, ON for this user): same dye field rendered to a second WorkerW window + swapchain on monitor 2, with per-monitor HDR mapping (own sdrScale/peak; SDR monitor gets parity mapping). Cheap: display pass only, sim shared. Mirror Present is interval-0 (main chain paces vsync) and non-fatal; lifecycle handles toggle/broken/Explorer-restart. Pause rules extended to fullscreen/maximized apps on either covered monitor. Verified via window tree + capture.
+  - [ ] Possible later: independent sim per monitor (different fluid on each)
+  - [x] Project under local **git** (2 commits so far) — `git log` in the project folder
 
 ## Current state (2026-07-13)
 

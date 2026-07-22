@@ -88,6 +88,10 @@ coverage governor + survivor tier, separating dart, duty-cycled hue rotation).
   (excludes maximized Electron/custom-titlebar apps), rect covers the monitor.
   Shell/own windows excluded by class. Checked every 500 ms; pause = no render,
   no GPU work. Validated live against Deadlock (SDL_app class).
+- **Settings redesign (2026-07-15)**: data-driven layout — SliderDef/CheckDef
+  carry `header`/`col`; 11 accent-titled sections across 4 columns, grouped
+  checkboxes (Behaviors/Mouse/Color source/System), "Save look as scene"
+  button, dark faces everywhere via app dark mode. Verified by capture.
 - **Scenes window + Present-race fix (2026-07-15)**: second Explorer restart
   killed the app — `Present` failed mid-frame before WM_DESTROY arrived and hit
   the fatal handler. Now Present failure sets `m_presentBroken` (non-fatal);

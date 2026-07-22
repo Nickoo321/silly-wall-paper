@@ -18,6 +18,7 @@ struct FluidConfig {
     float curl = 48.0f;
     float splatRadius = 0.64f;      // percent, /100 like reference
     bool  shading = true;
+    float dyeDiffusion = 0.0f;      // D∇²c strength: 0 = classic sharp look, >0 = smoke-like spread
     float decayFast = 1.0f;         // 1.0 = WE-original balance. 0.90 starved the field to black:
                                     // wanderer dye (0.1 * 0.15 intensity) died before accumulating.
                                     // Tail snappiness is a settings slider now — user taste, not a default.
@@ -38,6 +39,11 @@ struct FluidConfig {
     float postContrast = 1.0f;
     float postBrightness = 1.0f;
     float postHue = 0.0f;           // degrees
+    // response curve (Lightroom-style brightness hump -> glowing splat rims)
+    bool  curveEnabled = false;
+    float curveCenter = 0.30f;      // input brightness the hump peaks at
+    float curveWidth = 0.10f;       // hump half-width (smaller = tighter rims)
+    float curveHeight = 1.3f;       // output brightness at the peak
     // hue band: constrain the color wheel to a slice around hueCenter.
     // range 180 = the classic full wheel; smaller = themed (e.g. only oranges)
     float hueCenter = 0.0f;         // degrees
@@ -155,8 +161,8 @@ private:
     void MultipleSplats(int amount);
     void RenderDisplay();
     void RenderMirror();
-    void BuildDisplayConstants(float out[24]);
-    void BuildDisplayConstantsEx(float out[24], int w, int h, float sdrScale, float peakNits);
+    void BuildDisplayConstants(float out[28]);
+    void BuildDisplayConstantsEx(float out[28], int w, int h, float sdrScale, float peakNits);
     void MaybeRenderAnalyzer();
     void CreateAnalyzerResources();
     void RenderGradient(float timeSec);
@@ -210,7 +216,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoClearV, m_psoClear4, m_psoClear1,
         m_psoCurl, m_psoVorticity, m_psoDivergence, m_psoClearPressure, m_psoPressure,
         m_psoGradSub, m_psoAdvectVel, m_psoAdvectDye, m_psoSplatVel, m_psoSplatDye,
-        m_psoDownsample;
+        m_psoDownsample, m_psoDiffuseDye;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoDisplay;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoGradient;
 

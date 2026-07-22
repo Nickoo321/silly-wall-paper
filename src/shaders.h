@@ -192,6 +192,27 @@ void CSSplatVelocity(uint3 id : SV_DispatchThreadID) {
     DstV[id.xy] = base + splat;
 }
 
+// Dye diffusion: 3x3 tent blur blended by 'value' — the D∇²c term real
+// dye/smoke has. Softens splat stamps and lets fronts fade into clear fluid
+// instead of stopping at a hard edge. SrcA = dye, Dst4 = new dye.
+[numthreads(8, 8, 1)]
+void CSDiffuseDye(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= (uint2)dims)) return;
+    int2 p = int2(id.xy);
+    float4 C = SrcA.Load(int3(p, 0));
+    float4 sum = C * 4.0;
+    sum += SrcA.Load(int3(ClampCoord(p + int2(-1, 0)), 0)) * 2.0;
+    sum += SrcA.Load(int3(ClampCoord(p + int2( 1, 0)), 0)) * 2.0;
+    sum += SrcA.Load(int3(ClampCoord(p + int2( 0,-1)), 0)) * 2.0;
+    sum += SrcA.Load(int3(ClampCoord(p + int2( 0, 1)), 0)) * 2.0;
+    sum += SrcA.Load(int3(ClampCoord(p + int2(-1,-1)), 0));
+    sum += SrcA.Load(int3(ClampCoord(p + int2( 1,-1)), 0));
+    sum += SrcA.Load(int3(ClampCoord(p + int2(-1, 1)), 0));
+    sum += SrcA.Load(int3(ClampCoord(p + int2( 1, 1)), 0));
+    sum /= 16.0;
+    Dst4[id.xy] = lerp(C, sum, value);
+}
+
 // Coverage governor: bilinear-downsample the dye field into a 48x27 grid the
 // CPU reads back once per second (SrcB = dye at t1 not used; SrcA = dye).
 [numthreads(8, 8, 1)]
@@ -235,6 +256,11 @@ cbuffer CB : register(b0) {
     float4 fm1;
     float4 fm2;
     float4 fmOff;
+    // Response curve (Lightroom-style hump): x=enabled, y=center, z=width,
+    // w=height. Remaps brightness through a Gaussian bump so mids near
+    // 'center' glow to 'height' while brighter cores drop back down —
+    // producing bright outlines of each splat.
+    float4 curve;
 };
 
 SamplerState linearClamp : register(s0);
@@ -275,6 +301,17 @@ float4 PSMain(VSOut i) : SV_Target {
     }
     // CSS-filter equivalent (gamma space, like the reference's canvas filter)
     C = float3(dot(fm0.xyz, C), dot(fm1.xyz, C), dot(fm2.xyz, C)) + fmOff.xyz;
+
+    // Response curve: remap brightness through a Gaussian hump. Hue preserved
+    // (all channels scaled together); pixels below ~0.2% forced to black so the
+    // background stays truly dark instead of exploding through the divide.
+    if (curve.x > 0.5) {
+        float x = max(C.r, max(C.g, C.b));
+        float d = (x - curve.y) / max(curve.z, 0.001);
+        float hump = exp(-0.5 * d * d) * curve.w;
+        float scale = (x > 0.002) ? (hump / x) : 0.0;
+        C *= scale;
+    }
 
     // pre-clamp brightness drives the HDR highlight expansion below
     float m = max(C.r, max(C.g, C.b));

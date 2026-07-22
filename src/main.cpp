@@ -184,6 +184,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.postHue             = getF(L"color", L"post_hue", cfg.postHue);
     cfg.hueCenter           = getF(L"color", L"hue_center", cfg.hueCenter);
     cfg.hueRange            = getF(L"color", L"hue_range", cfg.hueRange);
+    cfg.dyeDiffusion        = getF(L"sim", L"dye_diffusion", cfg.dyeDiffusion);
+    cfg.curveEnabled        = getB(L"color", L"curve_enabled", cfg.curveEnabled);
+    cfg.curveCenter         = getF(L"color", L"curve_center", cfg.curveCenter);
+    cfg.curveWidth          = getF(L"color", L"curve_width", cfg.curveWidth);
+    cfg.curveHeight         = getF(L"color", L"curve_height", cfg.curveHeight);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], buf[64] = {};
         swprintf_s(key, L"splat_color_%d", ci + 1);
@@ -758,6 +763,20 @@ L"saturation_restore=0.93\r\nmax_brightness=0.85\r\nsplat_radius=0.55\r\nvortici
 L"[behavior]\r\ncolor_cycle_period=30\r\nwanderer_brightness=0.10\r\ndark_floor=20\r\n"
 L"idle_amount=4\r\nidle_interval=10\r\n";
 
+// User-requested "super weird" scene: huge ember-colored bubbles pushed
+// through the response-curve hump, so mid-brightness rims glow at max while
+// splat cores drop back — bright outlines of every blob. Soft fronts via a
+// touch of dye diffusion and a near-zero decay threshold.
+static const wchar_t* kEmberRimsIni =
+L"[color]\r\ncolorful=1\r\nhue_center=22\r\nhue_range=16\r\n"
+L"curve_enabled=1\r\ncurve_center=0.30\r\ncurve_width=0.10\r\ncurve_height=1.30\r\n"
+L"post_saturation=1.10\r\npost_contrast=1.15\r\npost_brightness=1.00\r\npost_hue=0\r\n"
+L"[sim]\r\nsplat_radius=0.900\r\nmax_brightness=1.00\r\ndensity_diffusion=0.9990\r\n"
+L"decay_fast=0.995\r\ndecay_threshold=0.020\r\nsaturation_restore=0.700\r\n"
+L"vorticity=42\r\ndye_diffusion=0.050\r\n"
+L"[behavior]\r\nwanderer_count=2\r\nwanderer_brightness=0.15\r\ndark_floor=25\r\n"
+L"idle_amount=3\r\nidle_interval=8\r\ncolor_cycle_period=40\r\n";
+
 static void EnsureBuiltinPresets() {
     if (!g_iniPath[0]) return;
     wchar_t dir[MAX_PATH];
@@ -777,6 +796,9 @@ static void EnsureBuiltinPresets() {
     swprintf_s(path, L"%s\\Verdant.ini", dir);
     if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
         WriteTextFileUtf16(path, kVerdantIni);
+    swprintf_s(path, L"%s\\Ember Rims.ini", dir);
+    if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)
+        WriteTextFileUtf16(path, kEmberRimsIni);
 
     // migrate the earlier checkpoint into the presets folder (never deleted)
     swprintf_s(path, L"%s\\Deep Clouds.ini", dir);
@@ -861,6 +883,11 @@ static void SaveFullConfig(const FluidConfig& c) {
     putF(L"color", L"post_hue", c.postHue, 0);
     putF(L"color", L"hue_center", c.hueCenter, 0);
     putF(L"color", L"hue_range", c.hueRange, 0);
+    putF(L"sim", L"dye_diffusion", c.dyeDiffusion, 3);
+    putI(L"color", L"curve_enabled", c.curveEnabled);
+    putF(L"color", L"curve_center", c.curveCenter, 2);
+    putF(L"color", L"curve_width", c.curveWidth, 2);
+    putF(L"color", L"curve_height", c.curveHeight, 2);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], val[64];
         swprintf_s(key, L"splat_color_%d", ci + 1);

@@ -128,6 +128,7 @@ static void BuildDefs() {
         { L"Decay threshold",                   0,     0.3f, 0.002f,3, &c.decayThreshold,     nullptr, L"sim", L"decay_threshold", false, nullptr, 0 },
         { L"Saturation restore /s",             0,     1,    0.005f,3, &c.satRestore,         nullptr, L"sim", L"saturation_restore", false, nullptr, 0 },
         { L"Color intensity cap",               0.3f,  4,    0.05f, 2, &c.maxBrightness,      nullptr, L"sim", L"max_brightness", false, nullptr, 0 },
+        { L"Dye diffusion (smoke spread)",      0,     0.5f, 0.005f,3, &c.dyeDiffusion,       nullptr, L"sim", L"dye_diffusion", false, nullptr, 0 },
         { L"FPS limit",                         30,    260,  1,     0, &c.fpsLimit,           nullptr, L"general", L"fps_limit", false, L"Performance", 0 },
         // ---- column 1 ----
         { L"Count",                             1,     8,    1,     0, nullptr, &c.wandererCount,      L"behavior", L"wanderer_count", true, L"Wanderers", 1 },
@@ -164,6 +165,9 @@ static void BuildDefs() {
         { L"Off time between bursts (s)",       0,     120,  1,     0, &c.hsOffTime,          nullptr, L"behavior", L"hueshift_off_time", false, nullptr, 3 },
         { L"Interval (s)",                      0.5f,  30,   0.5f,  1, &c.idleInterval,       nullptr, L"behavior", L"idle_interval", false, L"Idle splats", 3 },
         { L"Amount per burst",                  1,     30,   1,     0, nullptr, &c.idleAmount,         L"behavior", L"idle_amount", false, nullptr, 3 },
+        { L"Hump center (input brightness)",    0.05f, 1,    0.01f, 2, &c.curveCenter,        nullptr, L"color", L"curve_center", false, L"Response curve (bright rims)", 3 },
+        { L"Hump width",                        0.02f, 0.5f, 0.01f, 2, &c.curveWidth,         nullptr, L"color", L"curve_width", false, nullptr, 3 },
+        { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,        nullptr, L"color", L"curve_height", false, nullptr, 3 },
     };
     s_checks = {
         { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0 },
@@ -178,6 +182,7 @@ static void BuildDefs() {
         { L"Random color (hue wheel)",          &c.colorful,         L"color",    L"colorful", L"Color source", 2 },
         { L"Use all 5 palette colors",          &c.moreColors,       L"color",    L"more_colors", nullptr, 2 },
         { L"HDR compensation (sat/brightness)", &c.hdrCompensation,  L"hdr",      L"compensation", nullptr, 2 },
+        { L"Response curve (bright rims)",      &c.curveEnabled,     L"color",    L"curve_enabled", nullptr, 2 },
         { L"Pause on fullscreen app",           &g_pauseOnFullscreen,L"general",  L"pause_on_fullscreen", L"System", 3 },
         { L"Pause on maximized app",            &g_pauseOnMaximized, L"general",  L"pause_on_maximized", nullptr, 3 },
         { L"Scene interlude cycling",           &g_cycleEnabled,     L"cycle",    L"enabled", nullptr, 3 },

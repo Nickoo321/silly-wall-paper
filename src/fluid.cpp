@@ -252,7 +252,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
         D3D12_ROOT_PARAMETER params[2] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        params[0].Constants = { 0, 0, 24 };
+        params[0].Constants = { 0, 0, 28 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[1].DescriptorTable = { 1, &rSrv0 };
@@ -297,6 +297,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     makeCS("CSSplatVelocity", m_psoSplatVel);
     makeCS("CSSplatDye", m_psoSplatDye);
     makeCS("CSDownsample", m_psoDownsample);
+    makeCS("CSDiffuseDye", m_psoDiffuseDye);
 
     // --- graphics PSOs (display + gradient) ---
     auto makeGfx = [&](const char* src, ComPtr<ID3D12PipelineState>& pso) {
@@ -536,6 +537,12 @@ void FluidRenderer::SimStep(float dt) {
     cb.satRestore = 1.0f - powf(1.0f - fminf(m_cfg.satRestore, 0.9999f), dt);
     bind(m_psoAdvectDye.Get(), m_velocity.read, m_dye.read, m_dye.write, 4);
     m_dye.Swap();
+    // 9. dye diffusion (optional): the D∇²c smoke-spread term
+    if (m_cfg.dyeDiffusion > 0.0001f) {
+        cb.value = fminf(m_cfg.dyeDiffusion * stepsRef, 0.9f);
+        bind(m_psoDiffuseDye.Get(), m_dye.read, nullptr, m_dye.write, 4);
+        m_dye.Swap();
+    }
 }
 
 void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g, float b) {
@@ -616,9 +623,9 @@ void FluidRenderer::RenderDisplay() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[24];
+    float consts[28];
     BuildDisplayConstants(consts);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 24, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -670,14 +677,16 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[24], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
-    float consts[24] = { 1.0f / w, 1.0f / h,
+    float consts[28] = { 1.0f / w, 1.0f / h,
                          m_cfg.shading ? 1.0f : 0.0f, sdrScale,
                          (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          M.m[0], M.m[1], M.m[2], 0,
                          M.m[3], M.m[4], M.m[5], 0,
                          M.m[6], M.m[7], M.m[8], 0,
-                         off, off, off, 0 };
+                         off, off, off, 0,
+                         m_cfg.curveEnabled ? 1.0f : 0.0f,
+                         m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight };
     memcpy(out, consts, sizeof(consts));
 }
 
@@ -745,9 +754,9 @@ void FluidRenderer::MaybeRenderAnalyzer() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[24];
+    float consts[28];
     BuildDisplayConstants(consts);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 24, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -870,9 +879,9 @@ void FluidRenderer::RenderMirror() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[24];
+    float consts[28];
     BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 24, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);

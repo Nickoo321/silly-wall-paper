@@ -22,12 +22,14 @@ cbuffer CB : register(b0) {
     float  radius;         // splat radius (uv^2 scale)
     float  cap;            // proportional brightness cap
     int2   dims;           // target texture dimensions
+    float  baroclinic;     // dye-front torque strength (0 = off)
 };
 
 SamplerState linearClamp : register(s0);
 
 Texture2D<float4> SrcA : register(t0);
 Texture2D<float4> SrcB : register(t1);
+Texture2D<float4> SrcC : register(t2);   // dye (baroclinic pass only)
 RWTexture2D<float2> DstV : register(u0);   // velocity-typed targets
 RWTexture2D<float4> Dst4 : register(u1);   // dye / generic float4 targets
 RWTexture2D<float>  Dst1 : register(u2);   // single-channel targets
@@ -85,6 +87,23 @@ void CSVorticity(uint3 id : SV_DispatchThreadID) {
     float2 force = 0.5 * float2(abs(B) - abs(T), abs(L) - abs(R));
     force /= length(force) + 0.0001;
     force *= curlStrength * C;
+
+    // Baroclinic torque ("forms resist forms"): bend the flow along dye
+    // fronts so wakes curl around existing masses instead of cutting
+    // straight through. Perp(density gradient), scaled by local density so
+    // empty regions are untouched. Dye is high-res; sample by uv.
+    if (baroclinic > 0.0f) {
+        float2 uv = (float2(p) + 0.5) * texelSize;
+        float2 ex = float2(texelSize.x, 0), ey = float2(0, texelSize.y);
+        float3 lw = float3(0.299, 0.587, 0.114);
+        float dl = dot(SrcC.SampleLevel(linearClamp, uv - ex, 0).rgb, lw);
+        float dr = dot(SrcC.SampleLevel(linearClamp, uv + ex, 0).rgb, lw);
+        float dt_ = dot(SrcC.SampleLevel(linearClamp, uv - ey, 0).rgb, lw);
+        float db = dot(SrcC.SampleLevel(linearClamp, uv + ey, 0).rgb, lw);
+        float rho = dot(SrcC.SampleLevel(linearClamp, uv, 0).rgb, lw);
+        float2 g = 0.5 * float2(dr - dl, db - dt_);
+        force += baroclinic * rho * float2(g.y, -g.x);
+    }
 
     float2 vel = SrcA.Load(int3(p, 0)).xy;
     DstV[id.xy] = vel + force * dt;
@@ -261,6 +280,10 @@ cbuffer CB : register(b0) {
     // 'center' glow to 'height' while brighter cores drop back down —
     // producing bright outlines of each splat.
     float4 curve;
+    // Shadow floor ("bottom knee"): x = gray floor level, y = knee width.
+    // Near-black output lifts smoothly toward the floor so dark regions keep
+    // visible marbling instead of crushing to pure black. x = 0 disables.
+    float4 shadow;
 };
 
 SamplerState linearClamp : register(s0);
@@ -313,6 +336,13 @@ float4 PSMain(VSOut i) : SV_Target {
         C *= scale;
     }
 
+    // Shadow floor: neutral gray lift, strongest at black, gone above the
+    // knee. Keeps dark-region marbling visible on OLED instead of crushing.
+    if (shadow.x > 0.0001) {
+        float lum = max(C.r, max(C.g, C.b));
+        C += shadow.x * (1.0 - smoothstep(0.0, max(shadow.y, 0.001), lum));
+    }
+
     // pre-clamp brightness drives the HDR highlight expansion below
     float m = max(C.r, max(C.g, C.b));
 
@@ -349,6 +379,7 @@ cbuffer Consts : register(b0) {
     float2 res;
     float  time;
     float  hdrOn;
+    float  page;    // 0 = M1 gradient; 1..3 = calibration quiz pages
 };
 
 float4 VSMain(uint id : SV_VertexID) : SV_Position {
@@ -363,8 +394,55 @@ float3 HueToRGB(float h) {
     return saturate(float3(r, g, b));
 }
 
+// Quiz page 1 — black level. Ten vertical strips at near-black gray levels
+// (scRGB linear; 1.0 = 80 nits). Bottom edge of each strip shows strip-number
+// notches. User reports the lowest-numbered strip visible -> shadow_floor.
+float4 PageBlackLevel(float2 uv) {
+    float lv[10] = { 0.002, 0.004, 0.006, 0.008, 0.010,
+                     0.015, 0.020, 0.030, 0.050, 0.080 };
+    int i = min(9, (int)(uv.x * 10.0));
+    float fx = frac(uv.x * 10.0);
+    float v = (fx > 0.04 && fx < 0.96) ? lv[i] : 0.0;
+    if (uv.y < 0.04) {   // notch row: strip index+1 white cells out of 10
+        int cell = (int)(frac(uv.x * 10.0) * 10.0);
+        v = (cell < i + 1) ? 0.5 : 0.0;
+    }
+    return float4(v, v, v, 1.0);
+}
+
+// Quiz page 2 — saturation. Rows = hues, columns = CSS-saturate factor
+// applied in gamma space (like the app's post filter), then gamma-decoded.
+// User reports the most pleasing column (1-6, left to right).
+float4 PageSaturation(float2 uv) {
+    float hues[4] = { 0.0, 0.08, 0.33, 0.60 };
+    float sats[6] = { 0.8, 1.0, 1.2, 1.4, 1.6, 2.0 };
+    int r = min(3, (int)(uv.y * 4.0));
+    int c = min(5, (int)(uv.x * 6.0));
+    float3 col = HueToRGB(hues[r]) * 0.6;
+    float l = dot(col, float3(0.2126, 0.7152, 0.0722));
+    col = max(l + (col - l) * sats[c], 0.0);
+    if (frac(uv.x * 6.0) < 0.02 || frac(uv.y * 4.0) < 0.04) col = 0.0;
+    return float4(pow(col, 2.2), 1.0);
+}
+
+// Quiz page 3 — blowout ladder. Horizontal bands of near-white at rising
+// nits (scRGB: 1.0 = 80 nits). Band 1 is at the BOTTOM. User reports the
+// "almost blown but not painful" band -> peak_nits / max_brightness.
+float4 PageBlowout(float2 uv) {
+    float nits[10] = { 80, 150, 240, 300, 400, 500, 600, 800, 1000, 1500 };
+    int i = min(9, (int)(uv.y * 10.0));
+    float v = nits[i] / 80.0;
+    if (hdrOn < 0.5) v = min(v, 1.0);
+    if (frac(uv.y * 10.0) < 0.03) v = 0.0;
+    return float4(v, v * 0.98, v * 0.95, 1.0);
+}
+
 float4 PSMain(float4 pos : SV_Position) : SV_Target {
     float2 uv = pos.xy / res;
+    int p = (int)(page + 0.5);
+    if (p == 1) return PageBlackLevel(uv);
+    if (p == 2) return PageSaturation(uv);
+    if (p == 3) return PageBlowout(uv);
     if (uv.y > 0.88) {
         float levels[5] = { 1.0, 2.0, 4.0, 8.0, 12.5 };
         int i = min(4, (int)(uv.x * 5.0));

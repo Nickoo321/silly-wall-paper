@@ -163,3 +163,16 @@ coverage governor + survivor tier, separating dart, duty-cycled hue rotation).
 | `gl.readPixels` 48×27 coverage     | 48×27 downsample + readback buffer (or CS reduction), 1 Hz |
 | Wallpaper Engine property listener | settings file + tray UI (M5)                |
 | `wallpaperRegisterAudioListener`   | optional later (WASAPI loopback) — not in M1–M5 scope |
+
+## 2026-07-25 — Kimi session 2: mood conductor shipped
+
+See WORKLOG.md (steps 5-6) for the full log. Short version: the interlude
+cycler is replaced by a mood conductor (src/moods.cpp) doing choreographed
+4s transitions between %APPDATA%\FluidWallpaper\moods\*.ini recipes
+(Neon calibrated, Clouds v2 pending quiz round 2). Mood controls live in
+the Settings window (user hides the taskbar — tray-only controls are a
+dead end). Two snap bugs in the hue-shift release path fixed; emission now
+counter-rotates against commanded hue shifts so fresh dye stays in-band
+during transitions. CALIBRATION.md SDR row corrected per user: ALL 10
+brightness bands look identical in SDR (open anomaly — SDR judgments are
+relative-look-only).

@@ -9,8 +9,12 @@
 #include <uxtheme.h>
 #include <vector>
 #include <unordered_set>
+#include <string>
 #include <cstdio>
+#include <cstddef>
+#include <cmath>
 #include "app_state.h"
+#include "moods.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -35,6 +39,7 @@ struct SliderDef {
     bool reinitWanderers;
     const wchar_t* header;   // non-null: start a new titled group here
     int col;                 // column for that new group (valid with header)
+    const wchar_t* tip;      // hover tooltip
 };
 struct CheckDef {
     const wchar_t* label;
@@ -43,6 +48,7 @@ struct CheckDef {
     const wchar_t* key;
     const wchar_t* header;
     int col;
+    const wchar_t* tip;      // hover tooltip (null => none)
 };
 
 static HWND s_wnd = nullptr;
@@ -51,9 +57,13 @@ static HBRUSH s_darkBrush = nullptr;
 static std::vector<SliderDef> s_sliders;
 static std::vector<HWND> s_sliderCtls, s_sliderLabels;
 static std::vector<CheckDef> s_checks;
+static std::vector<HWND> s_checkCtls;
+static std::vector<std::wstring> s_lastSliderText, s_lastCheckText;  // flicker guard
 static std::unordered_set<HWND> s_headers;    // accent-colored statics
 static HWND s_comboMode = nullptr, s_comboSim = nullptr, s_comboDye = nullptr;
-static HWND s_fpsLabel = nullptr, s_pauseBtn = nullptr;
+static HWND s_fpsLabel = nullptr, s_pauseBtn = nullptr, s_moodLabel = nullptr;
+static HWND s_moodName = nullptr, s_inCycle = nullptr;               // mood bar
+static HWND s_moodSave = nullptr, s_moodNew = nullptr, s_moodDel = nullptr;
 
 static const int IDC_CHECK_BASE = 300;
 static const int IDC_GAMUT_BASE = 400;
@@ -66,6 +76,13 @@ static const int IDC_PAUSE_BTN  = 261;
 static const int IDC_EXIT_BTN   = 262;
 static const int IDC_SCENES_BTN = 263;
 static const int IDC_SAVE_SCENE = 264;
+static const int IDC_NEXT_MOOD  = 265;
+static const int IDC_MOOD_INCYCLE = 266;
+static const int IDC_MOOD_SAVE    = 267;
+static const int IDC_MOOD_NEW     = 268;
+static const int IDC_MOOD_DELETE  = 269;
+
+static const int kMoodBarH = 36;   // top strip: mood name + save/new/delete
 
 static const int kSimResOptions[] = { 32, 64, 128, 256, 512 };
 static const int kDyeResOptions[] = { 256, 512, 1024, 2048, 4096 };
@@ -118,76 +135,82 @@ static void BuildDefs() {
     FluidConfig& c = g_renderer->Config();
     s_sliders = {
         // ---- column 0 ----
-        { L"Vorticity (swirl strength)",        0,     50,   0.5f,  1, &c.curl,               nullptr, L"sim", L"vorticity", false, L"Simulation", 0 },
-        { L"Splat radius",                      0.01f, 1,    0.005f,3, &c.splatRadius,        nullptr, L"sim", L"splat_radius", false, nullptr, 0 },
-        { L"Density diffusion (dye linger)",    0.95f, 1,    0.0001f,4,&c.densityDissipation, nullptr, L"sim", L"density_diffusion", false, nullptr, 0 },
-        { L"Velocity diffusion",                0.95f, 1,    0.0001f,4,&c.velocityDissipation,nullptr, L"sim", L"velocity_diffusion", false, nullptr, 0 },
-        { L"Pressure diffusion",                0,     1,    0.005f,3, &c.pressureDissipation,nullptr, L"sim", L"pressure_diffusion", false, nullptr, 0 },
-        { L"Pressure iterations",               10,    60,   1,     0, nullptr, &c.pressureIterations, L"sim", L"pressure_iterations", false, nullptr, 0 },
-        { L"Tail decay speed (lower=snappier)", 0.5f,  1,    0.002f,3, &c.decayFast,          nullptr, L"sim", L"decay_fast", false, nullptr, 0 },
-        { L"Decay threshold",                   0,     0.3f, 0.002f,3, &c.decayThreshold,     nullptr, L"sim", L"decay_threshold", false, nullptr, 0 },
-        { L"Saturation restore /s",             0,     1,    0.005f,3, &c.satRestore,         nullptr, L"sim", L"saturation_restore", false, nullptr, 0 },
-        { L"Color intensity cap",               0.3f,  4,    0.05f, 2, &c.maxBrightness,      nullptr, L"sim", L"max_brightness", false, nullptr, 0 },
-        { L"Dye diffusion (smoke spread)",      0,     0.5f, 0.005f,3, &c.dyeDiffusion,       nullptr, L"sim", L"dye_diffusion", false, nullptr, 0 },
-        { L"FPS limit",                         30,    260,  1,     0, &c.fpsLimit,           nullptr, L"general", L"fps_limit", false, L"Performance", 0 },
+        { L"Vorticity (swirl strength)",        0,     50,   0.5f,  1, &c.curl,               nullptr, L"sim", L"vorticity", false, L"Simulation", 0, L"Small-scale swirl. High = cauliflower billows, low = smooth streams" },
+        { L"Form resistance (baroclinic)",      0,     200,  5,     0, &c.baroclinic,         nullptr, L"sim", L"baroclinic", false, nullptr, 0, L"Wakes bend around dye masses instead of cutting through. 0 = off" },
+        { L"Splat radius",                      0.01f, 1,    0.005f,3, &c.splatRadius,        nullptr, L"sim", L"splat_radius", false, nullptr, 0, L"Size of emitted blobs" },
+        { L"Density diffusion (dye linger)",    0.95f, 1,    0.0001f,4,&c.densityDissipation, nullptr, L"sim", L"density_diffusion", false, nullptr, 0, L"How long dye lingers. Higher = longer trails" },
+        { L"Velocity diffusion",                0.95f, 1,    0.0001f,4,&c.velocityDissipation,nullptr, L"sim", L"velocity_diffusion", false, nullptr, 0, L"How long currents persist. Higher = smoother flow" },
+        { L"Pressure diffusion",                0,     1,    0.005f,3, &c.pressureDissipation,nullptr, L"sim", L"pressure_diffusion", false, nullptr, 0, L"Flow smoothing. Lower = sharper blob edges" },
+        { L"Pressure iterations",               10,    60,   1,     0, nullptr, &c.pressureIterations, L"sim", L"pressure_iterations", false, nullptr, 0, L"Solver quality. Rarely needs changing" },
+        { L"Tail decay speed (lower=snappier)", 0.5f,  1,    0.002f,3, &c.decayFast,          nullptr, L"sim", L"decay_fast", false, nullptr, 0, L"How fast faint haze clears. 1.0 = never (deep layers)" },
+        { L"Decay threshold",                   0,     0.3f, 0.002f,3, &c.decayThreshold,     nullptr, L"sim", L"decay_threshold", false, nullptr, 0, L"Below this brightness the fast decay acts" },
+        { L"Saturation restore /s",             0,     1,    0.005f,3, &c.satRestore,         nullptr, L"sim", L"saturation_restore", false, nullptr, 0, L"Re-saturates aging dye so old layers stay colorful" },
+        { L"Color intensity cap",               0.3f,  4,    0.05f, 2, &c.maxBrightness,      nullptr, L"sim", L"max_brightness", false, nullptr, 0, L"Max dye brightness (hue-preserving clip)" },
+        { L"Dye diffusion (smoke spread)",      0,     0.5f, 0.005f,3, &c.dyeDiffusion,       nullptr, L"sim", L"dye_diffusion", false, nullptr, 0, L"Blurs dye. 0 = sharp marbling, high = soft mush" },
+        { L"FPS limit",                         30,    260,  1,     0, &c.fpsLimit,           nullptr, L"general", L"fps_limit", false, L"Performance", 0, L"Frame rate cap" },
         // ---- column 1 ----
-        { L"Count",                             1,     8,    1,     0, nullptr, &c.wandererCount,      L"behavior", L"wanderer_count", true, L"Wanderers", 1 },
-        { L"Speed (px/s)",                      50,    1200, 10,    0, &c.wandererSpeed,      nullptr, L"behavior", L"wanderer_speed", false, nullptr, 1 },
-        { L"Brightness",                        0.05f, 1,    0.01f, 2, &c.wandererBrightness, nullptr, L"behavior", L"wanderer_brightness", false, nullptr, 1 },
-        { L"Path size (circle / figure-8)",     0.1f,  0.9f, 0.01f, 2, &c.wandererScale,      nullptr, L"behavior", L"wanderer_scale", true, nullptr, 1 },
-        { L"Resume after idle (s)",             0,     30,   0.5f,  1, &c.wandererResumeDelay,nullptr, L"behavior", L"wanderer_resume_delay", false, nullptr, 1 },
-        { L"Min dark area % before pause",      5,     60,   1,     0, &c.darkFloor,          nullptr, L"behavior", L"dark_floor", false, L"Screen-fullness governor", 1 },
-        { L"Dark pixel cutoff",                 0.005f,0.1f, 0.005f,3, &c.darkLevel,          nullptr, L"behavior", L"dark_level", false, nullptr, 1 },
-        { L"Survivor wanderer dark floor %",    0,     40,   1,     0, &c.survDarkFloor,      nullptr, L"behavior", L"surv_dark_floor", false, nullptr, 1 },
-        { L"Contrast required % (0 = off)",     0,     100,  1,     0, &c.contrastReq,        nullptr, L"behavior", L"contrast_req", false, nullptr, 1 },
-        { L"Interval (s)",                      1,     30,   1,     0, &c.dartInterval,       nullptr, L"behavior", L"dart_interval", false, L"Separating dart", 1 },
-        { L"Speed (px/s)",                      500,   6000, 50,    0, &c.dartSpeed,          nullptr, L"behavior", L"dart_speed", false, nullptr, 1 },
+        { L"Count",                             1,     8,    1,     0, nullptr, &c.wandererCount,      L"behavior", L"wanderer_count", true, L"Wanderers", 1, L"Number of autonomous emitters" },
+        { L"Speed (px/s)",                      50,    1200, 10,    0, &c.wandererSpeed,      nullptr, L"behavior", L"wanderer_speed", false, nullptr, 1, L"Emitter speed = current strength" },
+        { L"Brightness",                        0.05f, 1,    0.01f, 2, &c.wandererBrightness, nullptr, L"behavior", L"wanderer_brightness", false, nullptr, 1, L"Paint per emitter per step" },
+        { L"Path size (circle / figure-8)",     0.1f,  0.9f, 0.01f, 2, &c.wandererScale,      nullptr, L"behavior", L"wanderer_scale", true, nullptr, 1, L"Roam area for circle / figure-8 paths" },
+        { L"Resume after idle (s)",             0,     30,   0.5f,  1, &c.wandererResumeDelay,nullptr, L"behavior", L"wanderer_resume_delay", false, nullptr, 1, L"Quiet time after your input before emitters resume" },
+        { L"Min dark area % before pause",      5,     60,   1,     0, &c.darkFloor,          nullptr, L"behavior", L"dark_floor", false, L"Screen-fullness governor", 1, L"Emitters pause when dark area falls below this" },
+        { L"Dark pixel cutoff",                 0.005f,0.1f, 0.005f,3, &c.darkLevel,          nullptr, L"behavior", L"dark_level", false, nullptr, 1, L"Brightness that still counts as dark" },
+        { L"Survivor wanderer dark floor %",    0,     40,   1,     0, &c.survDarkFloor,      nullptr, L"behavior", L"surv_dark_floor", false, nullptr, 1, L"One survivor emitter paints until this darkness" },
+        { L"Contrast required % (0 = off)",     0,     100,  1,     0, &c.contrastReq,        nullptr, L"behavior", L"contrast_req", false, nullptr, 1, L"Require a bright focal region, else emitters pause" },
+        { L"Interval (s)",                      1,     30,   1,     0, &c.dartInterval,       nullptr, L"behavior", L"dart_interval", false, L"Separating dart", 1, L"Seconds between piercing darts" },
+        { L"Speed (px/s)",                      500,   6000, 50,    0, &c.dartSpeed,          nullptr, L"behavior", L"dart_speed", false, nullptr, 1, L"Dart travel speed" },
         // ---- column 2 ----
-        { L"Peak brightness (nits, 0 = off)",   0,     1500, 5,     0, &g_hdrPeakNits,        nullptr, L"hdr", L"peak_nits", false, L"HDR output", 2 },
-        { L"Knee (boost starts at)",            0.1f,  1.3f, 0.02f, 2, &c.hdrKnee,            nullptr, L"hdr", L"knee", false, nullptr, 2 },
-        { L"Saturation boost",                  1,     2,    0.01f, 2, &c.hdrSaturation,      nullptr, L"hdr", L"saturation", false, nullptr, 2 },
-        { L"Brightness boost",                  0.8f,  1.5f, 0.01f, 2, &c.hdrBrightness,      nullptr, L"hdr", L"brightness", false, nullptr, 2 },
-        { L"Contrast",                          0.8f,  1.5f, 0.01f, 2, &c.hdrContrast,        nullptr, L"hdr", L"contrast", false, nullptr, 2 },
-        { L"Saturation",                        0.5f,  2,    0.01f, 2, &c.postSaturation,     nullptr, L"color", L"post_saturation", false, L"Color grading (WE panel)", 2 },
-        { L"Contrast",                          0.5f,  2,    0.01f, 2, &c.postContrast,       nullptr, L"color", L"post_contrast", false, nullptr, 2 },
-        { L"Brightness",                        0.5f,  1.5f, 0.01f, 2, &c.postBrightness,     nullptr, L"color", L"post_brightness", false, nullptr, 2 },
-        { L"Hue rotate (deg)",                  0,     360,  1,     0, &c.postHue,            nullptr, L"color", L"post_hue", false, nullptr, 2 },
-        { L"My look runs for (s)",              5,     120,  1,     0, &g_cycleBaseSec,       nullptr, L"cycle", L"base_seconds", false, L"Scene cycling", 2 },
-        { L"Interlude runs for (s)",            2,     60,   1,     0, &g_cycleInterludeSec,  nullptr, L"cycle", L"interlude_seconds", false, nullptr, 2 },
+        { L"Peak brightness (nits, 0 = off)",   0,     1500, 5,     0, &g_hdrPeakNits,        nullptr, L"hdr", L"peak_nits", false, L"HDR output", 2, L"HDR hot-spot target. 0 = match SDR" },
+        { L"Knee (boost starts at)",            0.1f,  1.3f, 0.02f, 2, &c.hdrKnee,            nullptr, L"hdr", L"knee", false, nullptr, 2, L"Dye level where HDR highlight boost begins" },
+        { L"Saturation boost",                  1,     2,    0.01f, 2, &c.hdrSaturation,      nullptr, L"hdr", L"saturation", false, nullptr, 2, L"Extra punch while Windows HDR is on" },
+        { L"Brightness boost",                  0.8f,  1.5f, 0.01f, 2, &c.hdrBrightness,      nullptr, L"hdr", L"brightness", false, nullptr, 2, L"Extra punch while Windows HDR is on" },
+        { L"Contrast",                          0.8f,  1.5f, 0.01f, 2, &c.hdrContrast,        nullptr, L"hdr", L"contrast", false, nullptr, 2, L"Extra punch while Windows HDR is on" },
+        { L"Saturation",                        0.5f,  2,    0.01f, 2, &c.postSaturation,     nullptr, L"color", L"post_saturation", false, L"Color grading (WE panel)", 2, L"WE-style whole-frame filter" },
+        { L"Contrast",                          0.5f,  2,    0.01f, 2, &c.postContrast,       nullptr, L"color", L"post_contrast", false, nullptr, 2, L"WE-style whole-frame filter" },
+        { L"Brightness",                        0.5f,  1.5f, 0.01f, 2, &c.postBrightness,     nullptr, L"color", L"post_brightness", false, nullptr, 2, L"WE-style whole-frame filter" },
+        { L"Hue rotate (deg)",                  0,     360,  1,     0, &c.postHue,            nullptr, L"color", L"post_hue", false, nullptr, 2, L"Rotates all colors. Warning: rotates outside the hue band" },
+        { L"Dwell (min per mood)",              1,     30,   1,     0, &g_moodSettings.dwellMinutes,   nullptr, L"moods", L"dwell_minutes", false, L"Mood cycling", 2, L"Minutes in a mood before switching" },
+        { L"Transition length (s)",             2,     60,   1,     0, &g_moodSettings.transitionSec,  nullptr, L"moods", L"transition_seconds", false, nullptr, 2, L"Seconds a mood change takes" },
+        { L"Timing jitter (± fraction)",        0,     0.5f, 0.05f,2, &g_moodSettings.jitter,          nullptr, L"moods", L"jitter", false, nullptr, 2, L"Random +/- on dwell time so switches feel organic" },
         // ---- column 3 ----
-        { L"Cycle time (s per lap)",            2,     120,  1,     0, &c.colorCyclePeriod,   nullptr, L"behavior", L"color_cycle_period", false, L"Color wheel", 3 },
-        { L"Hue band center (deg)",             0,     360,  1,     0, &c.hueCenter,          nullptr, L"color", L"hue_center", false, nullptr, 3 },
-        { L"Hue band range (180 = full wheel)", 5,     180,  1,     0, &c.hueRange,           nullptr, L"color", L"hue_range", false, nullptr, 3 },
-        { L"Step (deg)",                        10,    180,  1,     0, &c.hsStep,             nullptr, L"behavior", L"hueshift_step", false, L"Hue shift bursts", 3 },
-        { L"Linger (s)",                        0,     15,   0.5f,  1, &c.hsLinger,           nullptr, L"behavior", L"hueshift_linger", false, nullptr, 3 },
-        { L"Glide (s)",                         0.1f,  10,   0.1f,  1, &c.hsGlide,            nullptr, L"behavior", L"hueshift_glide", false, nullptr, 3 },
-        { L"Steps per burst",                   1,     12,   1,     0, nullptr, &c.hsBurstSteps,       L"behavior", L"hueshift_burst_steps", false, nullptr, 3 },
-        { L"Off time between bursts (s)",       0,     120,  1,     0, &c.hsOffTime,          nullptr, L"behavior", L"hueshift_off_time", false, nullptr, 3 },
-        { L"Interval (s)",                      0.5f,  30,   0.5f,  1, &c.idleInterval,       nullptr, L"behavior", L"idle_interval", false, L"Idle splats", 3 },
-        { L"Amount per burst",                  1,     30,   1,     0, nullptr, &c.idleAmount,         L"behavior", L"idle_amount", false, nullptr, 3 },
-        { L"Hump center (input brightness)",    0.05f, 1,    0.01f, 2, &c.curveCenter,        nullptr, L"color", L"curve_center", false, L"Response curve (bright rims)", 3 },
-        { L"Hump width",                        0.02f, 0.5f, 0.01f, 2, &c.curveWidth,         nullptr, L"color", L"curve_width", false, nullptr, 3 },
-        { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,        nullptr, L"color", L"curve_height", false, nullptr, 3 },
+        { L"Cycle time (s per lap)",            2,     120,  1,     0, &c.colorCyclePeriod,   nullptr, L"behavior", L"color_cycle_period", false, L"Color wheel", 3, L"Seconds for emitted hue to sweep its band" },
+        { L"Hue band center (deg)",             0,     360,  1,     0, &c.hueCenter,          nullptr, L"color", L"hue_center", false, nullptr, 3, L"Where on the color wheel emission lives (0=red 120=green 240=blue)" },
+        { L"Hue band range (180 = full wheel)", 5,     180,  1,     0, &c.hueRange,           nullptr, L"color", L"hue_range", false, nullptr, 3, L"Half-width of the emission band. 180 = full wheel" },
+        { L"Hue linger (rest at band edges)",   0,     0.45f,0.05f, 2, &c.hueLinger,         nullptr, L"color", L"hue_linger", false, nullptr, 3, L"Fraction of each half-lap spent resting on one hue. 0 = off" },
+        { L"Step (deg)",                        10,    180,  1,     0, &c.hsStep,             nullptr, L"behavior", L"hueshift_step", false, L"Hue shift bursts", 3, L"Palette rotation per burst step" },
+        { L"Linger (s)",                        0,     15,   0.5f,  1, &c.hsLinger,           nullptr, L"behavior", L"hueshift_linger", false, nullptr, 3, L"Hold time between burst steps" },
+        { L"Glide (s)",                         0.1f,  10,   0.1f,  1, &c.hsGlide,            nullptr, L"behavior", L"hueshift_glide", false, nullptr, 3, L"Rotation speed of each step" },
+        { L"Steps per burst",                   1,     12,   1,     0, nullptr, &c.hsBurstSteps,       L"behavior", L"hueshift_burst_steps", false, nullptr, 3, L"Steps before rotating home" },
+        { L"Off time between bursts (s)",       0,     120,  1,     0, &c.hsOffTime,          nullptr, L"behavior", L"hueshift_off_time", false, nullptr, 3, L"Quiet time between hue-shift bursts" },
+        { L"Interval (s)",                      0.5f,  30,   0.5f,  1, &c.idleInterval,       nullptr, L"behavior", L"idle_interval", false, L"Idle splats", 3, L"Seconds between random blob bursts" },
+        { L"Amount per burst",                  1,     30,   1,     0, nullptr, &c.idleAmount,         L"behavior", L"idle_amount", false, nullptr, 3, L"Blobs per burst" },
+        { L"Burst brightness",                  0.2f,  3,    0.05f, 2, &c.idleBrightness,     nullptr, L"behavior", L"idle_brightness", false, nullptr, 3, L"Idle blob intensity (emitters paint at 0.15)" },
+        { L"Hump center (input brightness)",    0.05f, 1,    0.01f, 2, &c.curveCenter,        nullptr, L"color", L"curve_center", false, L"Response curve (bright rims)", 3, L"Response curve shape: glowing rims when enabled" },
+        { L"Hump width",                        0.02f, 0.5f, 0.01f, 2, &c.curveWidth,         nullptr, L"color", L"curve_width", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
+        { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,        nullptr, L"color", L"curve_height", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
+        { L"Shadow floor (gray lift)",          0,     0.25f,0.005f,3, &c.shadowFloor,        nullptr, L"color", L"shadow_floor", false, L"Shadow floor (dark marbling)", 3, L"Lift near-black toward gray so dark marbling stays visible" },
+        { L"Shadow knee (lift range)",          0.02f, 0.6f, 0.01f, 2, &c.shadowKnee,         nullptr, L"color", L"shadow_knee", false, nullptr, 3, L"Brightness range the lift fades over" },
     };
     s_checks = {
-        { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0 },
-        { L"Auto-pause when screen full",       &c.autoPause,        L"behavior", L"auto_pause", nullptr, 0 },
-        { L"Separating dart while paused",      &c.dartEnabled,      L"behavior", L"dart_enabled", nullptr, 0 },
-        { L"Hue shift cycler",                  &c.hsEnabled,        L"behavior", L"hueshift_enabled", nullptr, 0 },
-        { L"Idle random splats",                &c.idleSplats,       L"behavior", L"idle_splats", nullptr, 0 },
-        { L"Shading",                           &c.shading,          L"sim",      L"shading", nullptr, 0 },
-        { L"Hold left mouse = pour dye",        &c.holdToSplat,      L"behavior", L"hold_to_splat", L"Mouse", 1 },
-        { L"Splat on click (if not holding)",   &c.splatOnClick,     L"behavior", L"splat_on_click", nullptr, 1 },
-        { L"Mouse movement stirs fluid",        &c.showMouse,        L"behavior", L"show_mouse", nullptr, 1 },
-        { L"Random color (hue wheel)",          &c.colorful,         L"color",    L"colorful", L"Color source", 2 },
-        { L"Use all 5 palette colors",          &c.moreColors,       L"color",    L"more_colors", nullptr, 2 },
-        { L"HDR compensation (sat/brightness)", &c.hdrCompensation,  L"hdr",      L"compensation", nullptr, 2 },
-        { L"Response curve (bright rims)",      &c.curveEnabled,     L"color",    L"curve_enabled", nullptr, 2 },
-        { L"Pause on fullscreen app",           &g_pauseOnFullscreen,L"general",  L"pause_on_fullscreen", L"System", 3 },
-        { L"Pause on maximized app",            &g_pauseOnMaximized, L"general",  L"pause_on_maximized", nullptr, 3 },
-        { L"Scene interlude cycling",           &g_cycleEnabled,     L"cycle",    L"enabled", nullptr, 3 },
-        { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second", nullptr, 3 },
-        { L"Start with Windows",                nullptr,             nullptr,     nullptr, nullptr, 3 },
+        { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0, L"Autonomous roaming emitters" },
+        { L"Auto-pause when screen full",       &c.autoPause,        L"behavior", L"auto_pause", nullptr, 0, L"Stop painting when the field is full" },
+        { L"Separating dart while paused",      &c.dartEnabled,      L"behavior", L"dart_enabled", nullptr, 0, L"Periodic shot that splits merged blobs" },
+        { L"Hue shift cycler",                  &c.hsEnabled,        L"behavior", L"hueshift_enabled", nullptr, 0, L"Palette rotation bursts (full-wheel moods only)" },
+        { L"Idle random splats",                &c.idleSplats,       L"behavior", L"idle_splats", nullptr, 0, L"Random blobs when the field is calm" },
+        { L"Shading",                           &c.shading,          L"sim",      L"shading", nullptr, 0, L"Pseudo-3D emboss on dye edges" },
+        { L"Hold left mouse = pour dye",        &c.holdToSplat,      L"behavior", L"hold_to_splat", L"Mouse", 1, L"Hold the left button to pour a continuous dye stream" },
+        { L"Splat on click (if not holding)",   &c.splatOnClick,     L"behavior", L"splat_on_click", nullptr, 1, L"Each click splats a single dye blob" },
+        { L"Mouse movement stirs fluid",        &c.showMouse,        L"behavior", L"show_mouse", nullptr, 1, L"Moving the mouse pushes currents through the fluid" },
+        { L"Random color (hue wheel)",          &c.colorful,         L"color",    L"colorful", L"Color source", 2, L"Emit from the hue band instead of the fixed palette" },
+        { L"Use all 5 palette colors",          &c.moreColors,       L"color",    L"more_colors", nullptr, 2, L"Splats cycle all five palette colors instead of one" },
+        { L"HDR compensation (sat/brightness)", &c.hdrCompensation,  L"hdr",      L"compensation", nullptr, 2, L"Apply HDR boosts when Windows HDR is on" },
+        { L"Response curve (bright rims)",      &c.curveEnabled,     L"color",    L"curve_enabled", nullptr, 2, L"Enable the brightness hump curve" },
+        { L"Pause on fullscreen app",           &g_pauseOnFullscreen,L"general",  L"pause_on_fullscreen", L"System", 3, L"Pause the wallpaper while a fullscreen app has focus" },
+        { L"Pause on maximized app",            &g_pauseOnMaximized, L"general",  L"pause_on_maximized", nullptr, 3, L"Pause the wallpaper while a maximized window has focus" },
+        { L"Mood cycling (auto-switch looks)",  &g_moodSettings.enabled, L"moods", L"enabled", nullptr, 3, L"Auto-switch between moods/*.ini recipes" },
+        { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second", nullptr, 3, L"Also render the wallpaper on the second monitor" },
+        { L"Start with Windows",                nullptr,             nullptr,     nullptr, nullptr, 3, nullptr },
     };
 }
 
@@ -200,15 +223,162 @@ static int SliderPos(const SliderDef& d) {
     if (v > d.mx) v = d.mx;
     return (int)((v - d.mn) / d.step + 0.5f);
 }
+
+// Maps an ini (section,key) to the matching FluidConfig field inside the
+// cached current-mood config, so the UI can mark values that differ from
+// what the mood file saved. Unmapped keys (peak_nits, moods/*, pause_*)
+// return ok=false — no " *" marker for those.
+enum class FType { F, I, B };
+struct FieldMap { const wchar_t* sec; const wchar_t* key; FType t; size_t off; };
+#define FM(s, k, t, field) { s, k, t, offsetof(FluidConfig, field) }
+static const FieldMap kFieldMap[] = {
+    FM(L"sim", L"vorticity", FType::F, curl),
+    FM(L"sim", L"baroclinic", FType::F, baroclinic),
+    FM(L"sim", L"splat_radius", FType::F, splatRadius),
+    FM(L"sim", L"density_diffusion", FType::F, densityDissipation),
+    FM(L"sim", L"velocity_diffusion", FType::F, velocityDissipation),
+    FM(L"sim", L"pressure_diffusion", FType::F, pressureDissipation),
+    FM(L"sim", L"pressure_iterations", FType::I, pressureIterations),
+    FM(L"sim", L"decay_fast", FType::F, decayFast),
+    FM(L"sim", L"decay_threshold", FType::F, decayThreshold),
+    FM(L"sim", L"saturation_restore", FType::F, satRestore),
+    FM(L"sim", L"max_brightness", FType::F, maxBrightness),
+    FM(L"sim", L"dye_diffusion", FType::F, dyeDiffusion),
+    FM(L"sim", L"shading", FType::B, shading),
+    FM(L"general", L"fps_limit", FType::F, fpsLimit),
+    FM(L"general", L"mirror_second", FType::B, mirrorSecond),
+    FM(L"behavior", L"wanderers", FType::B, wanderers),
+    FM(L"behavior", L"wanderer_count", FType::I, wandererCount),
+    FM(L"behavior", L"wanderer_mode", FType::I, wandererMode),
+    FM(L"behavior", L"wanderer_speed", FType::F, wandererSpeed),
+    FM(L"behavior", L"wanderer_brightness", FType::F, wandererBrightness),
+    FM(L"behavior", L"wanderer_scale", FType::F, wandererScale),
+    FM(L"behavior", L"wanderer_resume_delay", FType::F, wandererResumeDelay),
+    FM(L"behavior", L"auto_pause", FType::B, autoPause),
+    FM(L"behavior", L"dark_floor", FType::F, darkFloor),
+    FM(L"behavior", L"dark_level", FType::F, darkLevel),
+    FM(L"behavior", L"surv_dark_floor", FType::F, survDarkFloor),
+    FM(L"behavior", L"contrast_req", FType::F, contrastReq),
+    FM(L"behavior", L"dart_enabled", FType::B, dartEnabled),
+    FM(L"behavior", L"dart_interval", FType::F, dartInterval),
+    FM(L"behavior", L"dart_speed", FType::F, dartSpeed),
+    FM(L"behavior", L"hueshift_enabled", FType::B, hsEnabled),
+    FM(L"behavior", L"hueshift_step", FType::F, hsStep),
+    FM(L"behavior", L"hueshift_linger", FType::F, hsLinger),
+    FM(L"behavior", L"hueshift_glide", FType::F, hsGlide),
+    FM(L"behavior", L"hueshift_burst_steps", FType::I, hsBurstSteps),
+    FM(L"behavior", L"hueshift_off_time", FType::F, hsOffTime),
+    FM(L"behavior", L"idle_splats", FType::B, idleSplats),
+    FM(L"behavior", L"idle_interval", FType::F, idleInterval),
+    FM(L"behavior", L"idle_amount", FType::I, idleAmount),
+    FM(L"behavior", L"idle_brightness", FType::F, idleBrightness),
+    FM(L"behavior", L"hold_to_splat", FType::B, holdToSplat),
+    FM(L"behavior", L"splat_on_click", FType::B, splatOnClick),
+    FM(L"behavior", L"show_mouse", FType::B, showMouse),
+    FM(L"behavior", L"color_cycle_period", FType::F, colorCyclePeriod),
+    FM(L"hdr", L"knee", FType::F, hdrKnee),
+    FM(L"hdr", L"saturation", FType::F, hdrSaturation),
+    FM(L"hdr", L"brightness", FType::F, hdrBrightness),
+    FM(L"hdr", L"contrast", FType::F, hdrContrast),
+    FM(L"hdr", L"compensation", FType::B, hdrCompensation),
+    FM(L"color", L"colorful", FType::B, colorful),
+    FM(L"color", L"more_colors", FType::B, moreColors),
+    FM(L"color", L"post_saturation", FType::F, postSaturation),
+    FM(L"color", L"post_contrast", FType::F, postContrast),
+    FM(L"color", L"post_brightness", FType::F, postBrightness),
+    FM(L"color", L"post_hue", FType::F, postHue),
+    FM(L"color", L"hue_center", FType::F, hueCenter),
+    FM(L"color", L"hue_range", FType::F, hueRange),
+    FM(L"color", L"curve_enabled", FType::B, curveEnabled),
+    FM(L"color", L"curve_center", FType::F, curveCenter),
+    FM(L"color", L"curve_width", FType::F, curveWidth),
+    FM(L"color", L"curve_height", FType::F, curveHeight),
+    FM(L"color", L"shadow_floor", FType::F, shadowFloor),
+    FM(L"color", L"shadow_knee", FType::F, shadowKnee),
+};
+static float MoodFileValue(const wchar_t* sec, const wchar_t* key, bool& ok) {
+    ok = false;
+    const FluidConfig* m = MoodsCachedConfig();
+    if (!m || !sec || !key) return 0.0f;
+    const char* base = reinterpret_cast<const char*>(m);
+    for (const FieldMap& f : kFieldMap) {
+        if (wcscmp(f.sec, sec) != 0 || wcscmp(f.key, key) != 0) continue;
+        ok = true;
+        switch (f.t) {
+        case FType::F: return *reinterpret_cast<const float*>(base + f.off);
+        case FType::I: return (float)*reinterpret_cast<const int*>(base + f.off);
+        case FType::B: return *reinterpret_cast<const bool*>(base + f.off) ? 1.0f : 0.0f;
+        }
+    }
+    return 0.0f;
+}
+static float MoodFileValue(const SliderDef& d, bool& ok) {
+    return MoodFileValue(d.section, d.key, ok);
+}
+
+// true when the live value differs from the current mood file's saved value
+static bool DiffersFromMood(const SliderDef& d) {
+    bool ok = false;
+    float mv = MoodFileValue(d, ok);
+    if (!ok) return false;
+    if (d.ival) return (int)(mv + 0.5f) != *d.ival;
+    return fabsf(mv - *d.fval) > d.step * 0.5f;
+}
+
 static void UpdateSliderLabel(size_t i) {
     const SliderDef& d = s_sliders[i];
     float v = d.fval ? *d.fval : (float)*d.ival;
-    wchar_t buf[160];
+    wchar_t val[64];
     if (d.fval == &g_hdrPeakNits && v <= 0.0f)
-        swprintf_s(buf, L"%s:  off", d.label);
+        swprintf_s(val, L"off");
     else
-        swprintf_s(buf, L"%s:  %.*f", d.label, d.decimals, v);
-    SetWindowTextW(s_sliderLabels[i], buf);
+        swprintf_s(val, L"%.*f", d.decimals, v);
+    wchar_t buf[192];
+    swprintf_s(buf, L"%s%s:  %s%s",
+               MoodsLocksKey(d.section, d.key) ? L"● " : L"○ ",
+               d.label, val, DiffersFromMood(d) ? L" *" : L"");
+    if (s_lastSliderText[i] != buf) {
+        s_lastSliderText[i] = buf;
+        SetWindowTextW(s_sliderLabels[i], buf);
+    }
+}
+
+static void UpdateCheckLabel(size_t i) {
+    const CheckDef& d = s_checks[i];
+    std::wstring text;
+    if (!d.section) {
+        text = d.label;   // autostart: not an ini-backed setting, no markers
+    } else {
+        text = MoodsLocksKey(d.section, d.key) ? L"● " : L"○ ";
+        text += d.label;
+        bool ok = false;
+        float mv = MoodFileValue(d.section, d.key, ok);
+        if (ok && d.val && (*d.val != (mv >= 0.5f))) text += L" *";
+    }
+    if (s_lastCheckText[i] != text) {
+        s_lastCheckText[i] = text;
+        SetWindowTextW(s_checkCtls[i], text.c_str());
+    }
+}
+
+// mood bar: current mood name, in-cycle checkbox, save/new/delete buttons
+static void RefreshMoodBar() {
+    if (!s_moodName) return;
+    int cur = MoodsCurrentIndex();
+    bool curOk = cur >= 0 && cur < (int)MoodsNames().size();
+    const std::wstring& nm = MoodsCurrentName();
+    static std::wstring s_lastName;
+    const wchar_t* shown = curOk ? nm.c_str() : L"-";
+    if (s_lastName != shown) {
+        s_lastName = shown;
+        SetWindowTextW(s_moodName, shown);
+    }
+    EnableWindow(s_inCycle, curOk);
+    EnableWindow(s_moodSave, curOk);
+    EnableWindow(s_moodNew, curOk);
+    EnableWindow(s_moodDel, curOk && MoodsNames().size() > 1);
+    SendMessageW(s_inCycle, BM_SETCHECK,
+                 (curOk && !MoodsIsSkipped(cur)) ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
 static void PickPaletteColor(HWND owner, int idx) {
@@ -256,7 +426,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (id >= IDC_CHECK_BASE && id < IDC_CHECK_BASE + (int)s_checks.size()) {
             CheckDef& d = s_checks[id - IDC_CHECK_BASE];
             bool on = SendMessageW((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (d.val) {
+            if (d.val == &g_moodSettings.enabled) {
+                MoodsSetEnabled(on);   // also toggles the coverage override
+            } else if (d.val) {
                 *d.val = on;
                 WriteIniInt(d.section, d.key, on ? 1 : 0);
             } else {
@@ -275,7 +447,36 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
         if (id == IDC_OPEN_ANALYZER) { ShowAnalyzerWindow(); return 0; }
         if (id == IDC_SCENES_BTN)    { ShowScenesWindow();   return 0; }
+        if (id == IDC_NEXT_MOOD)     { MoodsNext(*g_renderer); return 0; }
         if (id == IDC_SAVE_SCENE)    { SaveCurrentAsPresetFile(); return 0; }
+        if (id == IDC_MOOD_SAVE) {
+            if (g_renderer) MoodsSaveCurrent(*g_renderer);
+            return 0;
+        }
+        if (id == IDC_MOOD_NEW) {
+            if (g_renderer && MoodsCreateFromLive(*g_renderer) >= 0) {
+                DestroyWindow(hwnd);     // WM_DESTROY nulls s_wnd
+                ShowSettingsWindow();    // recreate so markers/caches are fresh
+            }
+            return 0;
+        }
+        if (id == IDC_MOOD_DELETE) {
+            wchar_t q[512];
+            swprintf_s(q, L"Delete mood '%s'? This removes the file.",
+                       MoodsCurrentName().c_str());
+            if (MessageBoxW(hwnd, q, L"Delete mood", MB_YESNO | MB_ICONWARNING) == IDYES &&
+                MoodsDeleteCurrent()) {
+                if (g_renderer) MoodsRefreshUiCache(*g_renderer);
+                DestroyWindow(hwnd);
+                ShowSettingsWindow();
+            }
+            return 0;
+        }
+        if (id == IDC_MOOD_INCYCLE) {
+            bool on = SendMessageW((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
+            MoodsSetSkipped(MoodsCurrentIndex(), !on);
+            return 0;
+        }
         if (id == IDC_PAUSE_BTN) {
             TogglePause();
             SetWindowTextW(s_pauseBtn, IsManualPaused() ? L"Resume wallpaper" : L"Pause wallpaper");
@@ -303,9 +504,50 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
     case WM_TIMER:
         if (s_fpsLabel) {
-            wchar_t buf[64];
+            wchar_t buf[96];
             swprintf_s(buf, L"Rendering at %.0f fps", g_currentFps);
             SetWindowTextW(s_fpsLabel, buf);
+            const auto& names = MoodsNames();
+            int cur = MoodsCurrentIndex();
+            int nxt = MoodsNextIndex();
+            bool curOk = cur >= 0 && cur < (int)names.size();
+            bool nxtOk = nxt >= 0 && nxt < (int)names.size();
+            if (curOk && nxtOk)
+                swprintf_s(buf, L"Mood: %s -> %s", names[cur].c_str(), names[nxt].c_str());
+            else
+                swprintf_s(buf, L"Mood: %s", curOk ? names[cur].c_str() : L"-");
+            SetWindowTextW(s_moodLabel, buf);
+            RefreshMoodBar();
+
+            // the current mood file vanished on disk (external delete):
+            // rebuild the UI caches once so every marker falls back to "○"
+            static bool s_moodFileMissing = false;
+            wchar_t mp[MAX_PATH];
+            MoodsCurrentPath(mp);
+            bool missing = !mp[0] || GetFileAttributesW(mp) == INVALID_FILE_ATTRIBUTES;
+            if (missing != s_moodFileMissing && g_renderer) {
+                s_moodFileMissing = missing;
+                MoodsRefreshUiCache(*g_renderer);
+            }
+
+            // markers: ● = key saved in this mood, ○ = not in the mood,
+            // trailing * = live value differs from the mood file. The labels
+            // only get SetWindowTextW when the composed string changed.
+            for (size_t i = 0; i < s_sliders.size(); i++) UpdateSliderLabel(i);
+            for (size_t i = 0; i < s_checks.size(); i++) UpdateCheckLabel(i);
+
+            // a mood switch changes Config() behind the sliders' backs; rebuild
+            // so they show the new mood's values. Skipped while the user is
+            // mid-drag (capture held) — retried on the next tick instead.
+            static int s_shownMood = -1;
+            if (s_shownMood < 0) {
+                s_shownMood = cur;
+            } else if (cur != s_shownMood && GetCapture() == nullptr) {
+                s_shownMood = cur;
+                if (g_renderer) MoodsRefreshUiCache(*g_renderer);   // markers track the new mood
+                DestroyWindow(hwnd);     // WM_DESTROY nulls s_wnd
+                ShowSettingsWindow();    // recreates fresh from Config()
+            }
         }
         return 0;
     case WM_CTLCOLORSTATIC: {
@@ -322,6 +564,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     case WM_DESTROY:
         KillTimer(hwnd, 2);
         s_fpsLabel = nullptr;
+        s_moodLabel = nullptr;
+        s_moodName = nullptr;
+        s_inCycle = nullptr;
+        s_moodSave = nullptr;
+        s_moodNew = nullptr;
+        s_moodDel = nullptr;
         s_headers.clear();
         s_wnd = nullptr;    // wallpaper keeps running
         return 0;
@@ -342,6 +590,16 @@ static HWND MakeCtl(const wchar_t* cls, const wchar_t* text, DWORD style,
     return ctl;
 }
 
+static void AddTip(HWND tip, HWND ctl, const wchar_t* text) {
+    if (!text) return;
+    TOOLINFOW ti = { sizeof(ti) };
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = s_wnd;
+    ti.uId = (UINT_PTR)ctl;
+    ti.lpszText = (LPWSTR)text;
+    SendMessageW(tip, TTM_ADDTOOLW, 0, (LPARAM)&ti);
+}
+
 void CloseSettingsWindow() {
     if (s_wnd) DestroyWindow(s_wnd);
 }
@@ -354,7 +612,7 @@ void ShowSettingsWindow() {
     }
     if (!g_renderer) return;
 
-    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_BAR_CLASSES };
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_BAR_CLASSES | ICC_WIN95_CLASSES };
     InitCommonControlsEx(&icc);
     if (!s_font) s_font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     if (!s_headFont)
@@ -378,6 +636,10 @@ void ShowSettingsWindow() {
     BuildDefs();
     s_sliderCtls.clear();
     s_sliderLabels.clear();
+    s_checkCtls.clear();
+    s_lastSliderText.assign(s_sliders.size(), std::wstring());
+    s_lastCheckText.assign(s_checks.size(), std::wstring());
+    MoodsRefreshUiCache(*g_renderer);   // markers compare against the current mood
 
     const int cols = 4, colW = 396, margin = 14, rowH = 48, headH = 30;
     const int colX[4] = { margin, margin + (colW + margin),
@@ -385,7 +647,7 @@ void ShowSettingsWindow() {
     const int width = margin + cols * (colW + margin);
 
     // pre-compute total height: walk defs to find the tallest column
-    int colY[4] = { 12, 12, 12, 12 };
+    int colY[4] = { 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH };
     {
         int cur = 0;
         for (const SliderDef& d : s_sliders) {
@@ -423,9 +685,35 @@ void ShowSettingsWindow() {
     DwmSetWindowAttribute(s_wnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     SetTimer(s_wnd, 2, 500, nullptr);
 
+    // one tooltip control serves every slider/checkbox hover hint
+    HWND tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                               WS_POPUP | TTS_ALWAYSTIP,
+                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                               s_wnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+    SetWindowTheme(tip, L"DarkMode_Explorer", nullptr);
+    SendMessageW(tip, TTM_SETMAXTIPWIDTH, 0, 300);
+
+    // mood bar: current mood name + cycle membership + save/new/delete
+    MakeCtl(L"STATIC", L"Mood:", 0, margin, 10, 46, 18, nullptr, true);
+    s_moodName = MakeCtl(L"STATIC", L"-", 0, margin + 50, 10, 270, 18, nullptr);
+    s_inCycle = MakeCtl(L"BUTTON", L"In cycle", BS_AUTOCHECKBOX,
+                        margin + 330, 8, 90, 22, (HMENU)(UINT_PTR)IDC_MOOD_INCYCLE);
+    s_moodSave = MakeCtl(L"BUTTON", L"Save", BS_PUSHBUTTON,
+                         margin + 430, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_SAVE);
+    s_moodNew = MakeCtl(L"BUTTON", L"New", BS_PUSHBUTTON,
+                        margin + 528, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_NEW);
+    s_moodDel = MakeCtl(L"BUTTON", L"Delete", BS_PUSHBUTTON,
+                        margin + 626, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_DELETE);
+    MakeCtl(L"STATIC", L"● saved in this mood   ○ not in this mood   * differs from saved mood",
+            0, margin + 730, 10, 640, 18, nullptr);
+    AddTip(tip, s_inCycle, L"Include this mood in the auto-cycle rotation");
+    AddTip(tip, s_moodSave, L"Overwrite the current mood file with your live settings");
+    AddTip(tip, s_moodNew, L"Create a new mood from your live settings");
+    AddTip(tip, s_moodDel, L"Delete the current mood file");
+
     // sliders, grouped under accent headers
     {
-        int y[4] = { 12, 12, 12, 12 };
+        int y[4] = { 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH };
         int cur = 0;
         for (size_t i = 0; i < s_sliders.size(); i++) {
             const SliderDef& d = s_sliders[i];
@@ -450,6 +738,7 @@ void ShowSettingsWindow() {
             s_sliderCtls.push_back(track);
             s_sliderLabels.push_back(label);
             UpdateSliderLabel(i);
+            AddTip(tip, track, d.tip);
             y[cur] += rowH;
         }
     }
@@ -470,6 +759,9 @@ void ShowSettingsWindow() {
                                (HMENU)(UINT_PTR)(IDC_CHECK_BASE + i));
             bool on = d.val ? *d.val : GetAutostart();
             SendMessageW(box, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+            s_checkCtls.push_back(box);
+            UpdateCheckLabel(i);   // checkbox text carries the ●/○/* markers
+            AddTip(tip, box, d.tip);
             y[cur] += 25;
         }
     }
@@ -526,7 +818,9 @@ void ShowSettingsWindow() {
     MakeCtl(L"BUTTON", L"Open HDR analyzer", BS_PUSHBUTTON,
             colX[2], by, 160, 26, (HMENU)(UINT_PTR)IDC_OPEN_ANALYZER);
     MakeCtl(L"BUTTON", L"Scenes…", BS_PUSHBUTTON,
-            colX[2] + 170, by, 120, 26, (HMENU)(UINT_PTR)IDC_SCENES_BTN);
+            colX[2] + 170, by, 100, 26, (HMENU)(UINT_PTR)IDC_SCENES_BTN);
+    MakeCtl(L"BUTTON", L"Next mood", BS_PUSHBUTTON,
+            colX[2] + 280, by, 110, 26, (HMENU)(UINT_PTR)IDC_NEXT_MOOD);
 
     // bottom row 3: playback + save + fps
     by += 34;
@@ -537,8 +831,11 @@ void ShowSettingsWindow() {
     MakeCtl(L"BUTTON", L"Save look as scene", BS_PUSHBUTTON,
             colX[1], by, 180, 26, (HMENU)(UINT_PTR)IDC_SAVE_SCENE);
     s_fpsLabel = MakeCtl(L"STATIC", L"Rendering at … fps", 0,
-                         colX[2], by + 5, 250, 18, nullptr);
+                         colX[2], by + 5, 160, 18, nullptr);
+    s_moodLabel = MakeCtl(L"STATIC", L"Mood: …", 0,
+                          colX[2] + 170, by + 5, 220, 18, nullptr, true);
 
+    RefreshMoodBar();
     ShowWindow(s_wnd, SW_SHOW);
     SetForegroundWindow(s_wnd);
 }

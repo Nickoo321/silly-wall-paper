@@ -10,9 +10,6 @@ extern bool     g_pauseOnMaximized;
 extern float    g_hdrPeakNits;      // -1 = panel-reported max, 0 = off, else nits
 extern int      g_gamutMode;        // 0 sRGB, 1 P3, 2 BT.2020
 extern float    g_maxNits;          // panel-reported max luminance
-extern bool     g_cycleEnabled;     // preset interlude cycling
-extern float    g_cycleBaseSec;
-extern float    g_cycleInterludeSec;
 extern float    g_currentFps;       // smoothed achieved framerate (main loop)
 
 void RequestExit();                 // main.cpp — clean shutdown from any UI
@@ -20,12 +17,15 @@ void TogglePause();
 bool IsManualPaused();
 
 // preset API (main.cpp) for the scenes window
-extern std::wstring g_cyclePreset;  // preset filename, or "*" = random
 void ApplyPresetPath(const std::wstring& path);
+void LoadConfigFromFile(const wchar_t* ini, FluidConfig& cfg);  // partial overlay load
 void SaveCurrentAsPresetFile();     // auto-named snapshot
 void GetPresetsDirectory(wchar_t out[MAX_PATH]);
 void PersistShellSettings();        // pauses/HDR/cycle keys -> settings.ini
 void PersistFullConfigNow();        // full live config -> settings.ini
+// full-config ini writer (main.cpp). includeShell=false skips the machine/
+// shell keys moods must not carry: sim_res, dye_res, fps_limit, mirror_second.
+void WriteConfigToIni(const wchar_t* path, const FluidConfig& cfg, bool includeShell);
 
 void ShowScenesWindow();            // scenes.cpp — RGB-suite style manager
 extern wchar_t  g_iniPath[MAX_PATH];

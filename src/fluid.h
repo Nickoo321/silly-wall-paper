@@ -16,6 +16,8 @@ struct FluidConfig {
     float pressureDissipation = 0.85f;
     int   pressureIterations = 20;
     float curl = 48.0f;
+    float baroclinic = 0.0f;    // dye-front torque: wakes bend around dye masses (0 = off)
+    float flowSpeed = 1.0f;     // global impulse multiplier — slows/strengthens all currents
     float splatRadius = 0.64f;      // percent, /100 like reference
     bool  shading = true;
     float dyeDiffusion = 0.0f;      // D∇²c strength: 0 = classic sharp look, >0 = smoke-like spread
@@ -33,6 +35,7 @@ struct FluidConfig {
     bool  idleSplats = true;
     float idleInterval = 9.6f;
     int   idleAmount = 8;
+    float idleBrightness = 1.5f;   // burst intensity (wanderers paint at 0.15)
     // post color filter — the equivalent of Wallpaper Engine's right-panel
     // color controls the user ran the original with (1/1/1/0 = neutral)
     float postSaturation = 1.0f;
@@ -44,10 +47,16 @@ struct FluidConfig {
     float curveCenter = 0.30f;      // input brightness the hump peaks at
     float curveWidth = 0.10f;       // hump half-width (smaller = tighter rims)
     float curveHeight = 1.3f;       // output brightness at the peak
+    // shadow floor ("bottom knee"): lift near-black toward a neutral gray
+    // floor so dark regions keep visible marbling. 0 = off (pure black).
+    float shadowFloor = 0.0f;
+    float shadowKnee = 0.15f;       // brightness range the lift fades over
     // hue band: constrain the color wheel to a slice around hueCenter.
     // range 180 = the classic full wheel; smaller = themed (e.g. only oranges)
     float hueCenter = 0.0f;         // degrees
     float hueRange = 180.0f;        // degrees half-width
+    float hueLinger = 0.0f;         // banded moods: fraction of each half-lap
+                                    // spent resting at a band edge (0 = off)
     // color source: random wheel (colorful) vs fixed palette
     bool  colorful = true;
     bool  moreColors = true;
@@ -92,6 +101,7 @@ struct FluidConfig {
     bool  holdToSplat = true;        // hold LMB on desktop = continuous splat
     // debug / test switches
     bool  gradientMode = false;     // render the M1 HDR test gradient instead
+    int   calibratePage = 0;        // >0: render quiz pattern page N (--calibrate N)
     bool  stats = false;            // periodic dye-field readback stats to stdout
 };
 
@@ -132,6 +142,21 @@ public:
         m_mirrorPeakNits = peakNits;
     }
 
+    // mood-conductor primitives
+    // Directed hue-shift glide to targetDeg over durationSec; holds at the
+    // target until ReleaseHueShift. Works even when the cycler is disabled.
+    void CommandHueShift(float targetDeg, float durationSec);
+    // returnHome=true rotates forward to the next full turn first, then hands
+    // the angle back to the scheduled cycler (or zero when hsEnabled=false).
+    void ReleaseHueShift(bool returnHome);
+    float HueAngleDeg() const { return m_hueAngle; }
+    // Run the 1 Hz coverage readback even when the auto-pause governor is off
+    // (the mood conductor needs fill % + average hue for its triggers).
+    void SetCoverageWanted(bool on) { m_coverageWanted = on; }
+    float CoverageDarkPct() const { return m_darkPct; }
+    bool ScreenTooFull() const { return m_screenTooFull; }
+    float FieldAvgHueDeg() const { return m_avgHue; }   // circular mean hue of lit dye
+
     // HDR analyzer: parallel low-res render of the FINAL scRGB output
     // (post gamut/peak mapping), read back ~10x/s for the analyzer window.
     static const int kAnaW = 640, kAnaH = 360;
@@ -161,8 +186,8 @@ private:
     void MultipleSplats(int amount);
     void RenderDisplay();
     void RenderMirror();
-    void BuildDisplayConstants(float out[28]);
-    void BuildDisplayConstantsEx(float out[28], int w, int h, float sdrScale, float peakNits);
+    void BuildDisplayConstants(float out[32]);
+    void BuildDisplayConstantsEx(float out[32], int w, int h, float sdrScale, float peakNits);
     void MaybeRenderAnalyzer();
     void CreateAnalyzerResources();
     void RenderGradient(float timeSec);
@@ -256,6 +281,9 @@ private:
     float  m_lastCovTime = -10.0f;
     bool   m_screenTooFull = false;
     bool   m_survivorTooFull = false;
+    bool   m_coverageWanted = false;   // conductor override: readback w/o governor
+    float  m_darkPct = 100.0f;         // last measured dark-area %
+    float  m_avgHue = 0.0f;            // circular mean hue (deg) of lit dye
 
     struct { float x, y, ux, uy, left; bool active = false; } m_dart;
     float m_lastDartTime = -1000.0f;
@@ -265,6 +293,8 @@ private:
     float m_hsTimer = 0, m_hsFrom = 0, m_hsTo = 0;
     int   m_hsStep = 0;
     float m_hueAngle = 0;
+    bool  m_hsCommanded = false;       // external (conductor) owns the angle
+    float m_hsGlideOverride = 0.0f;    // 0 = use cfg.hsGlide
 
     // HDR analyzer
     bool   m_anaEnabled = false;

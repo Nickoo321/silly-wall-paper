@@ -31,8 +31,9 @@ struct SimCB {
     float radius;
     float cap;
     int   dimsW, dimsH;
+    float baroclinic;
 };
-static_assert(sizeof(SimCB) == 19 * 4, "SimCB must match the HLSL cbuffer layout (19 DWORDs)");
+static_assert(sizeof(SimCB) == 20 * 4, "SimCB must match the HLSL cbuffer layout (20 DWORDs)");
 
 static float RandF() { return (float)rand() / (float)RAND_MAX; }
 static float HalfToFloat(uint16_t h);   // defined below
@@ -210,15 +211,16 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     m_srvStride = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     // --- root signatures ---
-    // Compute: b0 root constants, t0, t1, u0..u2 (each its own 1-descriptor table).
+    // Compute: b0 root constants, t0, t1, t2 (baroclinic dye), u0..u2.
     {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rSrv1 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, 0 };
+        D3D12_DESCRIPTOR_RANGE rSrv2 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rUav0 = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rUav1 = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rUav2 = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 2, 0, 0 };
 
-        D3D12_ROOT_PARAMETER params[6] = {};
+        D3D12_ROOT_PARAMETER params[7] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, sizeof(SimCB) / 4 };
         auto table = [](D3D12_ROOT_PARAMETER& p, D3D12_DESCRIPTOR_RANGE* r) {
@@ -230,6 +232,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         table(params[3], &rUav0);
         table(params[4], &rUav1);
         table(params[5], &rUav2);
+        table(params[6], &rSrv2);
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -237,7 +240,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 6;
+        rsd.NumParameters = 7;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -252,7 +255,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
         D3D12_ROOT_PARAMETER params[2] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        params[0].Constants = { 0, 0, 28 };
+        params[0].Constants = { 0, 0, 32 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[1].DescriptorTable = { 1, &rSrv0 };
@@ -482,6 +485,7 @@ void FluidRenderer::SimStep(float dt) {
     cb.texelH = 1.0f / m_simH;
     cb.dt = dt;
     cb.curlStrength = m_cfg.curl;
+    cb.baroclinic = m_cfg.baroclinic;
     cb.aspect = (float)m_width / (float)m_height;
 
     // Frame-rate independence: the reference applied its multiplicative decays
@@ -489,9 +493,11 @@ void FluidRenderer::SimStep(float dt) {
     // to dt/(1/120) so a 144 fps loop doesn't damp harder than a 60 fps one.
     const float stepsRef = dt * 120.0f;
 
-    auto bind = [&](ID3D12PipelineState* pso, Tex* s0, Tex* s1, Tex* dst, UINT dstParam) {
+    auto bind = [&](ID3D12PipelineState* pso, Tex* s0, Tex* s1, Tex* dst, UINT dstParam,
+                    Tex* s2 = nullptr) {
         if (s0) Transition(*s0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         if (s1) Transition(*s1, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (s2) Transition(*s2, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         Transition(*dst, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         m_cmd->SetPipelineState(pso);
         cb.dimsW = dst->w; cb.dimsH = dst->h;
@@ -502,6 +508,7 @@ void FluidRenderer::SimStep(float dt) {
         m_cmd->SetComputeRootDescriptorTable(3, dst->uav);
         m_cmd->SetComputeRootDescriptorTable(4, dst->uav);
         m_cmd->SetComputeRootDescriptorTable(5, dst->uav);
+        m_cmd->SetComputeRootDescriptorTable(6, s2 ? s2->srv : dst->srv);
         m_cmd->Dispatch(Groups(dst->w), Groups(dst->h), 1);
     };
 
@@ -509,8 +516,8 @@ void FluidRenderer::SimStep(float dt) {
 
     // 1. curl
     bind(m_psoCurl.Get(), m_velocity.read, nullptr, &m_curl, 5);
-    // 2. vorticity confinement
-    bind(m_psoVorticity.Get(), m_velocity.read, &m_curl, m_velocity.write, 3);
+    // 2. vorticity confinement (+ baroclinic dye-front torque)
+    bind(m_psoVorticity.Get(), m_velocity.read, &m_curl, m_velocity.write, 3, m_dye.read);
     m_velocity.Swap();
     // 3. divergence
     bind(m_psoDivergence.Get(), m_velocity.read, nullptr, &m_divergence, 5);
@@ -583,7 +590,8 @@ void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g
 
 void FluidRenderer::MultipleSplats(int amount) {
     for (int i = 0; i < amount; i++) {
-        // generateColor(): hue near the global wheel (or palette), *0.15, *10 for bursts
+        // generateColor(): hue near the global wheel (or palette); intensity
+        // is cfg.idleBrightness (wanderers paint at 0.15 — bursts were 1.5)
         RGB c;
         if (m_cfg.colorful) {
             float h = fmodf(WheelHue((RandF() - 0.5f) * 0.12f) + 1.0f, 1.0f);
@@ -597,7 +605,8 @@ void FluidRenderer::MultipleSplats(int amount) {
         float y = m_height * RandF();
         float dx = 1000.0f * (RandF() - 0.5f);
         float dy = 1000.0f * (RandF() - 0.5f);
-        Splat(x, y, dx, dy, c.r * 1.5f, c.g * 1.5f, c.b * 1.5f);
+        Splat(x, y, dx, dy, c.r * m_cfg.idleBrightness,
+              c.g * m_cfg.idleBrightness, c.b * m_cfg.idleBrightness);
     }
 }
 
@@ -623,9 +632,9 @@ void FluidRenderer::RenderDisplay() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[28];
+    float consts[32];
     BuildDisplayConstants(consts);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -635,11 +644,11 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->ResourceBarrier(1, &b);
 }
 
-void FluidRenderer::BuildDisplayConstants(float out[24]) {
+void FluidRenderer::BuildDisplayConstants(float out[32]) {
     BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits);
 }
 
-void FluidRenderer::BuildDisplayConstantsEx(float out[24], int w, int h,
+void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
                                             float sdrScale, float peakNits) {
     // CSS-filter chain in reference order: saturate -> brightness -> contrast
     // -> hue-rotate. Composed into one matrix + offset. Hue-rotate preserves
@@ -677,7 +686,7 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[24], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
-    float consts[28] = { 1.0f / w, 1.0f / h,
+    float consts[32] = { 1.0f / w, 1.0f / h,
                          m_cfg.shading ? 1.0f : 0.0f, sdrScale,
                          (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
@@ -686,7 +695,8 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[24], int w, int h,
                          M.m[6], M.m[7], M.m[8], 0,
                          off, off, off, 0,
                          m_cfg.curveEnabled ? 1.0f : 0.0f,
-                         m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight };
+                         m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight,
+                         m_cfg.shadowFloor, m_cfg.shadowKnee, 0.0f, 0.0f };
     memcpy(out, consts, sizeof(consts));
 }
 
@@ -754,9 +764,9 @@ void FluidRenderer::MaybeRenderAnalyzer() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[28];
+    float consts[32];
     BuildDisplayConstants(consts);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -879,9 +889,9 @@ void FluidRenderer::RenderMirror() {
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoDisplay.Get());
-    float consts[28];
+    float consts[32];
     BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits);
-    m_cmd->SetGraphicsRoot32BitConstants(0, 28, consts, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -912,7 +922,7 @@ void FluidRenderer::RenderGradient(float timeSec) {
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(m_psoGradient.Get());
     float consts[8] = { (float)m_width, (float)m_height, timeSec,
-                        m_hdrActive ? 1.0f : 0.0f, 0, 0, 0, 0 };
+                        m_hdrActive ? 1.0f : 0.0f, (float)m_cfg.calibratePage, 0, 0, 0 };
     m_cmd->SetGraphicsRoot32BitConstants(0, 8, consts, 0);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -938,7 +948,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
 
     BeginFrame();
 
-    if (m_cfg.gradientMode) {
+    if (m_cfg.gradientMode || m_cfg.calibratePage > 0) {
         RenderGradient(m_time);
         EndFrameAndPresent();
         return;
@@ -1115,9 +1125,26 @@ void FluidRenderer::Shutdown() {
 // with offsets (wanderer/dart) scaled into the band too.
 float FluidRenderer::WheelHue(float offset) {
     float rangeFrac = m_cfg.hueRange / 180.0f;
-    if (rangeFrac >= 0.999f) return m_globalHue + offset;
+    // coordination: while a hue command (mood transition bridge) rotates the
+    // displayed field, counter-rotate emission so fresh dye still lands inside
+    // the intended visible band instead of clashing with the rotated field
+    float cmd = m_hsCommanded ? m_hueAngle / 360.0f : 0.0f;
+    if (rangeFrac >= 0.999f) return m_globalHue + offset - cmd;
     float tri = 1.0f - fabsf(2.0f * m_globalHue - 1.0f);   // 0..1..0 per lap
-    return m_cfg.hueCenter / 360.0f + (tri - 0.5f) * rangeFrac + offset * rangeFrac;
+    // linger: dwell at the band edges so one palette can fill the screen
+    // before drifting on (0 = off = constant-speed triangle)
+    float L = m_cfg.hueLinger;
+    if (L > 0.0f) {
+        float s;
+        if (tri < L) s = 0.0f;
+        else if (tri > 1.0f - L) s = 1.0f;
+        else {
+            s = (tri - L) / (1.0f - 2.0f * L);
+            s = s * s * (3.0f - 2.0f * s);   // smooth glide between rests
+        }
+        tri = s;
+    }
+    return m_cfg.hueCenter / 360.0f + (tri - 0.5f) * rangeFrac + offset * rangeFrac - cmd;
 }
 
 // Reference color sources: cycledColor() when "colorful" (hue wheel), else a
@@ -1278,10 +1305,74 @@ void FluidRenderer::UpdateDart(float dt) {
     if (m_dart.left <= 0.5f) m_dart.active = false;
 }
 
+void FluidRenderer::CommandHueShift(float targetDeg, float durationSec) {
+    m_hsCommanded = true;
+    m_hsPhase = 1; m_hsTimer = 0;
+    m_hsFrom = m_hueAngle; m_hsTo = targetDeg;
+    m_hsGlideOverride = fmaxf(0.05f, durationSec);
+}
+
+void FluidRenderer::ReleaseHueShift(bool returnHome) {
+    if (returnHome) {
+        // rotate forward to the next full turn, then release (completion of
+        // phase 3 clears the commanded flag inside UpdateHueShift)
+        m_hsPhase = 3; m_hsTimer = 0;
+        m_hsFrom = m_hueAngle;
+        m_hsTo = ceilf((m_hueAngle + 0.001f) / 360.0f) * 360.0f;
+        m_hsGlideOverride = 0.0f;   // return at the configured glide speed
+    } else {
+        // drop the command, but never snap the field's colors: if the angle
+        // isn't home yet, glide to the next full turn like returnHome does
+        m_hsGlideOverride = 0.0f;
+        m_hsStep = 0;
+        float rem = fmodf(m_hueAngle, 360.0f);
+        if (rem > 0.5f || rem < -0.5f) {
+            m_hsCommanded = true;
+            m_hsPhase = 3; m_hsTimer = 0;
+            m_hsFrom = m_hueAngle;
+            m_hsTo = ceilf((m_hueAngle + 0.001f) / 360.0f) * 360.0f;
+        } else {
+            m_hsCommanded = false;
+            m_hsPhase = 0; m_hsTimer = 0; m_hueAngle = 0;
+        }
+    }
+}
+
 void FluidRenderer::UpdateHueShift(float dt) {
-    if (!m_cfg.hsEnabled) {
-        m_hueAngle = 0;
-        m_hsPhase = 0; m_hsTimer = 0; m_hsStep = 0;
+    if (m_hsCommanded) {
+        // externally driven: phase 1 glides to the target and holds;
+        // phase 3 returns home, then hands back to the scheduler
+        if (m_hsPhase == 1 || m_hsPhase == 3) {
+            m_hsTimer += dt;
+            float dur = m_hsGlideOverride > 0.0f ? m_hsGlideOverride
+                                                 : fmaxf(0.05f, m_cfg.hsGlide);
+            float t = fminf(1.0f, m_hsTimer / dur);
+            t = t * t * (3.0f - 2.0f * t);
+            m_hueAngle = m_hsFrom + (m_hsTo - m_hsFrom) * t;
+            if (t >= 1.0f && m_hsPhase == 3) {
+                m_hsCommanded = false;
+                m_hsPhase = 0; m_hsTimer = 0; m_hsStep = 0; m_hueAngle = 0;
+            }
+        }
+        return;
+    }
+    if (!m_cfg.hsEnabled || m_cfg.hueRange < 179.0f) {
+        // Narrow hue bands must never be post-rotated: any rotation drags the
+        // whole field out of band (the Ember green-leak bug). Color motion in
+        // a banded look comes from emission-side drift (color_cycle_period),
+        // never from the shift wheel. And never snap the rotation off —
+        // glide to the next full turn.
+        float rem = fmodf(m_hueAngle, 360.0f);
+        if (rem > 0.5f || rem < -0.5f) {
+            m_hsCommanded = true;
+            m_hsPhase = 3; m_hsTimer = 0;
+            m_hsFrom = m_hueAngle;
+            m_hsTo = ceilf((m_hueAngle + 0.001f) / 360.0f) * 360.0f;
+            m_hsGlideOverride = 0.0f;
+        } else {
+            m_hueAngle = 0;
+            m_hsPhase = 0; m_hsTimer = 0; m_hsStep = 0;
+        }
         return;
     }
     m_hsTimer += dt;
@@ -1335,7 +1426,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 }
 
 void FluidRenderer::UpdateCoverage() {
-    if (!m_cfg.autoPause || !m_cfg.wanderers) {
+    if ((!m_cfg.autoPause || !m_cfg.wanderers) && !m_coverageWanted) {
         m_screenTooFull = false;
         m_survivorTooFull = false;
         return;
@@ -1392,6 +1483,7 @@ void FluidRenderer::ProcessCoverage(const uint8_t* data, UINT pitch) {
     float tiles[18] = {};   // 6x3
     const int TX = 6, TY = 3;
     const float tw = kCovW / (float)TX, th = kCovH / (float)TY;
+    float hueX = 0, hueY = 0, hueW = 0;   // brightness-weighted circular mean
 
     for (int y = 0; y < kCovH; y++) {
         const uint16_t* row = (const uint16_t*)(data + (SIZE_T)y * pitch);
@@ -1401,11 +1493,30 @@ void FluidRenderer::ProcessCoverage(const uint8_t* data, UINT pitch) {
             float b = HalfToFloat(row[x * 4 + 2]);
             float m = fmaxf(r, fmaxf(g, b));
             if (m <= m_cfg.darkLevel) dark++;
+            else {
+                float mn = fminf(r, fminf(g, b));
+                float d = m - mn;
+                if (d > 1e-5f) {
+                    float h;
+                    if (m == r) h = fmodf((g - b) / d, 6.0f);
+                    else if (m == g) h = (b - r) / d + 2.0f;
+                    else h = (r - g) / d + 4.0f;
+                    float rad = h * 60.0f * (3.14159265f / 180.0f);
+                    hueX += cosf(rad) * m;
+                    hueY += sinf(rad) * m;
+                    hueW += m;
+                }
+            }
             int ti = (int)fminf(TX - 1.0f, x / tw) + TX * (int)fminf(TY - 1.0f, y / th);
             tiles[ti] += m;
         }
     }
     float darkPct = 100.0f * dark / total;
+    m_darkPct = darkPct;
+    if (hueW > 0.001f) {
+        float ang = atan2f(hueY, hueX) * 180.0f / 3.14159265f;
+        m_avgHue = fmodf(ang + 720.0f, 360.0f);
+    }
 
     float maxTile = 0, sumTiles = 0;
     for (int t = 0; t < TX * TY; t++) {

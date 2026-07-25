@@ -19,6 +19,7 @@
 #include <string>
 #include "fluid.h"
 #include "app_state.h"
+#include "moods.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -44,14 +45,6 @@ bool            g_pauseOnFullscreen = true;   // shared with settings.cpp
 bool            g_pauseOnMaximized = true;
 float           g_hdrPeakNits = -1.0f;        // -1 = panel max (auto), 0 = off, else nits
 int             g_gamutMode = 2;              // 0 sRGB, 1 P3, 2 BT.2020
-// preset interlude cycling
-bool            g_cycleEnabled = false;
-float           g_cycleBaseSec = 20.0f;       // time in the user's own settings
-float           g_cycleInterludeSec = 6.0f;   // time in the injected preset
-std::wstring    g_cyclePreset = L"*";         // preset filename, or "*" = random (shared)
-static bool        g_inInterlude = false;
-static ULONGLONG   g_nextCycleTick = 0;
-static FluidConfig g_cycleBaseCfg;
 FluidRenderer*  g_renderer = nullptr;
 static bool     g_forceRender = false;
 static float    g_fpsOverride = 0.0f;   // --fps test flag; 0 = use settings
@@ -84,14 +77,6 @@ static void LoadSettings() {
     g_hdrPeakNits = (float)_wtof(buf);
     g_gamutMode = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, g_iniPath);
     if (g_gamutMode < 0 || g_gamutMode > 2) g_gamutMode = 2;
-    g_cycleEnabled = GetPrivateProfileIntW(L"cycle", L"enabled", 0, g_iniPath) != 0;
-    GetPrivateProfileStringW(L"cycle", L"base_seconds", L"20", buf, 64, g_iniPath);
-    g_cycleBaseSec = (float)_wtof(buf);
-    GetPrivateProfileStringW(L"cycle", L"interlude_seconds", L"6", buf, 64, g_iniPath);
-    g_cycleInterludeSec = (float)_wtof(buf);
-    wchar_t pbuf[MAX_PATH] = {};
-    GetPrivateProfileStringW(L"cycle", L"preset", L"*", pbuf, MAX_PATH, g_iniPath);
-    g_cyclePreset = pbuf;
 }
 
 static void SaveSettings() {
@@ -105,12 +90,6 @@ static void SaveSettings() {
     WritePrivateProfileStringW(L"hdr", L"peak_nits", buf, g_iniPath);
     swprintf_s(buf, L"%d", g_gamutMode);
     WritePrivateProfileStringW(L"hdr", L"gamut", buf, g_iniPath);
-    WritePrivateProfileStringW(L"cycle", L"enabled", g_cycleEnabled ? L"1" : L"0", g_iniPath);
-    swprintf_s(buf, L"%.0f", g_cycleBaseSec);
-    WritePrivateProfileStringW(L"cycle", L"base_seconds", buf, g_iniPath);
-    swprintf_s(buf, L"%.0f", g_cycleInterludeSec);
-    WritePrivateProfileStringW(L"cycle", L"interlude_seconds", buf, g_iniPath);
-    WritePrivateProfileStringW(L"cycle", L"preset", g_cyclePreset.c_str(), g_iniPath);
 }
 
 // Full config from an ini file — every value the settings window writes.
@@ -136,6 +115,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.satRestore          = getF(L"sim", L"saturation_restore", cfg.satRestore);
     cfg.maxBrightness       = getF(L"sim", L"max_brightness", cfg.maxBrightness);
     cfg.curl                = getF(L"sim", L"vorticity", cfg.curl);
+    cfg.baroclinic          = getF(L"sim", L"baroclinic", cfg.baroclinic);
     cfg.splatRadius         = getF(L"sim", L"splat_radius", cfg.splatRadius);
     cfg.shading             = getB(L"sim", L"shading", cfg.shading);
     cfg.simRes              = getI(L"sim", L"sim_res", cfg.simRes);
@@ -171,6 +151,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.idleSplats          = getB(L"behavior", L"idle_splats", cfg.idleSplats);
     cfg.idleInterval        = getF(L"behavior", L"idle_interval", cfg.idleInterval);
     cfg.idleAmount          = getI(L"behavior", L"idle_amount", cfg.idleAmount);
+    cfg.idleBrightness      = getF(L"behavior", L"idle_brightness", cfg.idleBrightness);
     cfg.holdToSplat         = getB(L"behavior", L"hold_to_splat", cfg.holdToSplat);
     cfg.splatOnClick        = getB(L"behavior", L"splat_on_click", cfg.splatOnClick);
     cfg.showMouse           = getB(L"behavior", L"show_mouse", cfg.showMouse);
@@ -184,11 +165,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.postHue             = getF(L"color", L"post_hue", cfg.postHue);
     cfg.hueCenter           = getF(L"color", L"hue_center", cfg.hueCenter);
     cfg.hueRange            = getF(L"color", L"hue_range", cfg.hueRange);
+    cfg.hueLinger           = getF(L"color", L"hue_linger", cfg.hueLinger);
     cfg.dyeDiffusion        = getF(L"sim", L"dye_diffusion", cfg.dyeDiffusion);
     cfg.curveEnabled        = getB(L"color", L"curve_enabled", cfg.curveEnabled);
     cfg.curveCenter         = getF(L"color", L"curve_center", cfg.curveCenter);
     cfg.curveWidth          = getF(L"color", L"curve_width", cfg.curveWidth);
     cfg.curveHeight         = getF(L"color", L"curve_height", cfg.curveHeight);
+    cfg.shadowFloor         = getF(L"color", L"shadow_floor", cfg.shadowFloor);
+    cfg.shadowKnee          = getF(L"color", L"shadow_knee", cfg.shadowKnee);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], buf[64] = {};
         swprintf_s(key, L"splat_color_%d", ci + 1);
@@ -205,6 +189,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
 }
 
 static void LoadFullConfig(FluidConfig& cfg) { LoadConfigFromIni(g_iniPath, cfg); }
+
+void LoadConfigFromFile(const wchar_t* ini, FluidConfig& cfg) { LoadConfigFromIni(ini, cfg); }
 
 // ---------------------------------------------------------------------------
 // WorkerW: the layer behind the desktop icons
@@ -435,8 +421,9 @@ static const UINT WM_TRAYICON = WM_APP + 1;
 enum TrayCmd : UINT {
     CMD_PAUSE = 1, CMD_FSPAUSE = 2, CMD_EXIT = 3, CMD_MAXPAUSE = 4, CMD_SETTINGS = 5,
     CMD_ANALYZER = 6, CMD_SCENES = 7,
-    CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31, CMD_CYCLE_TOGGLE = 32,
-    CMD_PRESET_BASE = 600, CMD_CYCLE_RANDOM = 699, CMD_CYCLE_BASE = 700,
+    CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
+    CMD_MOODS_TOGGLE = 33, CMD_MOODS_NEXT = 34, CMD_MOOD_BASE = 800,
+    CMD_PRESET_BASE = 600,
     CMD_PEAK_OFF = 10, CMD_PEAK_AUTO = 11, CMD_PEAK_300 = 12, CMD_PEAK_600 = 13,
     CMD_PEAK_800 = 15, CMD_PEAK_1000 = 14,
     CMD_GAMUT_SRGB = 20, CMD_GAMUT_P3 = 21, CMD_GAMUT_2020 = 22,
@@ -452,12 +439,12 @@ static void SaveCurrentAsPreset();
 static void ShowTrayMenuBody(HWND hwnd, HMENU presets);
 
 static void ShowTrayMenu(HWND hwnd) {
-    // enumerate preset files fresh each time the menu opens
+    // enumerate mood files fresh each time the menu opens (one recipe folder)
     g_presetPaths.clear();
     HMENU presets = CreatePopupMenu();
     {
         wchar_t dir[MAX_PATH], pattern[MAX_PATH];
-        GetPresetsDir(dir);
+        MoodsGetDirectory(dir);
         swprintf_s(pattern, L"%s\\*.ini", dir);
         WIN32_FIND_DATAW fd;
         HANDLE find = FindFirstFileW(pattern, &fd);
@@ -474,28 +461,10 @@ static void ShowTrayMenu(HWND hwnd) {
             FindClose(find);
         }
         if (g_presetPaths.empty())
-            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no presets yet)");
+            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no moods yet)");
         AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(presets, MF_STRING, CMD_PRESET_SAVE, L"Save current as new preset");
-        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open presets folder");
-
-        // interlude cycling: base settings for N s, injected preset for M s
-        AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(presets, MF_STRING | (g_cycleEnabled ? MF_CHECKED : 0),
-                    CMD_CYCLE_TOGGLE, L"Cycle interludes (base → preset → base…)");
-        HMENU cycleSel = CreatePopupMenu();
-        AppendMenuW(cycleSel, MF_STRING | (g_cyclePreset == L"*" ? MF_CHECKED : 0),
-                    CMD_CYCLE_RANDOM, L"Random preset each time");
-        for (size_t i = 0; i < g_presetPaths.size(); i++) {
-            const wchar_t* base = wcsrchr(g_presetPaths[i].c_str(), L'\\');
-            std::wstring fname = base ? base + 1 : g_presetPaths[i];
-            std::wstring label = fname;
-            size_t dot = label.rfind(L".ini");
-            if (dot != std::wstring::npos) label.resize(dot);
-            AppendMenuW(cycleSel, MF_STRING | (g_cyclePreset == fname ? MF_CHECKED : 0),
-                        CMD_CYCLE_BASE + i, label.c_str());
-        }
-        AppendMenuW(presets, MF_POPUP, (UINT_PTR)cycleSel, L"Interlude preset");
+        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open moods folder");
     }
     ShowTrayMenuBody(hwnd, presets);
 }
@@ -531,6 +500,24 @@ static void ShowTrayMenuBody(HWND hwnd, HMENU presets) {
 
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_SCENES, L"Scenes…");
+
+    // Mood conductor: choreographed cycling between moods\*.ini look recipes
+    HMENU moods = CreatePopupMenu();
+    AppendMenuW(moods, MF_STRING | (g_moodSettings.enabled ? MF_CHECKED : 0),
+                CMD_MOODS_TOGGLE, L"Cycle moods");
+    AppendMenuW(moods, MF_STRING, CMD_MOODS_NEXT, L"Next mood now");
+    AppendMenuW(moods, MF_SEPARATOR, 0, nullptr);
+    {
+        const auto& names = MoodsNames();
+        int cur = MoodsCurrentIndex();
+        for (int i = 0; i < (int)names.size() && i < 100; i++)
+            AppendMenuW(moods, MF_STRING | (i == cur ? MF_CHECKED : 0),
+                        CMD_MOOD_BASE + i, names[i].c_str());
+        if (names.empty())
+            AppendMenuW(moods, MF_STRING | MF_GRAYED, 0, L"(no moods found)");
+    }
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)moods, L"Moods");
+
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)presets, L"Presets");
     AppendMenuW(menu, MF_STRING, CMD_SETTINGS, L"Settings…");
     AppendMenuW(menu, MF_STRING, CMD_ANALYZER, L"HDR analyzer (nits heat-map)…");
@@ -593,33 +580,25 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case CMD_PRESET_SAVE:
             SaveCurrentAsPreset();
             break;
-        case CMD_CYCLE_TOGGLE:
-            g_cycleEnabled = !g_cycleEnabled;
-            g_inInterlude = false;
-            g_nextCycleTick = 0;
-            SaveSettings();
-            printf("preset cycling: %s\n", g_cycleEnabled ? "on" : "off");
+        case CMD_MOODS_TOGGLE:
+            MoodsSetEnabled(!g_moodSettings.enabled);
+            printf("mood cycling: %s\n", g_moodSettings.enabled ? "on" : "off");
             break;
-        case CMD_CYCLE_RANDOM:
-            g_cyclePreset = L"*";
-            SaveSettings();
+        case CMD_MOODS_NEXT:
+            if (g_renderer) MoodsNext(*g_renderer);
             break;
         case CMD_PRESET_FOLDER: {
             wchar_t dir[MAX_PATH];
-            GetPresetsDir(dir);
+            MoodsGetDirectory(dir);
             ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
             break;
         }
         default:
-            if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_CYCLE_RANDOM &&
+            if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + 100 &&
                 LOWORD(wp) - CMD_PRESET_BASE < g_presetPaths.size()) {
                 ApplyPreset(g_presetPaths[LOWORD(wp) - CMD_PRESET_BASE]);
-            } else if (LOWORD(wp) >= CMD_CYCLE_BASE &&
-                       LOWORD(wp) - CMD_CYCLE_BASE < g_presetPaths.size()) {
-                const std::wstring& full = g_presetPaths[LOWORD(wp) - CMD_CYCLE_BASE];
-                const wchar_t* base = wcsrchr(full.c_str(), L'\\');
-                g_cyclePreset = base ? base + 1 : full;
-                SaveSettings();
+            } else if (LOWORD(wp) >= CMD_MOOD_BASE && LOWORD(wp) < CMD_MOOD_BASE + 100) {
+                if (g_renderer) MoodsForceMood(*g_renderer, LOWORD(wp) - CMD_MOOD_BASE);
             }
             break;
         case CMD_GAMUT_SRGB: g_gamutMode = 0; SaveSettings(); break;
@@ -813,19 +792,21 @@ static void EnsureBuiltinPresets() {
     }
 }
 
-// Persist the complete merged config to settings.ini (presets can be partial,
+// Persist the complete merged config to an ini file (presets can be partial,
 // so after applying one, the resolved state must be written out in full).
-static void SaveFullConfig(const FluidConfig& c) {
-    if (!g_iniPath[0]) return;
-    auto putF = [](const wchar_t* sec, const wchar_t* key, float v, int dec) {
+// includeShell=false skips the machine/shell keys (sim_res, dye_res,
+// fps_limit, mirror_second) — used for mood files, which never touch them.
+void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShell) {
+    if (!path || !path[0]) return;
+    auto putF = [path](const wchar_t* sec, const wchar_t* key, float v, int dec) {
         wchar_t b[48];
         swprintf_s(b, L"%.*f", dec, v);
-        WritePrivateProfileStringW(sec, key, b, g_iniPath);
+        WritePrivateProfileStringW(sec, key, b, path);
     };
-    auto putI = [](const wchar_t* sec, const wchar_t* key, int v) {
+    auto putI = [path](const wchar_t* sec, const wchar_t* key, int v) {
         wchar_t b[32];
         swprintf_s(b, L"%d", v);
-        WritePrivateProfileStringW(sec, key, b, g_iniPath);
+        WritePrivateProfileStringW(sec, key, b, path);
     };
     putF(L"sim", L"density_diffusion", c.densityDissipation, 4);
     putF(L"sim", L"velocity_diffusion", c.velocityDissipation, 4);
@@ -836,10 +817,13 @@ static void SaveFullConfig(const FluidConfig& c) {
     putF(L"sim", L"saturation_restore", c.satRestore, 3);
     putF(L"sim", L"max_brightness", c.maxBrightness, 2);
     putF(L"sim", L"vorticity", c.curl, 1);
+    putF(L"sim", L"baroclinic", c.baroclinic, 1);
     putF(L"sim", L"splat_radius", c.splatRadius, 3);
     putI(L"sim", L"shading", c.shading);
-    putI(L"sim", L"sim_res", c.simRes);
-    putI(L"sim", L"dye_res", c.dyeRes);
+    if (includeShell) {
+        putI(L"sim", L"sim_res", c.simRes);
+        putI(L"sim", L"dye_res", c.dyeRes);
+    }
     putF(L"hdr", L"knee", c.hdrKnee, 2);
     putF(L"hdr", L"saturation", c.hdrSaturation, 2);
     putF(L"hdr", L"brightness", c.hdrBrightness, 2);
@@ -870,11 +854,14 @@ static void SaveFullConfig(const FluidConfig& c) {
     putI(L"behavior", L"idle_splats", c.idleSplats);
     putF(L"behavior", L"idle_interval", c.idleInterval, 1);
     putI(L"behavior", L"idle_amount", c.idleAmount);
+    putF(L"behavior", L"idle_brightness", c.idleBrightness, 2);
     putI(L"behavior", L"hold_to_splat", c.holdToSplat);
     putI(L"behavior", L"splat_on_click", c.splatOnClick);
     putI(L"behavior", L"show_mouse", c.showMouse);
-    putF(L"general", L"fps_limit", c.fpsLimit, 0);
-    putI(L"general", L"mirror_second", c.mirrorSecond);
+    if (includeShell) {
+        putF(L"general", L"fps_limit", c.fpsLimit, 0);
+        putI(L"general", L"mirror_second", c.mirrorSecond);
+    }
     putI(L"color", L"colorful", c.colorful);
     putI(L"color", L"more_colors", c.moreColors);
     putF(L"color", L"post_saturation", c.postSaturation, 2);
@@ -883,28 +870,32 @@ static void SaveFullConfig(const FluidConfig& c) {
     putF(L"color", L"post_hue", c.postHue, 0);
     putF(L"color", L"hue_center", c.hueCenter, 0);
     putF(L"color", L"hue_range", c.hueRange, 0);
+    putF(L"color", L"hue_linger", c.hueLinger, 2);
     putF(L"sim", L"dye_diffusion", c.dyeDiffusion, 3);
     putI(L"color", L"curve_enabled", c.curveEnabled);
     putF(L"color", L"curve_center", c.curveCenter, 2);
     putF(L"color", L"curve_width", c.curveWidth, 2);
     putF(L"color", L"curve_height", c.curveHeight, 2);
+    putF(L"color", L"shadow_floor", c.shadowFloor, 3);
+    putF(L"color", L"shadow_knee", c.shadowKnee, 2);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], val[64];
         swprintf_s(key, L"splat_color_%d", ci + 1);
         swprintf_s(val, L"%.4f %.4f %.4f",
                    c.splatColors[ci * 3], c.splatColors[ci * 3 + 1], c.splatColors[ci * 3 + 2]);
-        WritePrivateProfileStringW(L"color", key, val, g_iniPath);
+        WritePrivateProfileStringW(L"color", key, val, path);
     }
+}
+
+static void SaveFullConfig(const FluidConfig& c) {
+    if (!g_iniPath[0]) return;
+    WriteConfigToIni(g_iniPath, c, true);
     SaveSettings();   // shell globals: pauses, peak, gamut, cycle config
 }
 
 static void ApplyPreset(const std::wstring& path) {
     if (!g_renderer) return;
     CloseSettingsWindow();
-
-    // a manual preset load resets any in-flight interlude
-    g_inInterlude = false;
-    g_nextCycleTick = 0;
 
     // merge the (possibly partial) preset over the current state
     FluidConfig fresh = g_renderer->Config();
@@ -934,16 +925,18 @@ static void ApplyPreset(const std::wstring& path) {
 }
 
 static void SaveCurrentAsPreset() {
+    // one managed recipe system: new snapshots are mood files (no shell keys)
     wchar_t dir[MAX_PATH], path[MAX_PATH];
-    GetPresetsDir(dir);
+    MoodsGetDirectory(dir);
     CreateDirectoryW(dir, nullptr);
     if (g_renderer) SaveFullConfig(g_renderer->Config());   // ini = live state
     for (int n = 1; n < 100; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
         if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            CopyFileW(g_iniPath, path, TRUE);
+            if (g_renderer) WriteConfigToIni(path, g_renderer->Config(), false);
+            MoodsRescan();
             wchar_t msg[128];
-            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
+            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the moods folder if you like.", n);
             ShowTrayBalloon(L"Preset saved", msg);
             return;
         }
@@ -987,6 +980,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 freopen_s(&f, "CONOUT$", "w", stderr);
             } else if (wcscmp(argv[i], L"--gradient") == 0) {
                 cfg.gradientMode = true;
+            } else if (wcscmp(argv[i], L"--calibrate") == 0 && i + 1 < argc) {
+                cfg.gradientMode = true;   // skips sim resources; pattern path
+                cfg.calibratePage = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--stats") == 0) {
                 cfg.stats = true;
             } else if (wcscmp(argv[i], L"--force-render") == 0) {
@@ -1018,6 +1014,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     LoadFullConfig(cfg);
     EnsureBuiltinPresets();
+    InitMoods();
 
     printf("FluidWallpaper - fluid simulation behind desktop icons\n");
 
@@ -1043,6 +1040,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     FluidRenderer renderer;
     renderer.Init(hwnd, width, height, cfg);
     g_renderer = &renderer;
+    renderer.SetCoverageWanted(g_moodSettings.enabled);
 
     CreateTrayWindow();
 
@@ -1183,67 +1181,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             continue;
         }
 
-        // Preset interlude cycling: N s of the user's settings, M s of the
-        // chosen (or random) preset painting into the same fluid field, with
-        // ±30% timing jitter so it feels organic rather than metronomic.
-        if (g_cycleEnabled) {
-            if (g_nextCycleTick == 0)
-                g_nextCycleTick = tick + (ULONGLONG)(g_cycleBaseSec * 1000);
-            if (tick >= g_nextCycleTick) {
-                float jitter = 0.7f + 0.6f * ((float)rand() / RAND_MAX);
-                if (!g_inInterlude) {
-                    wchar_t dir[MAX_PATH];
-                    GetPresetsDir(dir);
-                    std::wstring path;
-                    if (g_cyclePreset == L"*") {
-                        std::vector<std::wstring> all;
-                        wchar_t pattern[MAX_PATH];
-                        swprintf_s(pattern, L"%s\\*.ini", dir);
-                        WIN32_FIND_DATAW fd;
-                        HANDLE find = FindFirstFileW(pattern, &fd);
-                        if (find != INVALID_HANDLE_VALUE) {
-                            do {
-                                all.push_back(std::wstring(dir) + L"\\" + fd.cFileName);
-                            } while (FindNextFileW(find, &fd));
-                            FindClose(find);
-                        }
-                        if (!all.empty()) path = all[rand() % all.size()];
-                    } else {
-                        path = std::wstring(dir) + L"\\" + g_cyclePreset;
-                        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES)
-                            path.clear();
-                    }
-                    if (!path.empty()) {
-                        g_cycleBaseCfg = renderer.Config();
-                        FluidConfig il = g_cycleBaseCfg;
-                        LoadConfigFromIni(path.c_str(), il);
-                        // interludes change the look only — never resolution/perf
-                        il.simRes = g_cycleBaseCfg.simRes;
-                        il.dyeRes = g_cycleBaseCfg.dyeRes;
-                        il.fpsLimit = g_cycleBaseCfg.fpsLimit;
-                        renderer.Config() = il;
-                        renderer.ReinitWanderers();
-                        g_inInterlude = true;
-                        g_nextCycleTick = tick + (ULONGLONG)(g_cycleInterludeSec * 1000 * jitter);
-                    } else {
-                        g_nextCycleTick = tick + 10000;
-                    }
-                } else {
-                    renderer.Config() = g_cycleBaseCfg;
-                    renderer.ReinitWanderers();
-                    g_inInterlude = false;
-                    g_nextCycleTick = tick + (ULONGLONG)(g_cycleBaseSec * 1000 * jitter);
-                }
-            }
-        } else if (g_inInterlude) {
-            // cycling switched off mid-interlude: restore the base look
-            renderer.Config() = g_cycleBaseCfg;
-            renderer.ReinitWanderers();
-            g_inInterlude = false;
-        }
-
         QueryPerformanceCounter(&now);
         float dt = (float)((double)(now.QuadPart - prev.QuadPart) / (double)freq.QuadPart);
+
+        // Mood conductor: dwell/shift/emit/return transitions between
+        // moods\*.ini recipes (replaces the old instant-swap interludes)
+        UpdateMoods(renderer, dt);
 
         // FPS cap from settings (Present is also vsynced)
         float fpsLim = g_fpsOverride > 0.0f ? g_fpsOverride : renderer.Config().fpsLimit;

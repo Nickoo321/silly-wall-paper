@@ -23,6 +23,7 @@ struct MoodSettings {
 extern MoodSettings g_moodSettings;
 
 void InitMoods();                              // scan moods dir, read [moods], built-ins
+void MoodsApplyBase(FluidConfig& cfg);         // boot: overlay explicitly-chosen base mood
 void UpdateMoods(FluidRenderer& r, float dt);  // per frame from the main loop
 void MoodsSetEnabled(bool on);                 // persists to ini + coverage override
 void MoodsNext(FluidRenderer& r);              // manual "next mood now"
@@ -30,6 +31,7 @@ void MoodsForceMood(FluidRenderer& r, int index);
 int  MoodsCurrentIndex();
 int  MoodsNextIndex();                     // transition target while switching, else -1
 const std::vector<std::wstring>& MoodsNames();
+void MoodsAdoptPath(FluidRenderer& r, const std::wstring& path);  // scene-apply sync
 
 // One managed recipe folder (%APPDATA%\FluidWallpaper\moods) — shared by the
 // conductor, the Looks window, the tray menu, and the settings mood editor.

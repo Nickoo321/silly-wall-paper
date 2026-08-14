@@ -119,6 +119,8 @@ public:
     void Init(HWND hwnd, int width, int height, const FluidConfig& cfg);
     void Frame(float dtSec, float sdrScale, bool hdrActive, const FrameInput& input);
     void ReassertColorSpace();
+    // Full GPU teardown (swapchain, all textures, heaps, PSOs, device): frees
+    // all RAM/VRAM. Idempotent, and Init() may be called again afterwards.
     void Shutdown();
     // live tray-menu controls (peakNits already resolved: actual nits, 0 = off)
     void SetHdrOptions(float peakNits, int gamutMode) {

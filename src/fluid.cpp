@@ -576,7 +576,7 @@ void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g
     };
 
     // velocity: add impulse, never capped
-    cb.colorR = dx; cb.colorG = dy; cb.colorB = 0.0f;
+    cb.colorR = dx * m_cfg.flowSpeed; cb.colorG = dy * m_cfg.flowSpeed; cb.colorB = 0.0f;
     cb.cap = 1000000.0f;
     run(m_psoSplatVel.Get(), m_velocity.read, m_velocity.write);
     m_velocity.Swap();
@@ -1111,9 +1111,80 @@ void FluidRenderer::WaitForGpuIdle() {
 }
 
 void FluidRenderer::Shutdown() {
+    if (!m_device) return;   // never initialized, or already shut down
     WaitForGpuIdle();
+
+    // Release EVERYTHING Init/CreateDevice/CreateSimResources (and the lazy
+    // mirror/analyzer paths) created, so all RAM/VRAM is actually handed back
+    // and a later Init() starts from a clean slate. Used both at process exit
+    // and by the fullscreen-pause suspend in main.cpp.
+
+    // second-monitor mirror (its RTVs live in m_rtvHeap)
+    for (UINT i = 0; i < kFrames; i++) m_mirrorBuffers[i].Reset();
+    m_mirrorChain.Reset();
+    m_mirrorBroken = false;
+
+    // HDR analyzer
+    m_anaTex.Reset();
+    m_anaReadback.Reset();
+    m_anaPending = false;
+    m_anaState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+    // stats + coverage readbacks
+    m_readback.Reset();
+    m_readbackPending = false;
+    m_covReadback.Reset();
+    m_covPending = false;
+
+    // sim textures
+    auto freeTex = [](Tex& t) {
+        t.res.Reset();
+        t.srv = {};
+        t.uav = {};
+        t.state = D3D12_RESOURCE_STATE_COMMON;
+    };
+    freeTex(m_velocity.a);  freeTex(m_velocity.b);
+    freeTex(m_dye.a);       freeTex(m_dye.b);
+    freeTex(m_pressure.a);  freeTex(m_pressure.b);
+    freeTex(m_divergence);  freeTex(m_curl);
+    freeTex(m_coverage);
+
+    // root signatures + PSOs (shader blobs are recompiled from embedded source
+    // in CreateDevice — nothing static is cached, so re-init is idempotent)
+    m_psoClearV.Reset(); m_psoClear4.Reset(); m_psoClear1.Reset();
+    m_psoCurl.Reset(); m_psoVorticity.Reset(); m_psoDivergence.Reset();
+    m_psoClearPressure.Reset(); m_psoPressure.Reset(); m_psoGradSub.Reset();
+    m_psoAdvectVel.Reset(); m_psoAdvectDye.Reset();
+    m_psoSplatVel.Reset(); m_psoSplatDye.Reset();
+    m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
+    m_psoDisplay.Reset(); m_psoGradient.Reset();
+    m_computeRS.Reset();
+    m_graphicsRS.Reset();
+
+    // descriptor heaps
+    m_srvHeap.Reset();
+    m_rtvHeap.Reset();
+
+    // swapchain, back buffers, command infrastructure, fence
+    for (UINT i = 0; i < kFrames; i++) {
+        m_backBuffers[i].Reset();
+        m_allocators[i].Reset();
+        m_fenceValues[i] = 0;
+    }
+    m_swapChain.Reset();
+    m_cmd.Reset();
+    m_queue.Reset();
     if (m_fenceEvent) CloseHandle(m_fenceEvent);
     m_fenceEvent = nullptr;
+    m_fence.Reset();
+    m_device.Reset();
+    m_factory.Reset();
+
+    // a following Init() must behave exactly like the first one
+    m_frameIndex = 0;
+    m_nextFence = 1;
+    m_firstFrame = true;      // re-clear sim textures + startup splat burst
+    m_presentBroken = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,6 +1235,7 @@ void FluidRenderer::PickSplatColor(float hueOffset, float out[3]) {
 // made a fresh wallpaper window; rebuild just the swapchain onto it — device,
 // sim textures, and the fluid state all survive.
 void FluidRenderer::Reattach(HWND hwnd) {
+    if (!m_device) return;   // suspended: the resume does a full Init instead
     DisableMirror();   // its window died with the old WorkerW; shell re-enables
     WaitForGpuIdle();
     for (UINT i = 0; i < kFrames; i++) {
@@ -1203,6 +1275,7 @@ void FluidRenderer::Reattach(HWND hwnd) {
 void FluidRenderer::SetResolutions(int simRes, int dyeRes) {
     m_cfg.simRes = simRes;
     m_cfg.dyeRes = dyeRes;
+    if (!m_device) return;   // suspended: takes effect at the resume Init
     WaitForGpuIdle();
     m_covPending = false;
     m_readbackPending = false;

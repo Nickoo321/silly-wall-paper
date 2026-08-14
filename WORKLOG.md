@@ -305,3 +305,127 @@ peak_nits wiring.
 - Repo IS a git repo — all work is uncommitted local changes; nothing
   committed by us. backup-pre-rework-2026-07-24/ also still intact.
 - New PID 7004.
+
+## 2026-07-25 (late evening) — reframe: moods as DIRECTOR + Journey mode
+
+**User reframe (important):** moods were never meant as static themed
+scenes. The desired system is a color DIRECTOR: keep WE's organic hue
+journey but curate the trajectory — reliably good families, ugly zones
+(e.g. jarring greens vs violet) never emitted. The journey is the feature;
+the dwell must hold one coherent family at a time; transitions between
+families are the show. Also: dynamic black levels — density is a second
+trajectory axis (bright dense phases vs deliberate dark intermissions with
+emission off, then the reveal). Meta-directive: don't implement literal
+suggestions; consider the desired outcome, try, verify direction.
+
+**Journey mode (src/journey.h/.cpp, in CMake):** journeys\*.txt legs:
+`hueCenter hueRange darkFloor dwellSec emit [blendSec] [glideSec]`.
+A mood opts in with [journey] file=<Name> in its ini. Legs: GLIDE_TO_MID
+(glideSec) -> BLEND_HOLD (blendSec, both families marbled = the "stoner
+look" the user wants time in) -> GLIDE -> DWELL. emit=0 = dark
+intermission (wanderers/idle off, field decays). After N loops (ini
+[journey] loops=2) normal mood dwell resumes. Coherence: CommandHueShift
+held all journey (never released mid-journey); WheelHue counter-rotation
+keeps new dye in-family; scheduler auto-suppressed in narrow bands.
+Ships: Journey Aurora (adjacent-hue arc) + Journey Stoner (high-contrast
+families, 12s glides, 20s blend holds). Mood label shows leg i/n + "blend".
+Mood dirs: 20 mood inis, 2 journey files. PID 36432.
+
+**Evaluation criteria agreed with user:** does the field hold ONE coherent
+family per leg; are blends the enjoyable part; any ugly zone ever; do dark
+intermissions feel intentional. All journeys/moods still pending user
+sign-off (hard rule) + HDR on/off check.
+
+## 2026-07-25 (night) — journey v2: shiftDeg + settings redesign + adopt fix
+
+**User's color-choreography model:** resultant color = emitted hue + global
+field shift, managed per mood. Example: emit purple, shift field -35 (old
+purple reads blue), emit blue, shift +35 (old blue reads purple) — two-color
+harmonies with in-family emission only; 3 colors drift richer. WE also has
+continuous hue movement as a baseline feature.
+
+**Journey v2:** 8th leg field shiftDeg (signed, relative). Present && !=0 ->
+GLIDE applies CommandHueShift(held+shiftDeg, glideSec); band is
+emission-only (WheelHue counter-rotation lands it — no fluid.cpp change).
+==0 -> band change only. Absent -> v1 glide-to-center. Blend midpoint =
+held+shiftDeg/2. Held angle accumulates unwrapped; v1 legs after shift legs
+target the nearest hueCenter-equivalent (no snap). Ships Journey Duet
+(blue/purple duet) alongside Aurora + Stoner. 21 mood inis, 3 journeys.
+
+**Adopt fix:** scene-apply (Looks window / tray) now syncs the conductor:
+MoodsAdoptPath sets s_current, resets dwell, JourneyAttach — fixes stale
+label + journeys never running when entering via scene-apply.
+
+**Settings window redesigned (agent):** paged nav (17 categories left,
+page content right), resizable 760x640 (min 640x480), vscroll panels,
+bottom utility area always visible; all features preserved (tooltips,
+markers, mood bar, auto-rebuild keeps page). Tray Moods submenu shows
+skipped moods grayed (owner-draw, still clickable for forcing).
+
+**Disabled moods:** already a feature = "In cycle" checkbox (skip-list).
+
+## 2026-07-26 (user in Dota) — away-work batch 2
+
+- **Journey verified empirically**: spaced screenshots show the dark
+  intermission -> magenta reveal on schedule. Director confirmed working.
+- **User steering captured**: "dyes bordering orange are amazing" (hue
+  ~5-15 = Ember/Storm zone); Stoner reworked gold-forward (45 gold -> pink
+  -> green -> orange-red -> dark -> violet, Stoner.v1.bak kept); Journey
+  Magenta created to preserve the approved magenta look.
+- **hue_linger=0.30** set in all banded moods (Neon exempt, full wheel).
+- **Per-mood peak_nits wired**: mood ini [hdr] peak_nits overrides during
+  the dwell; absent -> restores settings.ini value. Applies on transition
+  finish, scene-adoption, startup. Session-only.
+- **Mood color pass BLOCKED**: Dota covers + auto-pauses the wallpaper.
+  Resume when user is back (QUIZ.md section 2).
+- **QUIZ.md written**: full evaluation protocol (journeys, static moods,
+  texture sanity, housekeeping, HDR on+off).
+- **Bench restored**: settings.ini = Neon backup + [moods]
+  base_mood=Journey Stoner, transition 13s, jitter 0.10, cycling off.
+- **Open for user**: Mood 1-6 auto-files (from the New button) keep or
+  delete. Dota-behind capture: CopyFromScreen sees only Dota + wallpaper
+  auto-pauses; PrintWindow experiment still untried (low odds).
+- awk-based mood->settings merge pattern (no python on this box).
+
+## 2026-07-26 (quiz round, part 1) — boot-apply fix + Stoner v3
+
+- Quiz start: Stoner v2 read as "random colors, ununified" (user). Diagnosis:
+  legs zigzagged the wheel (45->300->120->20) = unrelated families; fixed v3
+  = MONOTONIC climb (45->120->240->dark->300->20) so families travel, plus
+  post_saturation 0.70 in the stub (tonal unity, their pastel reference).
+- **MoodsApplyBase** (main.cpp/moods.cpp): at boot, if base_mood was
+  explicitly persisted (scene-apply or manual pick), the base mood's recipe
+  overlays settings.ini. Absent key = user's own settings, never stomped.
+  Fixes: journey/static mood stubs never applied at startup (bench texture
+  leaked, e.g. Neon 1.70 sat under a pastel stub).
+- Mood color pass launched (8 flagships, base_mood flip + 75s develop + sc,
+  no bench clobbering thanks to boot-apply). Results to be reviewed below.
+- Screenshots during games: captured The Finals / Dota instead of the
+  wallpaper twice — wallpaper auto-pauses on fullscreen apps. User told to
+  ping when back at desktop.
+
+## 2026-07-26 — renderer suspend in-game (free RAM)
+
+- When pause-on-fullscreen/maximized holds >20s: renderer shuts down fully
+  (swapchain, all sim/dye/mirror/analyzer textures, heaps, PSOs, queue,
+  device) = RAM+VRAM freed for games. Shutdown() previously released
+  NOTHING (relied on process exit) — rewritten idempotent + re-initable.
+- Resume on game exit: full re-Init with the suspend-time config snapshot,
+  HDR options re-resolved, colorspace reasserted, coverage restored.
+  Manual pause never suspends. Explorer-restart + mirror lifecycle are
+  suspend-aware. Verified live against the user's actual Dota 2 session
+  (the 20s trigger fired, process healthy) + a --test-suspend hook run.
+- Caveat: settings edits made while suspended take effect next launch
+  (persisted to ini, just not live-applied to the snapshot).
+- Mood color pass was ended early by the user; base_mood=Journey Stoner.
+
+## 2026-07-26 (late) — settings UI overlap fixed (agent-10)
+
+- "Text bunching over itself": three real bugs — mood bar font/baseline
+  collision ("MoodJourney Stoner" jammed), journey status text clipped in
+  too-small static, and resize ghosting (missing CS_HREDRAW/CS_VREDRAW +
+  unbatched SetWindowPos). All fixed in settings.cpp; drag-torture tested
+  clean at default/min/mid sizes. PID 11540.
+- User asked for PC shutdown after this entry. Pending on return: QUIZ.md
+  evaluation (journeys + static moods + HDR on/off). Everything else is in
+  git as uncommitted changes; app autostarts on boot.

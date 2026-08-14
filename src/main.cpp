@@ -8,6 +8,7 @@
 //   --simres N         override simulation resolution (default 256)
 //   --dyeres N         override dye resolution (default 1024)
 //   --force-render     ignore fullscreen pause (automated testing)
+//   --test-suspend     force one renderer suspend ~3 s in, resume ~8 s (test)
 
 #include <windows.h>
 #include <shellapi.h>
@@ -47,6 +48,7 @@ float           g_hdrPeakNits = -1.0f;        // -1 = panel max (auto), 0 = off,
 int             g_gamutMode = 2;              // 0 sRGB, 1 P3, 2 BT.2020
 FluidRenderer*  g_renderer = nullptr;
 static bool     g_forceRender = false;
+static bool     g_testSuspend = false;   // --test-suspend: scripted suspend/resume cycle
 static float    g_fpsOverride = 0.0f;   // --fps test flag; 0 = use settings
 float           g_currentFps = 0.0f;    // smoothed achieved framerate
 
@@ -116,6 +118,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.maxBrightness       = getF(L"sim", L"max_brightness", cfg.maxBrightness);
     cfg.curl                = getF(L"sim", L"vorticity", cfg.curl);
     cfg.baroclinic          = getF(L"sim", L"baroclinic", cfg.baroclinic);
+    cfg.flowSpeed           = getF(L"sim", L"flow_speed", cfg.flowSpeed);
     cfg.splatRadius         = getF(L"sim", L"splat_radius", cfg.splatRadius);
     cfg.shading             = getB(L"sim", L"shading", cfg.shading);
     cfg.simRes              = getI(L"sim", L"sim_res", cfg.simRes);
@@ -433,6 +436,9 @@ static NOTIFYICONDATAW g_nid = {};
 
 // presets (implementations further down; the menu needs them declared)
 static std::vector<std::wstring> g_presetPaths;
+// backing store for owner-drawn (skipped) mood menu item text — the pointers
+// handed to AppendMenuW must stay valid for the menu's lifetime
+static std::vector<std::wstring> g_moodMenuLabels;
 static void GetPresetsDir(wchar_t out[MAX_PATH]);
 static void ApplyPreset(const std::wstring& path);
 static void SaveCurrentAsPreset();
@@ -510,9 +516,20 @@ static void ShowTrayMenuBody(HWND hwnd, HMENU presets) {
     {
         const auto& names = MoodsNames();
         int cur = MoodsCurrentIndex();
-        for (int i = 0; i < (int)names.size() && i < 100; i++)
-            AppendMenuW(moods, MF_STRING | (i == cur ? MF_CHECKED : 0),
-                        CMD_MOOD_BASE + i, names[i].c_str());
+        // skipped moods are owner-drawn with gray text: looks like MF_GRAYED
+        // but stays clickable, so forcing a skipped mood keeps working
+        g_moodMenuLabels.clear();
+        g_moodMenuLabels.reserve(names.size() < 100 ? names.size() : 100);
+        for (int i = 0; i < (int)names.size() && i < 100; i++) {
+            if (MoodsIsSkipped(i)) {
+                g_moodMenuLabels.push_back(names[i]);
+                AppendMenuW(moods, MF_OWNERDRAW | (i == cur ? MF_CHECKED : 0),
+                            CMD_MOOD_BASE + i, g_moodMenuLabels.back().c_str());
+            } else {
+                AppendMenuW(moods, MF_STRING | (i == cur ? MF_CHECKED : 0),
+                            CMD_MOOD_BASE + i, names[i].c_str());
+            }
+        }
         if (names.empty())
             AppendMenuW(moods, MF_STRING | MF_GRAYED, 0, L"(no moods found)");
     }
@@ -534,6 +551,17 @@ static void ShowTrayMenuBody(HWND hwnd, HMENU presets) {
 
 static UINT g_taskbarCreatedMsg = 0;
 
+// menu font for the owner-drawn tray items, cached for the process lifetime
+static HFONT TrayMenuFont() {
+    static HFONT s_menuFont = nullptr;
+    if (!s_menuFont) {
+        NONCLIENTMETRICSW ncm = { sizeof(ncm) };
+        if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0))
+            s_menuFont = CreateFontIndirectW(&ncm.lfMenuFont);
+    }
+    return s_menuFont;
+}
+
 static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // Explorer restarted: the tray was rebuilt, our icon is gone — re-add it.
     if (g_taskbarCreatedMsg && msg == g_taskbarCreatedMsg) {
@@ -546,6 +574,55 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             LOWORD(lp) == WM_CONTEXTMENU)
             ShowTrayMenu(hwnd);
         return 0;
+    // owner-drawn (skipped) mood items: gray text, but still clickable
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT* mi = (MEASUREITEMSTRUCT*)lp;
+        if (mi->CtlType == ODT_MENU && mi->itemData) {
+            const wchar_t* text = (const wchar_t*)mi->itemData;
+            HDC dc = GetDC(hwnd);
+            HFONT oldFont = nullptr;
+            if (HFONT f = TrayMenuFont()) oldFont = (HFONT)SelectObject(dc, f);
+            SIZE sz = {};
+            GetTextExtentPoint32W(dc, text, lstrlenW(text), &sz);
+            if (oldFont) SelectObject(dc, oldFont);
+            ReleaseDC(hwnd, dc);
+            mi->itemWidth = sz.cx + 34;   // check gutter + padding
+            mi->itemHeight = sz.cy + 8 > 22 ? sz.cy + 8 : 22;
+            return TRUE;
+        }
+        break;
+    }
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* di = (DRAWITEMSTRUCT*)lp;
+        if (di->CtlType == ODT_MENU && di->itemData) {
+            const wchar_t* text = (const wchar_t*)di->itemData;
+            const bool sel = (di->itemState & ODS_SELECTED) != 0;
+            FillRect(di->hDC, &di->rcItem,
+                     GetSysColorBrush(sel ? COLOR_MENUHILIGHT : COLOR_MENU));
+            SetBkMode(di->hDC, TRANSPARENT);
+            const COLORREF fg = GetSysColor(sel ? COLOR_HIGHLIGHTTEXT : COLOR_GRAYTEXT);
+            SetTextColor(di->hDC, fg);
+            HFONT oldFont = nullptr;
+            if (HFONT f = TrayMenuFont()) oldFont = (HFONT)SelectObject(di->hDC, f);
+            RECT tr = di->rcItem;
+            tr.left += 26;   // leave the check gutter empty
+            if (di->itemState & ODS_CHECKED) {
+                // owner-draw items get no stock checkmark — draw one
+                HPEN pen = CreatePen(PS_SOLID, 1, fg);
+                HPEN oldPen = (HPEN)SelectObject(di->hDC, pen);
+                const int cx = di->rcItem.left + 12, cy = (tr.top + tr.bottom) / 2;
+                MoveToEx(di->hDC, cx - 5, cy, nullptr);
+                LineTo(di->hDC, cx - 1, cy + 4);
+                LineTo(di->hDC, cx + 6, cy - 5);
+                SelectObject(di->hDC, oldPen);
+                DeleteObject(pen);
+            }
+            DrawTextW(di->hDC, text, -1, &tr, DT_SINGLELINE | DT_VCENTER);
+            if (oldFont) SelectObject(di->hDC, oldFont);
+            return TRUE;
+        }
+        break;
+    }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case CMD_PAUSE:
@@ -818,6 +895,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     putF(L"sim", L"max_brightness", c.maxBrightness, 2);
     putF(L"sim", L"vorticity", c.curl, 1);
     putF(L"sim", L"baroclinic", c.baroclinic, 1);
+    putF(L"sim", L"flow_speed", c.flowSpeed, 2);
     putF(L"sim", L"splat_radius", c.splatRadius, 3);
     putI(L"sim", L"shading", c.shading);
     if (includeShell) {
@@ -918,6 +996,7 @@ static void ApplyPreset(const std::wstring& path) {
 
     SaveFullConfig(fresh);
     UpdateTrayTip();
+    MoodsAdoptPath(*g_renderer, path);   // keep conductor label/journey in sync
 
     const wchar_t* name = wcsrchr(path.c_str(), L'\\');
     ShowTrayBalloon(L"Preset applied", name ? name + 1 : path.c_str());
@@ -987,6 +1066,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 cfg.stats = true;
             } else if (wcscmp(argv[i], L"--force-render") == 0) {
                 g_forceRender = true;
+            } else if (wcscmp(argv[i], L"--test-suspend") == 0) {
+                g_testSuspend = true;
             } else if (wcscmp(argv[i], L"--simres") == 0 && i + 1 < argc) {
                 cfg.simRes = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--dyeres") == 0 && i + 1 < argc) {
@@ -1015,6 +1096,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     LoadFullConfig(cfg);
     EnsureBuiltinPresets();
     InitMoods();
+    MoodsApplyBase(cfg);   // resume the explicitly-chosen mood over settings
 
     printf("FluidWallpaper - fluid simulation behind desktop icons\n");
 
@@ -1054,6 +1136,47 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&prev);
 
+    // Fullscreen-pause suspend: after 20 s of continuous fullscreen/maximized
+    // pause, tear the renderer down completely so the foreground app (game)
+    // gets all RAM/VRAM back; rebuild transparently when the pause clears.
+    // Manual pause alone never suspends — its resume should stay instant.
+    static const ULONGLONG kSuspendAfterMs = 20000;
+    static ULONGLONG fsPausedSince = 0;   // 0 = not fs-paused right now
+    static bool g_suspended = false;      // renderer fully torn down
+    static bool fsSuspended = false;      // suspension came from the fs trigger
+    static FluidConfig savedCfg;          // live config snapshot for the resume
+    const ULONGLONG bootTick = GetTickCount64();   // --test-suspend clock
+
+    auto suspendRenderer = [&](const char* why) {
+        savedCfg = renderer.Config();
+        renderer.Shutdown();
+        g_suspended = true;
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        printf("[%02d:%02d:%02d.%03d] renderer suspended (%s)\n",
+               st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, why);
+    };
+    auto resumeRenderer = [&]() {
+        // same Init call as startup, then the startup state restore: resolved
+        // HDR options (like the per-frame call site does), coverage override,
+        // scRGB color space.
+        renderer.Init(hwnd, width, height, savedCfg);
+        float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;
+        renderer.SetHdrOptions(peak, g_gamutMode);
+        renderer.SetCoverageWanted(g_moodSettings.enabled);
+        renderer.ReassertColorSpace();
+        g_suspended = false;
+        // Mood/journey state lives in the config, so it survives via savedCfg;
+        // purely time-based phases (hue wheel position, transition progress)
+        // jump across the suspend — accepted, serializing conductor state
+        // isn't worth it for a wallpaper that was invisible anyway.
+        QueryPerformanceCounter(&prev);   // don't integrate the suspended gap
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        printf("[%02d:%02d:%02d.%03d] renderer resumed\n",
+               st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+    };
+
     ULONGLONG lastFsCheck = 0, lastHdrCheck = 0;
     bool wasPaused = false;
 
@@ -1074,6 +1197,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             else g_wallpaperLost = true;
         }
         if (g_wallpaperLost) {
+            fsPausedSince = 0;   // don't bank suspend time across a shell restart
             static ULONGLONG lastTry = 0;
             ULONGLONG now2 = GetTickCount64();
             if (now2 - lastTry >= 1000) {
@@ -1082,7 +1206,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 if (newHost) {
                     hwnd = CreateWallpaperWindow(newHost, width, height);
                     g_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-                    renderer.Reattach(hwnd);
+                    // suspended: skip the swapchain-only reattach — the resume
+                    // does a full Init() onto this new window instead
+                    if (!g_suspended) renderer.Reattach(hwnd);
                     g_wallpaperLost = false;
                     QueryPerformanceCounter(&prev);
                 }
@@ -1097,7 +1223,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         {
             static HWND mirrorWnd = nullptr;
             static ULONGLONG lastMirrorTry = 0;
-            bool want = renderer.Config().mirrorSecond && g_monitor2 != nullptr;
+            // suspended: the mirror chain went down with the device — keep
+            // wanting it off here; the resume Init leaves MirrorActive()
+            // false, so it re-enables on the next iteration
+            bool want = !g_suspended &&
+                        renderer.Config().mirrorSecond && g_monitor2 != nullptr;
 
             if (renderer.MirrorActive() && renderer.MirrorBroken()) {
                 renderer.DisableMirror();
@@ -1175,7 +1305,38 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             }
         }
 
-        if (paused) {
+        // Suspend/resume the renderer around long fullscreen pauses. Only
+        // g_fsPaused drives this — manual pause alone never suspends.
+        if (!g_suspended) {
+            if (g_fsPaused && !g_wallpaperLost) {
+                if (fsPausedSince == 0) fsPausedSince = tick;
+                if (tick - fsPausedSince >= kSuspendAfterMs) {
+                    suspendRenderer("fullscreen app, freeing GPU/RAM");
+                    fsSuspended = true;
+                }
+            } else {
+                fsPausedSince = 0;
+            }
+        } else if (fsSuspended && !g_fsPaused) {
+            // fullscreen app exited: rebuild the renderer like startup did
+            fsSuspended = false;
+            fsPausedSince = 0;
+            resumeRenderer();
+        }
+
+        // hidden test hook: force one suspend ~3 s after start, resume ~8 s
+        if (g_testSuspend) {
+            const double el = (double)(tick - bootTick) / 1000.0;
+            if (!g_suspended && el >= 3.0 && el < 8.0) {
+                printf("[test-suspend] forcing suspend at %.1f s\n", el);
+                suspendRenderer("test hook, freeing GPU/RAM");
+            } else if (g_suspended && !fsSuspended && el >= 8.0) {
+                printf("[test-suspend] forcing resume at %.1f s\n", el);
+                resumeRenderer();
+            }
+        }
+
+        if (paused || g_suspended) {
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 200, QS_ALLINPUT);
             QueryPerformanceCounter(&prev);   // don't integrate the paused gap
             continue;

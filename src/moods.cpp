@@ -4,6 +4,7 @@
 // fpsLimit/mirrorSecond are always stripped: moods never touch them.
 
 #include "moods.h"
+#include "journey.h"
 #include "app_state.h"
 #include <algorithm>
 #include <cmath>
@@ -50,6 +51,7 @@ void LerpLook(FluidConfig& o, const FluidConfig& a, const FluidConfig& b, float 
     o.satRestore          = L(a.satRestore,          b.satRestore,          t);
     o.curl                = L(a.curl,                b.curl,                t);
     o.baroclinic          = L(a.baroclinic,          b.baroclinic,          t);
+    o.flowSpeed           = L(a.flowSpeed,           b.flowSpeed,           t);
     o.splatRadius         = L(a.splatRadius,         b.splatRadius,         t);
     o.colorCyclePeriod    = L(a.colorCyclePeriod,    b.colorCyclePeriod,    t);
     o.idleInterval        = L(a.idleInterval,        b.idleInterval,        t);
@@ -113,6 +115,12 @@ void FlipDiscrete(FluidRenderer& r) {
 }
 
 void BeginTransition(FluidRenderer& r, int next) {
+    // leaving a journey mood: drop the journey and hand its held hue command
+    // back — the bridge below re-commands the angle as usual
+    if (JourneyActive()) {
+        JourneyDetach();
+        r.ReleaseHueShift(false);
+    }
     s_next = next;
     r.SetCoverageWanted(true);   // the bridge angle needs a fresh field hue
     s_from = r.Config();
@@ -143,6 +151,20 @@ void BeginTransition(FluidRenderer& r, int next) {
            fmodf(cmd - curAng + 720.0f, 360.0f));
 }
 
+// Per-mood HDR peak: if the mood ini carries [hdr] peak_nits it overrides the
+// shell value for the dwell; otherwise restore the user's settings.ini value.
+// Session-only (matches ApplyPreset semantics — never written back here).
+void ApplyMoodPeakNits(const wchar_t* moodPath) {
+    wchar_t buf[64] = {};
+    GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, moodPath);
+    if (buf[0]) {
+        g_hdrPeakNits = (float)_wtof(buf);
+    } else {
+        GetPrivateProfileStringW(L"hdr", L"peak_nits", L"-1", buf, 64, g_iniPath);
+        g_hdrPeakNits = (float)_wtof(buf);
+    }
+}
+
 void FinishTransition(FluidRenderer& r) {
     r.Config() = s_target;
     s_current = s_next;
@@ -155,6 +177,9 @@ void FinishTransition(FluidRenderer& r) {
     printf("[moods] now dwelling in %ls (%.0f s)\n",
            s_names[s_current].c_str(),
            s_dwellTarget);
+    // journey opt-in: the new mood's [journey] file= decides (empty -> detach)
+    JourneyAttach(s_moods[s_current].path.c_str());
+    ApplyMoodPeakNits(s_moods[s_current].path.c_str());
 }
 
 void MoodsDir(wchar_t out[MAX_PATH]) {
@@ -313,6 +338,49 @@ const char* kCloudsIni =
     "post_brightness=1.10\r\npost_hue=10\r\nhue_center=35\r\nhue_range=45\r\n"
     "shadow_floor=0.100\r\nshadow_knee=0.15\r\ncurve_enabled=0\r\n";
 
+const char* kJourneyAuroraIni =
+    "; Journey Aurora mood - Storm physics chassis, neutral color, journey-driven hue legs.\r\n"
+    "; The [journey] section opts into journeys\\Aurora.txt: while dwelling here the\r\n"
+    "; field travels that file's color-family legs instead of holding one static look.\r\n"
+    "[sim]\r\ndensity_diffusion=0.9995\r\ndecay_threshold=0.300\r\ndecay_fast=1.000\r\n"
+    "velocity_diffusion=0.9996\r\npressure_diffusion=0.610\r\npressure_iterations=10\r\n"
+    "saturation_restore=0.770\r\nmax_brightness=1.25\r\nvorticity=20.0\r\nbaroclinic=60\r\n"
+    "splat_radius=0.245\r\ndye_diffusion=0.205\r\n"
+    "[hdr]\r\nknee=0.90\r\nsaturation=1.00\r\nbrightness=1.00\r\ncontrast=1.05\r\ncompensation=1\r\n"
+    "[behavior]\r\ncolor_cycle_period=45\r\nwanderers=1\r\nwanderer_count=2\r\nwanderer_mode=0\r\n"
+    "wanderer_speed=250\r\nwanderer_brightness=0.30\r\nwanderer_scale=0.10\r\nwanderer_resume_delay=4.5\r\n"
+    "auto_pause=1\r\ndark_floor=45\r\ndark_level=0.100\r\nsurv_dark_floor=8\r\ncontrast_req=30\r\n"
+    "dart_enabled=1\r\ndart_interval=7\r\ndart_speed=550\r\n"
+    "hueshift_enabled=0\r\n"
+    "idle_splats=1\r\nidle_interval=10.0\r\nidle_amount=2\r\nidle_brightness=0.5\r\n"
+    "hold_to_splat=1\r\nsplat_on_click=1\r\nshow_mouse=1\r\n"
+    "[color]\r\ncolorful=1\r\nmore_colors=0\r\npost_saturation=0.95\r\npost_contrast=1.10\r\n"
+    "post_brightness=1.00\r\npost_hue=0\r\nhue_center=275\r\nhue_range=30\r\n"
+    "shadow_floor=0.100\r\nshadow_knee=0.15\r\ncurve_enabled=0\r\n"
+    "[journey]\r\nfile=Aurora\r\n";
+
+const char* kJourneyDuetIni =
+    "; Journey Duet mood - Storm physics chassis, neutral color, journey-driven hue legs.\r\n"
+    "; The [journey] section opts into journeys\\Duet.txt: blue/purple choreography where\r\n"
+    "; legs steer the emission band and the field rotation independently\r\n"
+    "; (journey v2 shift legs: resultant color = emitted hue + field shift).\r\n"
+    "[sim]\r\ndensity_diffusion=0.9995\r\ndecay_threshold=0.300\r\ndecay_fast=1.000\r\n"
+    "velocity_diffusion=0.9996\r\npressure_diffusion=0.610\r\npressure_iterations=10\r\n"
+    "saturation_restore=0.770\r\nmax_brightness=1.25\r\nvorticity=20.0\r\nbaroclinic=60\r\n"
+    "splat_radius=0.245\r\ndye_diffusion=0.205\r\n"
+    "[hdr]\r\nknee=0.90\r\nsaturation=1.00\r\nbrightness=1.00\r\ncontrast=1.05\r\ncompensation=1\r\n"
+    "[behavior]\r\ncolor_cycle_period=45\r\nwanderers=1\r\nwanderer_count=2\r\nwanderer_mode=0\r\n"
+    "wanderer_speed=250\r\nwanderer_brightness=0.30\r\nwanderer_scale=0.10\r\nwanderer_resume_delay=4.5\r\n"
+    "auto_pause=1\r\ndark_floor=45\r\ndark_level=0.100\r\nsurv_dark_floor=8\r\ncontrast_req=30\r\n"
+    "dart_enabled=1\r\ndart_interval=7\r\ndart_speed=550\r\n"
+    "hueshift_enabled=0\r\n"
+    "idle_splats=1\r\nidle_interval=10.0\r\nidle_amount=2\r\nidle_brightness=0.5\r\n"
+    "hold_to_splat=1\r\nsplat_on_click=1\r\nshow_mouse=1\r\n"
+    "[color]\r\ncolorful=1\r\nmore_colors=0\r\npost_saturation=0.95\r\npost_contrast=1.10\r\n"
+    "post_brightness=1.00\r\npost_hue=0\r\nhue_center=257\r\nhue_range=30\r\n"
+    "shadow_floor=0.100\r\nshadow_knee=0.15\r\ncurve_enabled=0\r\n"
+    "[journey]\r\nfile=Duet\r\n";
+
 void EnsureBuiltinMoods() {
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     MoodsDir(dir);
@@ -321,6 +389,10 @@ void EnsureBuiltinMoods() {
     WriteFileIfMissing(path, kNeonIni);
     swprintf_s(path, L"%s\\Clouds.ini", dir);
     WriteFileIfMissing(path, kCloudsIni);
+    swprintf_s(path, L"%s\\Journey Aurora.ini", dir);
+    WriteFileIfMissing(path, kJourneyAuroraIni);
+    swprintf_s(path, L"%s\\Journey Duet.ini", dir);
+    WriteFileIfMissing(path, kJourneyDuetIni);
 }
 
 void ScanMoods() {
@@ -347,6 +419,21 @@ void ScanMoods() {
 }
 
 } // namespace
+
+void MoodsApplyBase(FluidConfig& cfg) {
+    // Only when base_mood was explicitly persisted (scene-apply or manual
+    // pick) — an absent key means "the user's own settings", never stomp them.
+    if (s_moods.empty()) return;
+    wchar_t buf[64];
+    GetPrivateProfileStringW(L"moods", L"base_mood", L"", buf, 64, g_iniPath);
+    if (!buf[0]) return;
+    for (int i = 0; i < (int)s_moods.size(); i++) {
+        if (_wcsicmp(s_moods[i].name.c_str(), buf) != 0) continue;
+        LoadConfigFromFile(s_moods[i].path.c_str(), cfg);
+        printf("[moods] base mood %ls applied over settings\n", s_moods[i].name.c_str());
+        return;
+    }
+}
 
 void InitMoods() {
     EnsureBuiltinMoods();
@@ -379,12 +466,16 @@ void InitMoods() {
     s_current = 0;
     for (int i = 0; i < (int)s_moods.size(); i++)
         if (_wcsicmp(s_moods[i].name.c_str(), buf) == 0) { s_current = i; break; }
+    if (!s_moods.empty()) ApplyMoodPeakNits(s_moods[s_current].path.c_str());
     if (s_moods.empty()) s_current = -1;
     RefreshLockCache();   // the config half of the UI cache needs the renderer;
                           // the settings window builds it via MoodsRefreshUiCache
     float j = g_moodSettings.jitter;
     s_dwellTarget = g_moodSettings.dwellMinutes * 60.0f *
                     (1.0f - j + 2.0f * j * ((float)rand() / RAND_MAX));
+    // the app starts dwelling in the base mood directly (no transition), so
+    // a journey-enabled base mood attaches here instead of in FinishTransition
+    if (s_current >= 0) JourneyAttach(s_moods[s_current].path.c_str());
     printf("[moods] %zu mood(s), cycling %s, base: %ls\n", s_moods.size(),
            g_moodSettings.enabled ? "on" : "off",
            s_moods.empty() ? L"-" : s_moods[s_current].name.c_str());
@@ -395,6 +486,12 @@ void UpdateMoods(FluidRenderer& r, float dt) {
     if (s_current < 0) s_current = 0;
 
     if (s_phase == DWELL) {
+        // a running journey owns the dwell: legs glide/dwell INSTEAD of the
+        // countdown, and the mood never auto-transitions out while active
+        if (JourneyActive()) {
+            JourneyUpdate(r, dt);
+            return;
+        }
         if (!g_moodSettings.enabled || s_moods.size() < 2) return;
         s_dwellElapsed += dt;
         // composition-aware early switch: the field has mostly decayed back
@@ -461,6 +558,31 @@ void MoodsForceMood(FluidRenderer& r, int index) {
 int MoodsCurrentIndex() { return s_current; }
 int MoodsNextIndex() { return s_phase != DWELL ? s_next : -1; }
 const std::vector<std::wstring>& MoodsNames() { return s_names; }
+
+void MoodsAdoptPath(FluidRenderer& r, const std::wstring& path) {
+    // A mood file was applied outside the conductor (Looks window / tray).
+    // Sync the conductor's bookkeeping so labels, dwell, and journeys match.
+    for (int i = 0; i < (int)s_moods.size(); i++) {
+        if (_wcsicmp(s_moods[i].path.c_str(), path.c_str()) != 0) continue;
+        if (s_phase != DWELL) {   // land any in-flight transition first
+            r.Config() = s_target;
+            r.ReleaseHueShift(false);
+        }
+        s_current = i; s_next = -1; s_phase = DWELL;
+        s_dwellElapsed = 0.0f; s_darkSince = -1.0f;
+        float j = g_moodSettings.jitter;
+        s_dwellTarget = g_moodSettings.dwellMinutes * 60.0f *
+                        (1.0f - j + 2.0f * j * ((float)rand() / RAND_MAX));
+        WritePrivateProfileStringW(L"moods", L"base_mood", s_moods[i].name.c_str(), g_iniPath);
+        JourneyAttach(s_moods[i].path.c_str());   // self-detaches if no [journey]
+        ApplyMoodPeakNits(s_moods[i].path.c_str());
+        MoodsRefreshUiCache(r);                   // markers compare vs this mood now
+        printf("[moods] adopted %ls via apply\n", s_moods[i].name.c_str());
+        return;
+    }
+    JourneyDetach();   // applied something that's not a mood
+    MoodsRefreshUiCache(r);
+}
 
 // ---------------------------------------------------------------------------
 // Managed recipe folder + settings-window mood editor API

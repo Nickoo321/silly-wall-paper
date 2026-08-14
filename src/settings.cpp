@@ -1,6 +1,7 @@
-// Settings window: every wallpaper parameter, organized into titled sections
-// across four columns (RGB-suite style), dark themed. Every change applies
-// live and persists to settings.ini immediately.
+// Settings window: every wallpaper parameter, organized into category pages
+// (left nav column + paged content area), dark themed. Resizable; the mood
+// bar on top and the bottom utility rows stay visible at every size. Every
+// change applies live and persists to settings.ini immediately.
 
 #include <windows.h>
 #include <commctrl.h>
@@ -15,6 +16,7 @@
 #include <cmath>
 #include "app_state.h"
 #include "moods.h"
+#include "journey.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -37,8 +39,8 @@ struct SliderDef {
     const wchar_t* section;  // ini section
     const wchar_t* key;
     bool reinitWanderers;
-    const wchar_t* header;   // non-null: start a new titled group here
-    int col;                 // column for that new group (valid with header)
+    const wchar_t* header;   // non-null: start a new category page here
+    int col;                 // legacy 4-column layout field — unused
     const wchar_t* tip;      // hover tooltip
 };
 struct CheckDef {
@@ -63,7 +65,23 @@ static std::unordered_set<HWND> s_headers;    // accent-colored statics
 static HWND s_comboMode = nullptr, s_comboSim = nullptr, s_comboDye = nullptr;
 static HWND s_fpsLabel = nullptr, s_pauseBtn = nullptr, s_moodLabel = nullptr;
 static HWND s_moodName = nullptr, s_inCycle = nullptr;               // mood bar
+static std::wstring s_lastMoodName;   // flicker guard for the name static
 static HWND s_moodSave = nullptr, s_moodNew = nullptr, s_moodDel = nullptr;
+
+// page model: the defs' header strings become the category list, in order
+static std::vector<std::wstring> s_pages;
+static std::vector<int> s_sliderPage, s_checkPage;
+static std::vector<HWND> s_navBtns, s_pageHeads;
+static HWND s_navPanel = nullptr, s_pagePanel = nullptr;
+static int s_page = 0;   // survives window recreation (mood-change auto-rebuild)
+
+struct ScrollState { int pos = 0, content = 0, view = 0; };
+static ScrollState s_navScr, s_pageScr;
+
+// bottom utility rows: fixed x per control, row-based y anchored to the
+// bottom edge; stretch controls grow with the window width
+struct BottomCtl { HWND hwnd; int row, x, yOff, w, h; bool stretch; };
+static std::vector<BottomCtl> s_bottom;
 
 static const int IDC_CHECK_BASE = 300;
 static const int IDC_GAMUT_BASE = 400;
@@ -71,6 +89,7 @@ static const int IDC_WMODE      = 450;
 static const int IDC_SIMRES     = 460;
 static const int IDC_DYERES     = 461;
 static const int IDC_COLOR_BASE = 500;
+static const int IDC_NAV_BASE   = 700;
 static const int IDC_OPEN_ANALYZER = 260;
 static const int IDC_PAUSE_BTN  = 261;
 static const int IDC_EXIT_BTN   = 262;
@@ -83,6 +102,15 @@ static const int IDC_MOOD_NEW     = 268;
 static const int IDC_MOOD_DELETE  = 269;
 
 static const int kMoodBarH = 36;   // top strip: mood name + save/new/delete
+static const int kNavW = 168;
+static const int kNavBtnH = 21, kNavBtnStep = 23;
+static const int kMargin = 12;
+static const int kRowH = 48, kHeadH = 30, kCheckH = 25;
+static const int kRowSpace = 32, kBottomRows = 5, kLegendH = 22;
+static const int kBottomH = kBottomRows * kRowSpace + kLegendH;
+static const int kMinClientW = 640, kMinClientH = 480;
+static const DWORD kWndStyle = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX |
+                               WS_THICKFRAME | WS_MAXIMIZEBOX | WS_CLIPCHILDREN;
 
 static const int kSimResOptions[] = { 32, 64, 128, 256, 512 };
 static const int kDyeResOptions[] = { 256, 512, 1024, 2048, 4096 };
@@ -134,9 +162,9 @@ static void SetAutostart(bool on) {
 static void BuildDefs() {
     FluidConfig& c = g_renderer->Config();
     s_sliders = {
-        // ---- column 0 ----
         { L"Vorticity (swirl strength)",        0,     50,   0.5f,  1, &c.curl,               nullptr, L"sim", L"vorticity", false, L"Simulation", 0, L"Small-scale swirl. High = cauliflower billows, low = smooth streams" },
         { L"Form resistance (baroclinic)",      0,     200,  5,     0, &c.baroclinic,         nullptr, L"sim", L"baroclinic", false, nullptr, 0, L"Wakes bend around dye masses instead of cutting through. 0 = off" },
+        { L"Flow speed (all currents)",         0.2f,  2,    0.05f, 2, &c.flowSpeed,          nullptr, L"sim", L"flow_speed", false, nullptr, 0, L"Global current multiplier. Lower = slower evolution, same shapes" },
         { L"Splat radius",                      0.01f, 1,    0.005f,3, &c.splatRadius,        nullptr, L"sim", L"splat_radius", false, nullptr, 0, L"Size of emitted blobs" },
         { L"Density diffusion (dye linger)",    0.95f, 1,    0.0001f,4,&c.densityDissipation, nullptr, L"sim", L"density_diffusion", false, nullptr, 0, L"How long dye lingers. Higher = longer trails" },
         { L"Velocity diffusion",                0.95f, 1,    0.0001f,4,&c.velocityDissipation,nullptr, L"sim", L"velocity_diffusion", false, nullptr, 0, L"How long currents persist. Higher = smoother flow" },
@@ -148,7 +176,6 @@ static void BuildDefs() {
         { L"Color intensity cap",               0.3f,  4,    0.05f, 2, &c.maxBrightness,      nullptr, L"sim", L"max_brightness", false, nullptr, 0, L"Max dye brightness (hue-preserving clip)" },
         { L"Dye diffusion (smoke spread)",      0,     0.5f, 0.005f,3, &c.dyeDiffusion,       nullptr, L"sim", L"dye_diffusion", false, nullptr, 0, L"Blurs dye. 0 = sharp marbling, high = soft mush" },
         { L"FPS limit",                         30,    260,  1,     0, &c.fpsLimit,           nullptr, L"general", L"fps_limit", false, L"Performance", 0, L"Frame rate cap" },
-        // ---- column 1 ----
         { L"Count",                             1,     8,    1,     0, nullptr, &c.wandererCount,      L"behavior", L"wanderer_count", true, L"Wanderers", 1, L"Number of autonomous emitters" },
         { L"Speed (px/s)",                      50,    1200, 10,    0, &c.wandererSpeed,      nullptr, L"behavior", L"wanderer_speed", false, nullptr, 1, L"Emitter speed = current strength" },
         { L"Brightness",                        0.05f, 1,    0.01f, 2, &c.wandererBrightness, nullptr, L"behavior", L"wanderer_brightness", false, nullptr, 1, L"Paint per emitter per step" },
@@ -160,7 +187,6 @@ static void BuildDefs() {
         { L"Contrast required % (0 = off)",     0,     100,  1,     0, &c.contrastReq,        nullptr, L"behavior", L"contrast_req", false, nullptr, 1, L"Require a bright focal region, else emitters pause" },
         { L"Interval (s)",                      1,     30,   1,     0, &c.dartInterval,       nullptr, L"behavior", L"dart_interval", false, L"Separating dart", 1, L"Seconds between piercing darts" },
         { L"Speed (px/s)",                      500,   6000, 50,    0, &c.dartSpeed,          nullptr, L"behavior", L"dart_speed", false, nullptr, 1, L"Dart travel speed" },
-        // ---- column 2 ----
         { L"Peak brightness (nits, 0 = off)",   0,     1500, 5,     0, &g_hdrPeakNits,        nullptr, L"hdr", L"peak_nits", false, L"HDR output", 2, L"HDR hot-spot target. 0 = match SDR" },
         { L"Knee (boost starts at)",            0.1f,  1.3f, 0.02f, 2, &c.hdrKnee,            nullptr, L"hdr", L"knee", false, nullptr, 2, L"Dye level where HDR highlight boost begins" },
         { L"Saturation boost",                  1,     2,    0.01f, 2, &c.hdrSaturation,      nullptr, L"hdr", L"saturation", false, nullptr, 2, L"Extra punch while Windows HDR is on" },
@@ -173,7 +199,6 @@ static void BuildDefs() {
         { L"Dwell (min per mood)",              1,     30,   1,     0, &g_moodSettings.dwellMinutes,   nullptr, L"moods", L"dwell_minutes", false, L"Mood cycling", 2, L"Minutes in a mood before switching" },
         { L"Transition length (s)",             2,     60,   1,     0, &g_moodSettings.transitionSec,  nullptr, L"moods", L"transition_seconds", false, nullptr, 2, L"Seconds a mood change takes" },
         { L"Timing jitter (± fraction)",        0,     0.5f, 0.05f,2, &g_moodSettings.jitter,          nullptr, L"moods", L"jitter", false, nullptr, 2, L"Random +/- on dwell time so switches feel organic" },
-        // ---- column 3 ----
         { L"Cycle time (s per lap)",            2,     120,  1,     0, &c.colorCyclePeriod,   nullptr, L"behavior", L"color_cycle_period", false, L"Color wheel", 3, L"Seconds for emitted hue to sweep its band" },
         { L"Hue band center (deg)",             0,     360,  1,     0, &c.hueCenter,          nullptr, L"color", L"hue_center", false, nullptr, 3, L"Where on the color wheel emission lives (0=red 120=green 240=blue)" },
         { L"Hue band range (180 = full wheel)", 5,     180,  1,     0, &c.hueRange,           nullptr, L"color", L"hue_range", false, nullptr, 3, L"Half-width of the emission band. 180 = full wheel" },
@@ -188,7 +213,7 @@ static void BuildDefs() {
         { L"Burst brightness",                  0.2f,  3,    0.05f, 2, &c.idleBrightness,     nullptr, L"behavior", L"idle_brightness", false, nullptr, 3, L"Idle blob intensity (emitters paint at 0.15)" },
         { L"Hump center (input brightness)",    0.05f, 1,    0.01f, 2, &c.curveCenter,        nullptr, L"color", L"curve_center", false, L"Response curve (bright rims)", 3, L"Response curve shape: glowing rims when enabled" },
         { L"Hump width",                        0.02f, 0.5f, 0.01f, 2, &c.curveWidth,         nullptr, L"color", L"curve_width", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
-        { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,        nullptr, L"color", L"curve_height", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
+        { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,       nullptr, L"color", L"curve_height", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
         { L"Shadow floor (gray lift)",          0,     0.25f,0.005f,3, &c.shadowFloor,        nullptr, L"color", L"shadow_floor", false, L"Shadow floor (dark marbling)", 3, L"Lift near-black toward gray so dark marbling stays visible" },
         { L"Shadow knee (lift range)",          0.02f, 0.6f, 0.01f, 2, &c.shadowKnee,         nullptr, L"color", L"shadow_knee", false, nullptr, 3, L"Brightness range the lift fades over" },
     };
@@ -212,6 +237,26 @@ static void BuildDefs() {
         { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second", nullptr, 3, L"Also render the wallpaper on the second monitor" },
         { L"Start with Windows",                nullptr,             nullptr,     nullptr, nullptr, 3, nullptr },
     };
+
+    // page model: every header starts a new category page, in order
+    s_pages.clear();
+    s_sliderPage.clear();
+    s_checkPage.clear();
+    int cur = -1;
+    for (size_t i = 0; i < s_sliders.size(); i++) {
+        if (s_sliders[i].header) {
+            s_pages.push_back(s_sliders[i].header);
+            cur = (int)s_pages.size() - 1;
+        }
+        s_sliderPage.push_back(cur);
+    }
+    for (size_t i = 0; i < s_checks.size(); i++) {
+        if (s_checks[i].header) {
+            s_pages.push_back(s_checks[i].header);
+            cur = (int)s_pages.size() - 1;
+        }
+        s_checkPage.push_back(cur);
+    }
 }
 
 static float SliderValue(const SliderDef& d, int pos) {
@@ -289,6 +334,7 @@ static const FieldMap kFieldMap[] = {
     FM(L"color", L"post_hue", FType::F, postHue),
     FM(L"color", L"hue_center", FType::F, hueCenter),
     FM(L"color", L"hue_range", FType::F, hueRange),
+    FM(L"color", L"hue_linger", FType::F, hueLinger),
     FM(L"color", L"curve_enabled", FType::B, curveEnabled),
     FM(L"color", L"curve_center", FType::F, curveCenter),
     FM(L"color", L"curve_width", FType::F, curveWidth),
@@ -367,10 +413,9 @@ static void RefreshMoodBar() {
     int cur = MoodsCurrentIndex();
     bool curOk = cur >= 0 && cur < (int)MoodsNames().size();
     const std::wstring& nm = MoodsCurrentName();
-    static std::wstring s_lastName;
     const wchar_t* shown = curOk ? nm.c_str() : L"-";
-    if (s_lastName != shown) {
-        s_lastName = shown;
+    if (s_lastMoodName != shown) {
+        s_lastMoodName = shown;
         SetWindowTextW(s_moodName, shown);
     }
     EnableWindow(s_inCycle, curOk);
@@ -402,6 +447,175 @@ static void PickPaletteColor(HWND owner, int idx) {
 }
 
 // ---------------------------------------------------------------------------
+// layout: nav column + scrolling page panel + bottom rows anchored to the
+// window edges. All controls exist from creation; layout only moves them.
+
+static void ApplyScroll(HWND panel, ScrollState& s) {
+    int maxPos = s.content > s.view ? s.content - s.view : 0;
+    if (s.pos > maxPos) s.pos = maxPos;
+    if (s.pos < 0) s.pos = 0;
+    SCROLLINFO si = { sizeof(si), SIF_RANGE | SIF_PAGE | SIF_POS };
+    si.nMin = 0;
+    si.nMax = s.content;
+    si.nPage = (UINT)s.view;
+    si.nPos = s.pos;
+    SetScrollInfo(panel, SB_VERT, &si, TRUE);
+    ShowScrollBar(panel, SB_VERT, s.content > s.view);
+}
+
+// registers a bottom-row control: fixed x, row-based y anchored to the bottom
+static void RegBottom(HWND h, int row, int x, int yOff, int w, int hgt, bool stretch = false) {
+    s_bottom.push_back({ h, row, x, yOff, w, hgt, stretch });
+}
+
+static void RelayoutNav() {
+    if (!s_navPanel) return;
+    RECT rc;
+    GetClientRect(s_navPanel, &rc);
+    s_navScr.view = rc.bottom;
+    s_navScr.content = 4 + (int)s_navBtns.size() * kNavBtnStep;
+    ApplyScroll(s_navPanel, s_navScr);
+    HDWP hdwp = BeginDeferWindowPos((int)s_navBtns.size());
+    for (size_t i = 0; i < s_navBtns.size(); i++) {
+        if (hdwp) {
+            HDWP next = DeferWindowPos(hdwp, s_navBtns[i], nullptr, 4,
+                                       4 + (int)i * kNavBtnStep - s_navScr.pos,
+                                       rc.right - 8, kNavBtnH, SWP_NOZORDER);
+            if (next) { hdwp = next; continue; }
+            EndDeferWindowPos(hdwp);
+            hdwp = nullptr;
+        }
+        SetWindowPos(s_navBtns[i], nullptr, 4, 4 + (int)i * kNavBtnStep - s_navScr.pos,
+                     rc.right - 8, kNavBtnH, SWP_NOZORDER);
+    }
+    if (hdwp) EndDeferWindowPos(hdwp);
+}
+
+// stacks the selected page's header + sliders + checkboxes inside the page
+// panel (label over trackbar, same metrics as before) and hides the rest
+static void RelayoutPage() {
+    if (!s_pagePanel || s_pageHeads.empty()) return;
+    RECT rc;
+    GetClientRect(s_pagePanel, &rc);
+    const int w = rc.right - 8;
+    s_pageScr.view = rc.bottom;
+    int rows = 0, checks = 0;
+    for (size_t i = 0; i < s_sliders.size(); i++) if (s_sliderPage[i] == s_page) rows++;
+    for (size_t i = 0; i < s_checks.size(); i++) if (s_checkPage[i] == s_page) checks++;
+    s_pageScr.content = 4 + kHeadH + rows * kRowH + checks * kCheckH + 4;
+    ApplyScroll(s_pagePanel, s_pageScr);
+    for (size_t p = 0; p < s_pageHeads.size(); p++)
+        ShowWindow(s_pageHeads[p], (int)p == s_page ? SW_SHOW : SW_HIDE);
+    for (size_t i = 0; i < s_sliders.size(); i++) {
+        int show = s_sliderPage[i] == s_page ? SW_SHOW : SW_HIDE;
+        ShowWindow(s_sliderLabels[i], show);
+        ShowWindow(s_sliderCtls[i], show);
+    }
+    for (size_t i = 0; i < s_checks.size(); i++)
+        ShowWindow(s_checkCtls[i], s_checkPage[i] == s_page ? SW_SHOW : SW_HIDE);
+    int y = 4 - s_pageScr.pos;
+    HDWP hdwp = BeginDeferWindowPos(1 + 2 * rows + checks);
+    auto move = [&](HWND h, int x, int yy, int ww, int hh) {
+        if (hdwp) {
+            HDWP next = DeferWindowPos(hdwp, h, nullptr, x, yy, ww, hh, SWP_NOZORDER);
+            if (next) { hdwp = next; return; }
+            EndDeferWindowPos(hdwp);
+            hdwp = nullptr;
+        }
+        SetWindowPos(h, nullptr, x, yy, ww, hh, SWP_NOZORDER);
+    };
+    move(s_pageHeads[s_page], 4, y + 4, w, 20);
+    y += kHeadH;
+    for (size_t i = 0; i < s_sliders.size(); i++) {
+        if (s_sliderPage[i] != s_page) continue;
+        move(s_sliderLabels[i], 4, y, w, 15);
+        move(s_sliderCtls[i], 4, y + 16, w, 24);
+        y += kRowH;
+    }
+    for (size_t i = 0; i < s_checks.size(); i++) {
+        if (s_checkPage[i] != s_page) continue;
+        move(s_checkCtls[i], 4, y, w, 22);
+        y += kCheckH;
+    }
+    if (hdwp) EndDeferWindowPos(hdwp);
+}
+
+static void LayoutAll() {
+    if (!s_wnd || !s_navPanel || !s_pagePanel) return;
+    RECT rc;
+    GetClientRect(s_wnd, &rc);
+    const int cw = rc.right, ch = rc.bottom;
+    const int contentTop = kMoodBarH + 6;
+    int contentH = ch - contentTop - kBottomH - 6;
+    if (contentH < 60) contentH = 60;
+    const int contentX = kMargin + kNavW + 8;
+    int contentW = cw - contentX - kMargin;
+    if (contentW < 120) contentW = 120;
+    // batch every move into one screen update: ~30 individual SetWindowPos
+    // calls during a drag-resize leave unerased ghost rows behind
+    HDWP hdwp = BeginDeferWindowPos(2 + (int)s_bottom.size());
+    const int by = ch - kBottomH;
+    auto move = [&](HWND h, int x, int y, int w, int hgt) {
+        if (hdwp) {
+            HDWP next = DeferWindowPos(hdwp, h, nullptr, x, y, w, hgt, SWP_NOZORDER);
+            if (next) { hdwp = next; return; }
+            EndDeferWindowPos(hdwp);   // commit the partial batch, then go direct
+            hdwp = nullptr;
+        }
+        SetWindowPos(h, nullptr, x, y, w, hgt, SWP_NOZORDER);
+    };
+    move(s_navPanel, kMargin, contentTop, kNavW, contentH);
+    move(s_pagePanel, contentX, contentTop, contentW, contentH);
+    for (const BottomCtl& b : s_bottom) {
+        int w = b.stretch ? cw - b.x - kMargin : b.w;
+        if (w < 40) w = 40;
+        move(b.hwnd, b.x, by + b.row * kRowSpace + b.yOff, w, b.h);
+    }
+    if (hdwp) EndDeferWindowPos(hdwp);
+    RelayoutNav();
+    RelayoutPage();
+}
+
+// panel children forward their notifications to the main settings window;
+// the panel itself handles its own scrollbar
+static LRESULT CALLBACK PanelWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_COMMAND:
+    case WM_HSCROLL:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return SendMessageW(GetParent(hwnd), msg, wp, lp);
+    case WM_VSCROLL: {
+        ScrollState& s = (hwnd == s_navPanel) ? s_navScr : s_pageScr;
+        const int old = s.pos;
+        const int maxPos = s.content > s.view ? s.content - s.view : 0;
+        switch (LOWORD(wp)) {
+        case SB_LINEUP:   s.pos -= 24;      break;
+        case SB_LINEDOWN: s.pos += 24;      break;
+        case SB_PAGEUP:   s.pos -= s.view;  break;
+        case SB_PAGEDOWN: s.pos += s.view;  break;
+        case SB_THUMBTRACK:
+        case SB_THUMBPOSITION: {
+            SCROLLINFO si = { sizeof(si), SIF_TRACKPOS };
+            GetScrollInfo(hwnd, SB_VERT, &si);
+            s.pos = si.nTrackPos;
+            break;
+        }
+        default: return 0;
+        }
+        if (s.pos < 0) s.pos = 0;
+        if (s.pos > maxPos) s.pos = maxPos;
+        if (s.pos != old) {
+            if (hwnd == s_navPanel) RelayoutNav();
+            else                    RelayoutPage();
+        }
+        return 0;
+    }
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+// ---------------------------------------------------------------------------
 
 static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -423,6 +637,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     }
     case WM_COMMAND: {
         int id = LOWORD(wp);
+        if (id >= IDC_NAV_BASE && id < IDC_NAV_BASE + (int)s_navBtns.size()) {
+            s_page = id - IDC_NAV_BASE;   // persists across window recreation
+            s_pageScr.pos = 0;
+            for (size_t j = 0; j < s_navBtns.size(); j++)
+                SendMessageW(s_navBtns[j], BM_SETCHECK,
+                             (int)j == s_page ? BST_CHECKED : BST_UNCHECKED, 0);
+            RelayoutPage();
+            return 0;
+        }
         if (id >= IDC_CHECK_BASE && id < IDC_CHECK_BASE + (int)s_checks.size()) {
             CheckDef& d = s_checks[id - IDC_CHECK_BASE];
             bool on = SendMessageW((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -502,6 +725,17 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         }
         return 0;
     }
+    case WM_SIZE:
+        LayoutAll();
+        return 0;
+    case WM_GETMINMAXINFO: {
+        RECT r = { 0, 0, kMinClientW, kMinClientH };
+        AdjustWindowRect(&r, kWndStyle, FALSE);
+        MINMAXINFO* mmi = (MINMAXINFO*)lp;
+        mmi->ptMinTrackSize.x = r.right - r.left;
+        mmi->ptMinTrackSize.y = r.bottom - r.top;
+        return 0;
+    }
     case WM_TIMER:
         if (s_fpsLabel) {
             wchar_t buf[96];
@@ -514,7 +748,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             bool nxtOk = nxt >= 0 && nxt < (int)names.size();
             if (curOk && nxtOk)
                 swprintf_s(buf, L"Mood: %s -> %s", names[cur].c_str(), names[nxt].c_str());
-            else
+            else if (JourneyActive()) {
+                int legI = 0, legN = 0;
+                JourneyLegInfo(&legI, &legN);
+                swprintf_s(buf, L"Mood: %s [journey leg %d/%d%s]",
+                           curOk ? names[cur].c_str() : L"-", legI + 1, legN,
+                           JourneyInBlendHold() ? L" blend" : L"");
+            } else
                 swprintf_s(buf, L"Mood: %s", curOk ? names[cur].c_str() : L"-");
             SetWindowTextW(s_moodLabel, buf);
             RefreshMoodBar();
@@ -538,7 +778,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
             // a mood switch changes Config() behind the sliders' backs; rebuild
             // so they show the new mood's values. Skipped while the user is
-            // mid-drag (capture held) — retried on the next tick instead.
+            // mid-drag (capture held) — retried on the next tick instead. The
+            // selected page survives via the file-static s_page.
             static int s_shownMood = -1;
             if (s_shownMood < 0) {
                 s_shownMood = cur;
@@ -566,10 +807,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         s_fpsLabel = nullptr;
         s_moodLabel = nullptr;
         s_moodName = nullptr;
+        s_lastMoodName.clear();   // next window must set the name fresh
         s_inCycle = nullptr;
         s_moodSave = nullptr;
         s_moodNew = nullptr;
         s_moodDel = nullptr;
+        s_navPanel = nullptr;
+        s_pagePanel = nullptr;
+        s_navBtns.clear();
+        s_pageHeads.clear();
+        s_bottom.clear();
         s_headers.clear();
         s_wnd = nullptr;    // wallpaper keeps running
         return 0;
@@ -577,10 +824,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-static HWND MakeCtl(const wchar_t* cls, const wchar_t* text, DWORD style,
+static HWND MakeCtl(HWND parent, const wchar_t* cls, const wchar_t* text, DWORD style,
                     int x, int y, int w, int h, HMENU id, bool header = false) {
+    // single-line statics must clip, never wrap: a wrapped second line would
+    // bleed glyph tops into the row below (reads as "text bunching")
+    if (wcscmp(cls, L"STATIC") == 0) style |= SS_LEFTNOWORDWRAP;
     HWND ctl = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
-                               x, y, w, h, s_wnd, id, GetModuleHandleW(nullptr), nullptr);
+                               x, y, w, h, parent, id, GetModuleHandleW(nullptr), nullptr);
     SendMessageW(ctl, WM_SETFONT, (WPARAM)(header ? s_headFont : s_font), TRUE);
     if (wcscmp(cls, L"BUTTON") == 0)
         SetWindowTheme(ctl, L"DarkMode_Explorer", nullptr);
@@ -624,60 +874,40 @@ void ShowSettingsWindow() {
     if (!registered) {
         s_darkBrush = CreateSolidBrush(RGB(30, 30, 36));
         WNDCLASSW wc = {};
+        // full-client invalidation on resize: without CS_*REDRAW the bottom
+        // rows' old pixels are never erased after a drag = "bunching" ghosts
+        wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = SettingsWndProc;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"FluidWallpaperSettings";
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
         wc.hbrBackground = s_darkBrush;
         RegisterClassW(&wc);
+        wc.lpfnWndProc = PanelWndProc;
+        wc.lpszClassName = L"FluidWallpaperSettingsPanel";
+        RegisterClassW(&wc);
         registered = true;
     }
 
-    BuildDefs();
+    BuildDefs();   // also builds the page list from the defs' header fields
     s_sliderCtls.clear();
     s_sliderLabels.clear();
     s_checkCtls.clear();
+    s_navBtns.clear();
+    s_pageHeads.clear();
+    s_bottom.clear();
     s_lastSliderText.assign(s_sliders.size(), std::wstring());
     s_lastCheckText.assign(s_checks.size(), std::wstring());
+    if (s_page >= (int)s_pages.size()) s_page = 0;
+    s_navScr = ScrollState{};
+    s_pageScr = ScrollState{};
     MoodsRefreshUiCache(*g_renderer);   // markers compare against the current mood
 
-    const int cols = 4, colW = 396, margin = 14, rowH = 48, headH = 30;
-    const int colX[4] = { margin, margin + (colW + margin),
-                          margin + 2 * (colW + margin), margin + 3 * (colW + margin) };
-    const int width = margin + cols * (colW + margin);
-
-    // pre-compute total height: walk defs to find the tallest column
-    int colY[4] = { 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH };
-    {
-        int cur = 0;
-        for (const SliderDef& d : s_sliders) {
-            if (d.header) { cur = d.col; colY[cur] += headH; }
-            colY[cur] += rowH;
-        }
-    }
-    int slidersBottom = 12;
-    for (int i = 0; i < 4; i++) slidersBottom = colY[i] > slidersBottom ? colY[i] : slidersBottom;
-
-    int checkRows[4] = {};
-    {
-        int cur = 0;
-        for (const CheckDef& d : s_checks) {
-            if (d.header) cur = d.col;
-            checkRows[cur]++;
-        }
-    }
-    int maxCheck = 0;
-    for (int i = 0; i < 4; i++) maxCheck = checkRows[i] > maxCheck ? checkRows[i] : maxCheck;
-    const int checksTop = slidersBottom + 6;
-    const int checksBottom = checksTop + headH + maxCheck * 25;
-    const int bottomTop = checksBottom + 12;
-    const int height = bottomTop + 3 * 34 + 12;
-
-    RECT r = { 0, 0, width, height };
-    AdjustWindowRect(&r, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
+    RECT r = { 0, 0, 760, 640 };   // compact default: nav + one page column
+    AdjustWindowRect(&r, kWndStyle, FALSE);
     s_wnd = CreateWindowExW(0, L"FluidWallpaperSettings",
                             L"Fluid Wallpaper — Settings",
-                            WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+                            kWndStyle,
                             CW_USEDEFAULT, CW_USEDEFAULT,
                             r.right - r.left, r.bottom - r.top,
                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -693,105 +923,120 @@ void ShowSettingsWindow() {
     SetWindowTheme(tip, L"DarkMode_Explorer", nullptr);
     SendMessageW(tip, TTM_SETMAXTIPWIDTH, 0, 300);
 
-    // mood bar: current mood name + cycle membership + save/new/delete
-    MakeCtl(L"STATIC", L"Mood:", 0, margin, 10, 46, 18, nullptr, true);
-    s_moodName = MakeCtl(L"STATIC", L"-", 0, margin + 50, 10, 270, 18, nullptr);
-    s_inCycle = MakeCtl(L"BUTTON", L"In cycle", BS_AUTOCHECKBOX,
-                        margin + 330, 8, 90, 22, (HMENU)(UINT_PTR)IDC_MOOD_INCYCLE);
-    s_moodSave = MakeCtl(L"BUTTON", L"Save", BS_PUSHBUTTON,
-                         margin + 430, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_SAVE);
-    s_moodNew = MakeCtl(L"BUTTON", L"New", BS_PUSHBUTTON,
-                        margin + 528, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_NEW);
-    s_moodDel = MakeCtl(L"BUTTON", L"Delete", BS_PUSHBUTTON,
-                        margin + 626, 6, 90, 26, (HMENU)(UINT_PTR)IDC_MOOD_DELETE);
-    MakeCtl(L"STATIC", L"● saved in this mood   ○ not in this mood   * differs from saved mood",
-            0, margin + 730, 10, 640, 18, nullptr);
+    // scrolling panels: nav on the left, page content on the right. Children
+    // are clipped to the panel rect; notifications are forwarded to s_wnd.
+    s_navPanel = CreateWindowExW(0, L"FluidWallpaperSettingsPanel", nullptr,
+                                 WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+                                 0, 0, 10, 10, s_wnd, nullptr,
+                                 GetModuleHandleW(nullptr), nullptr);
+    s_pagePanel = CreateWindowExW(0, L"FluidWallpaperSettingsPanel", nullptr,
+                                  WS_CHILD | WS_VISIBLE | WS_VSCROLL,
+                                  0, 0, 10, 10, s_wnd, nullptr,
+                                  GetModuleHandleW(nullptr), nullptr);
+
+    // nav: one push-like toggle button per category page
+    for (size_t p = 0; p < s_pages.size(); p++)
+        s_navBtns.push_back(MakeCtl(s_navPanel, L"BUTTON", s_pages[p].c_str(),
+                                    BS_PUSHLIKE | BS_AUTOCHECKBOX | BS_LEFT,
+                                    0, 0, 10, 10, (HMENU)(UINT_PTR)(IDC_NAV_BASE + p)));
+    if (!s_navBtns.empty())
+        SendMessageW(s_navBtns[s_page], BM_SETCHECK, BST_CHECKED, 0);
+
+    // one accent header per page, inside the scrolling content panel
+    for (size_t p = 0; p < s_pages.size(); p++)
+        s_pageHeads.push_back(MakeCtl(s_pagePanel, L"STATIC", s_pages[p].c_str(), 0,
+                                      0, 0, 10, 10, nullptr, true));
+
+    // sliders for every page, created up front; only the selected page shows
+    for (size_t i = 0; i < s_sliders.size(); i++) {
+        const SliderDef& d = s_sliders[i];
+        HWND label = MakeCtl(s_pagePanel, L"STATIC", L"", 0, 0, 0, 10, 10, nullptr);
+        HWND track = MakeCtl(s_pagePanel, TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_NOTICKS,
+                             0, 0, 10, 10, nullptr);
+        int ticks = (int)((d.mx - d.mn) / d.step + 0.5f);
+        SendMessageW(track, TBM_SETRANGE, FALSE, MAKELPARAM(0, ticks));
+        int page = ticks / 25;
+        if (page < 1) page = 1;
+        SendMessageW(track, TBM_SETPAGESIZE, 0, page);
+        SendMessageW(track, TBM_SETLINESIZE, 0, 1);
+        if (d.fval == &g_hdrPeakNits && *d.fval < 0.0f)
+            SendMessageW(track, TBM_SETPOS, TRUE, (LPARAM)(int)((g_maxNits - d.mn) / d.step + 0.5f));
+        else
+            SendMessageW(track, TBM_SETPOS, TRUE, SliderPos(d));
+        s_sliderCtls.push_back(track);
+        s_sliderLabels.push_back(label);
+        UpdateSliderLabel(i);
+        AddTip(tip, track, d.tip);
+    }
+
+    // checkboxes for every page
+    for (size_t i = 0; i < s_checks.size(); i++) {
+        const CheckDef& d = s_checks[i];
+        HWND box = MakeCtl(s_pagePanel, L"BUTTON", d.label, BS_AUTOCHECKBOX,
+                           0, 0, 10, 10, (HMENU)(UINT_PTR)(IDC_CHECK_BASE + i));
+        bool on = d.val ? *d.val : GetAutostart();
+        SendMessageW(box, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+        s_checkCtls.push_back(box);
+        UpdateCheckLabel(i);   // checkbox text carries the ●/○/* markers
+        AddTip(tip, box, d.tip);
+    }
+
+    FluidConfig& c = g_renderer->Config();
+
+    // mood bar (top strip, always visible): name + cycle + save/new/delete.
+    // Label and name share the head font so their baselines line up — the old
+    // 44px label clipped its colon and jammed the two texts together.
+    MakeCtl(s_wnd, L"STATIC", L"Mood:", 0, kMargin, 7, 60, 22, nullptr, true);
+    s_moodName = MakeCtl(s_wnd, L"STATIC", L"-", 0, kMargin + 62, 7, 196, 22, nullptr);
+    SendMessageW(s_moodName, WM_SETFONT, (WPARAM)s_headFont, TRUE);
+    s_inCycle = MakeCtl(s_wnd, L"BUTTON", L"In cycle", BS_AUTOCHECKBOX,
+                        kMargin + 262, 8, 86, 22, (HMENU)(UINT_PTR)IDC_MOOD_INCYCLE);
+    s_moodSave = MakeCtl(s_wnd, L"BUTTON", L"Save", BS_PUSHBUTTON,
+                         kMargin + 352, 6, 80, 26, (HMENU)(UINT_PTR)IDC_MOOD_SAVE);
+    s_moodNew = MakeCtl(s_wnd, L"BUTTON", L"New", BS_PUSHBUTTON,
+                        kMargin + 436, 6, 80, 26, (HMENU)(UINT_PTR)IDC_MOOD_NEW);
+    s_moodDel = MakeCtl(s_wnd, L"BUTTON", L"Delete", BS_PUSHBUTTON,
+                        kMargin + 520, 6, 80, 26, (HMENU)(UINT_PTR)IDC_MOOD_DELETE);
     AddTip(tip, s_inCycle, L"Include this mood in the auto-cycle rotation");
     AddTip(tip, s_moodSave, L"Overwrite the current mood file with your live settings");
     AddTip(tip, s_moodNew, L"Create a new mood from your live settings");
     AddTip(tip, s_moodDel, L"Delete the current mood file");
 
-    // sliders, grouped under accent headers
-    {
-        int y[4] = { 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH, 12 + kMoodBarH };
-        int cur = 0;
-        for (size_t i = 0; i < s_sliders.size(); i++) {
-            const SliderDef& d = s_sliders[i];
-            if (d.header) {
-                cur = d.col;
-                MakeCtl(L"STATIC", d.header, 0, colX[cur], y[cur] + 6, colW, 20, nullptr, true);
-                y[cur] += headH;
-            }
-            HWND label = MakeCtl(L"STATIC", L"", 0, colX[cur], y[cur], colW, 15, nullptr);
-            HWND track = MakeCtl(TRACKBAR_CLASSW, L"", TBS_HORZ | TBS_NOTICKS,
-                                 colX[cur], y[cur] + 16, colW, 24, nullptr);
-            int ticks = (int)((d.mx - d.mn) / d.step + 0.5f);
-            SendMessageW(track, TBM_SETRANGE, FALSE, MAKELPARAM(0, ticks));
-            int page = ticks / 25;
-            if (page < 1) page = 1;
-            SendMessageW(track, TBM_SETPAGESIZE, 0, page);
-            SendMessageW(track, TBM_SETLINESIZE, 0, 1);
-            if (d.fval == &g_hdrPeakNits && *d.fval < 0.0f)
-                SendMessageW(track, TBM_SETPOS, TRUE, (LPARAM)(int)((g_maxNits - d.mn) / d.step + 0.5f));
-            else
-                SendMessageW(track, TBM_SETPOS, TRUE, SliderPos(d));
-            s_sliderCtls.push_back(track);
-            s_sliderLabels.push_back(label);
-            UpdateSliderLabel(i);
-            AddTip(tip, track, d.tip);
-            y[cur] += rowH;
-        }
-    }
+    // bottom utility rows, anchored to the bottom edge by LayoutAll()
 
-    // checkboxes, grouped under accent headers
-    {
-        int y[4] = { checksTop, checksTop, checksTop, checksTop };
-        int cur = 0;
-        for (size_t i = 0; i < s_checks.size(); i++) {
-            const CheckDef& d = s_checks[i];
-            if (d.header) {
-                cur = d.col;
-                MakeCtl(L"STATIC", d.header, 0, colX[cur], y[cur] + 4, colW, 20, nullptr, true);
-                y[cur] += headH;
-            }
-            HWND box = MakeCtl(L"BUTTON", d.label, BS_AUTOCHECKBOX,
-                               colX[cur], y[cur], colW, 22,
-                               (HMENU)(UINT_PTR)(IDC_CHECK_BASE + i));
-            bool on = d.val ? *d.val : GetAutostart();
-            SendMessageW(box, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
-            s_checkCtls.push_back(box);
-            UpdateCheckLabel(i);   // checkbox text carries the ●/○/* markers
-            AddTip(tip, box, d.tip);
-            y[cur] += 25;
-        }
-    }
-
-    FluidConfig& c = g_renderer->Config();
-
-    // bottom row 1: gamut + wanderer path + resolutions
-    int by = bottomTop;
-    MakeCtl(L"STATIC", L"Gamut:", 0, colX[0], by + 5, 48, 16, nullptr);
+    // row 0: gamut + wanderer path
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"Gamut:", 0, 0, 0, 10, 10, nullptr),
+              0, kMargin, 5, 44, 16);
     const wchar_t* gamutLabels[3] = { L"sRGB", L"Display-P3", L"BT.2020 (QD-OLED)" };
+    const int gamutX[3] = { 58, 118, 215 }, gamutW[3] = { 58, 95, 145 };
     for (int gIdx = 0; gIdx < 3; gIdx++) {
-        HWND radio = MakeCtl(L"BUTTON", gamutLabels[gIdx],
+        HWND radio = MakeCtl(s_wnd, L"BUTTON", gamutLabels[gIdx],
                              BS_AUTORADIOBUTTON | (gIdx == 0 ? WS_GROUP : 0),
-                             colX[0] + 52 + gIdx * 130, by + 2, 128, 22,
-                             (HMENU)(UINT_PTR)(IDC_GAMUT_BASE + gIdx));
+                             0, 0, 10, 10, (HMENU)(UINT_PTR)(IDC_GAMUT_BASE + gIdx));
         SendMessageW(radio, BM_SETCHECK, g_gamutMode == gIdx ? BST_CHECKED : BST_UNCHECKED, 0);
+        RegBottom(radio, 0, gamutX[gIdx], 2, gamutW[gIdx], 22);
     }
-    MakeCtl(L"STATIC", L"Wanderer path:", 0, colX[1] + 60, by + 5, 95, 16, nullptr);
-    s_comboMode = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
-                          colX[1] + 160, by, 150, 200, (HMENU)(UINT_PTR)IDC_WMODE);
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"Wanderer path:", 0, 0, 0, 10, 10, nullptr),
+              0, 366, 5, 92, 16);
+    s_comboMode = MakeCtl(s_wnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+                          0, 0, 10, 10, (HMENU)(UINT_PTR)IDC_WMODE);
+    RegBottom(s_comboMode, 0, 460, 0, 140, 200);
     SendMessageW(s_comboMode, CB_ADDSTRING, 0, (LPARAM)L"Random wander");
     SendMessageW(s_comboMode, CB_ADDSTRING, 0, (LPARAM)L"Circle");
     SendMessageW(s_comboMode, CB_ADDSTRING, 0, (LPARAM)L"Figure 8");
     SendMessageW(s_comboMode, CB_SETCURSEL, c.wandererMode, 0);
-    MakeCtl(L"STATIC", L"Sim res:", 0, colX[2], by + 5, 55, 16, nullptr);
-    s_comboSim = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
-                         colX[2] + 60, by, 90, 200, (HMENU)(UINT_PTR)IDC_SIMRES);
-    MakeCtl(L"STATIC", L"Dye res:", 0, colX[2] + 170, by + 5, 55, 16, nullptr);
-    s_comboDye = MakeCtl(L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
-                         colX[2] + 230, by, 90, 200, (HMENU)(UINT_PTR)IDC_DYERES);
+
+    // row 1: resolutions
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"Sim res:", 0, 0, 0, 10, 10, nullptr),
+              1, kMargin, 5, 50, 16);
+    s_comboSim = MakeCtl(s_wnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+                         0, 0, 10, 10, (HMENU)(UINT_PTR)IDC_SIMRES);
+    RegBottom(s_comboSim, 1, 64, 0, 78, 200);
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"Dye res:", 0, 0, 0, 10, 10, nullptr),
+              1, 148, 5, 50, 16);
+    s_comboDye = MakeCtl(s_wnd, L"COMBOBOX", L"", CBS_DROPDOWNLIST | WS_TABSTOP,
+                         0, 0, 10, 10, (HMENU)(UINT_PTR)IDC_DYERES);
+    RegBottom(s_comboDye, 1, 200, 0, 78, 200);
     for (int v : kSimResOptions) {
         wchar_t b[16]; swprintf_s(b, L"%d", v);
         SendMessageW(s_comboSim, CB_ADDSTRING, 0, (LPARAM)b);
@@ -804,37 +1049,50 @@ void ShowSettingsWindow() {
         if (kSimResOptions[i2] == c.simRes) SendMessageW(s_comboSim, CB_SETCURSEL, i2, 0);
         if (kDyeResOptions[i2] == c.dyeRes) SendMessageW(s_comboDye, CB_SETCURSEL, i2, 0);
     }
-    MakeCtl(L"STATIC", L"(changing res restarts the fluid)", 0, colX[3], by + 5, colW, 16, nullptr);
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"(changing res restarts the fluid)", 0,
+                      0, 0, 10, 10, nullptr), 1, 286, 5, 240, 16);
 
-    // bottom row 2: palette pickers + windows
-    by += 34;
-    MakeCtl(L"STATIC", L"Palette (hue wheel off):", 0, colX[0], by + 5, 150, 16, nullptr);
+    // row 2: palette pickers
+    RegBottom(MakeCtl(s_wnd, L"STATIC", L"Palette (hue wheel off):", 0, 0, 0, 10, 10, nullptr),
+              2, kMargin, 5, 146, 16);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t lbl[16];
         swprintf_s(lbl, L"Color %d…", ci + 1);
-        MakeCtl(L"BUTTON", lbl, BS_PUSHBUTTON,
-                colX[0] + 155 + ci * 92, by, 86, 26, (HMENU)(UINT_PTR)(IDC_COLOR_BASE + ci));
+        RegBottom(MakeCtl(s_wnd, L"BUTTON", lbl, BS_PUSHBUTTON, 0, 0, 10, 10,
+                          (HMENU)(UINT_PTR)(IDC_COLOR_BASE + ci)), 2, 166 + ci * 90, 0, 84, 26);
     }
-    MakeCtl(L"BUTTON", L"Open HDR analyzer", BS_PUSHBUTTON,
-            colX[2], by, 160, 26, (HMENU)(UINT_PTR)IDC_OPEN_ANALYZER);
-    MakeCtl(L"BUTTON", L"Scenes…", BS_PUSHBUTTON,
-            colX[2] + 170, by, 100, 26, (HMENU)(UINT_PTR)IDC_SCENES_BTN);
-    MakeCtl(L"BUTTON", L"Next mood", BS_PUSHBUTTON,
-            colX[2] + 280, by, 110, 26, (HMENU)(UINT_PTR)IDC_NEXT_MOOD);
 
-    // bottom row 3: playback + save + fps
-    by += 34;
-    s_pauseBtn = MakeCtl(L"BUTTON", IsManualPaused() ? L"Resume wallpaper" : L"Pause wallpaper",
-                         BS_PUSHBUTTON, colX[0], by, 150, 26, (HMENU)(UINT_PTR)IDC_PAUSE_BTN);
-    MakeCtl(L"BUTTON", L"Exit wallpaper", BS_PUSHBUTTON,
-            colX[0] + 160, by, 150, 26, (HMENU)(UINT_PTR)IDC_EXIT_BTN);
-    MakeCtl(L"BUTTON", L"Save look as scene", BS_PUSHBUTTON,
-            colX[1], by, 180, 26, (HMENU)(UINT_PTR)IDC_SAVE_SCENE);
-    s_fpsLabel = MakeCtl(L"STATIC", L"Rendering at … fps", 0,
-                         colX[2], by + 5, 160, 18, nullptr);
-    s_moodLabel = MakeCtl(L"STATIC", L"Mood: …", 0,
-                          colX[2] + 170, by + 5, 220, 18, nullptr, true);
+    // row 3: windows + mood step + scene save
+    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Open HDR analyzer", BS_PUSHBUTTON, 0, 0, 10, 10,
+                      (HMENU)(UINT_PTR)IDC_OPEN_ANALYZER), 3, kMargin, 0, 150, 26);
+    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Scenes…", BS_PUSHBUTTON, 0, 0, 10, 10,
+                      (HMENU)(UINT_PTR)IDC_SCENES_BTN), 3, 172, 0, 90, 26);
+    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Next mood", BS_PUSHBUTTON, 0, 0, 10, 10,
+                      (HMENU)(UINT_PTR)IDC_NEXT_MOOD), 3, 272, 0, 100, 26);
+    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Save look as scene", BS_PUSHBUTTON, 0, 0, 10, 10,
+                      (HMENU)(UINT_PTR)IDC_SAVE_SCENE), 3, 382, 0, 170, 26);
 
+    // row 4: playback buttons + mood status
+    s_pauseBtn = MakeCtl(s_wnd, L"BUTTON", IsManualPaused() ? L"Resume wallpaper" : L"Pause wallpaper",
+                         BS_PUSHBUTTON, 0, 0, 10, 10, (HMENU)(UINT_PTR)IDC_PAUSE_BTN);
+    RegBottom(s_pauseBtn, 4, kMargin, 0, 140, 26);
+    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Exit wallpaper", BS_PUSHBUTTON, 0, 0, 10, 10,
+                      (HMENU)(UINT_PTR)IDC_EXIT_BTN), 4, 162, 0, 140, 26);
+    // mood status takes row 4's stretch slot (wide enough for journey-leg
+    // text even at min width); fps moves to the legend row's tail. Small font
+    // for the status — the big font clipped mid-word next to the legend row.
+    s_moodLabel = MakeCtl(s_wnd, L"STATIC", L"Mood: …", 0, 0, 0, 10, 10, nullptr);
+    s_headers.insert(s_moodLabel);   // keep the accent color at the small font
+    RegBottom(s_moodLabel, 4, 312, 5, 280, 18, true);
+
+    // legend (slim line at the very bottom) + fps at the row's right tail
+    RegBottom(MakeCtl(s_wnd, L"STATIC",
+                      L"● saved in this mood   ○ not in this mood   * differs from saved mood",
+                      0, 0, 0, 10, 10, nullptr), 5, kMargin, 3, 450, 16);
+    s_fpsLabel = MakeCtl(s_wnd, L"STATIC", L"Rendering at … fps", 0, 0, 0, 10, 10, nullptr);
+    RegBottom(s_fpsLabel, 5, 470, 3, 140, 16, true);
+
+    LayoutAll();
     RefreshMoodBar();
     ShowWindow(s_wnd, SW_SHOW);
     SetForegroundWindow(s_wnd);

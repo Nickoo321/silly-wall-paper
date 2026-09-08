@@ -429,3 +429,51 @@ skipped moods grayed (owner-draw, still clickable for forcing).
 - User asked for PC shutdown after this entry. Pending on return: QUIZ.md
   evaluation (journeys + static moods + HDR on/off). Everything else is in
   git as uncommitted changes; app autostarts on boot.
+
+## 2026-08-29 — OilWallpaper PoC: lava-lamp oil blobs (agent-11)
+
+- New standalone target **OilWallpaper** (src_oil/, separate from the fluid
+  app; FluidWallpaper sources untouched). Same shell patterns: WorkerW attach
+  (primary monitor only), tray (Pause / Palette radio Acid+Royal / Exit),
+  Explorer-restart reattach, single-instance mutex. No ini/moods/settings.
+- Renderer: ONE fullscreen-triangle pixel shader, no compute. 64-blob
+  metaball field (r²/d² with compact tail cutoff 0.08 + per-blob clamp 3.5),
+  influence-weighted palette colors, rim = max(sdf estimate (field−1)/|∇field|,
+  field band) so merged masses keep saturated interiors with dark outlines,
+  gloss from the analytic field gradient, 3-octave fbm marbling ±15%,
+  gradient + blotch + grain backdrop. CPU sim: pseudo-curl drift +
+  radius-proportional buoyancy (few sinkers), ±15% radius breathing, wrap.
+- Automation flags: `--shot path.bmp [--shot-delay N] [--palette 0|1]`
+  (GPU readback → BMP, then exits); log at %TEMP%\OilWallpaper.log (share-read).
+  Needed because screenshots during the user's Dota session capture the game,
+  not the desktop.
+- Verified: both palettes shot at 25/40/70 s (build/oil-3.png, oil-royal.png,
+  oil-final.png) — distinct rimmed blobs, necks/splits, droplets, no clump-lock.
+  Tray commands (palette switch, pause) exercised via posted WM_COMMAND.
+  ~57 fps at 2560×1440 (RX 7900 GRE, vsync-capped).
+- Follow-ups if ported: HDR/scRGB output (PoC is SDR R8G8B8A8_UNORM only),
+  settings/ini layer, pause-on-fullscreen, second-monitor mirror.
+
+## 2026-08-29 — AcidWallpaper PoC: "liquid acid" oil-and-ink (subagent)
+
+- New standalone target **AcidWallpaper** (src_acid/, copied from the
+  OilWallpaper shell; src/ and src_oil/ untouched, only CMakeLists.txt
+  gained a target). Same shell/flags: `--shot x.bmp`, `--shot-delay N`,
+  `--palette 0|1`, `--console`; log at %TEMP%\AcidWallpaper.log.
+- Look: posterized metaball blobs — flat banded interiors (softened-floor
+  quantize), thin bright rim at the field==1 boundary (Gaussian on
+  sdf=(field−1)/|∇field|, direct color, no bloom), dark meniscus band,
+  hash speckle hugging interfaces, film grain. Palettes: 0 = Coral
+  (bright flat coral blobs, deep teal/dark-amber mottled medium, cyan
+  rims), 1 = Royal (red-orange vein web + dark hole-blobs on deep purple,
+  hot-orange rims; seeded as a diagonal band for the dendritic look).
+- Gotcha (also in AGENTS.md): accumulate the analytic field gradient only
+  where the per-blob weight is UNclamped — the min(w,3.5) clamp flattens
+  the field but 2r²/d³ keeps exploding toward blob centers, dragging sdf→0
+  there and flooding centers with rim color ("donut" artifact). Coverage
+  must come from the field, not sdf (sdf diverges where |∇field|→0).
+- Verified via GPU-readback captures, 6 shader rounds: final
+  build/acid-p0-final.png + acid-p1-final.png, polish round
+  build/acid-p0b.png + acid-p1b.png (flatter/brighter interiors, moodier
+  medium, rim-hugging speckle; hole-ier web with thinner strands).
+  ~57 fps at 2560×1440. SDR only; HDR is a follow-up (same as oil).

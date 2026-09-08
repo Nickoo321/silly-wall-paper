@@ -10,3 +10,17 @@ add_executable(FluidWallpaper WIN32 src/main.cpp src/fluid.cpp src/settings.cpp 
 target_compile_definitions(FluidWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(FluidWallpaper PRIVATE /utf-8)   # source files are UTF-8 (em dashes in UI strings)
 target_link_libraries(FluidWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32)
+
+# OilWallpaper — standalone lava-lamp oil-blob proof of concept (src_oil/).
+# Separate launcher; shares no sources with the FluidWallpaper target.
+add_executable(OilWallpaper WIN32 src_oil/main.cpp src_oil/oil.cpp)
+target_compile_definitions(OilWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(OilWallpaper PRIVATE /utf-8)
+target_link_libraries(OilWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32)
+
+# AcidWallpaper — standalone "liquid acid" oil-and-ink proof of concept (src_acid/).
+# Separate launcher; shares no sources with the other targets.
+add_executable(AcidWallpaper WIN32 src_acid/main.cpp src_acid/acid.cpp)
+target_compile_definitions(AcidWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(AcidWallpaper PRIVATE /utf-8)
+target_link_libraries(AcidWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32)

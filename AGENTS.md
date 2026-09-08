@@ -30,6 +30,19 @@ Single exe, no deps beyond Windows SDK libs.
 ## Layout
 
 - `src/fluid.cpp/h` — sim + render + hue-shift cycler + coverage readback.
+- `src_oil/` — OilWallpaper PoC (separate CMake target/exe, `build/OilWallpaper.exe`):
+  lava-lamp metaball oil blobs, one fullscreen-triangle PS + CPU blob sim.
+  Hardcoded config, no ini. Flags: `--shot x.bmp` (GPU-readback dump, then
+  exits), `--shot-delay N`, `--palette 0|1`, `--console`; log at
+  %TEMP%\OilWallpaper.log (share-read). SDR only; HDR is a follow-up.
+- `src_acid/` — AcidWallpaper PoC (separate CMake target/exe,
+  `build/AcidWallpaper.exe`): "liquid acid" oil-and-ink look — posterized
+  metaball blobs, flat banded interiors, thin bright rim at the field==1
+  boundary (Gaussian on sdf=(field-1)/|grad|), meniscus band, interface
+  speckle, film grain. Same shell/flags as src_oil; log at
+  %TEMP%\AcidWallpaper.log. SDR only, no bloom. Gotcha: only accumulate the
+  field gradient where the per-blob weight is unclamped, else sdf->0 at blob
+  centers and the rim color floods the interior.
 - `src/moods.cpp/h` — mood conductor (DWELL→SHIFT→EMIT→RETURN transitions).
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).

@@ -1,0 +1,727 @@
+{
+	"approved": true,
+	"contentrating": "Everyone",
+	"description": "An extensively rebuilt version of the classic WebGL fluid simulation, tuned for OLED and wide-gamut displays.\r\n\r\n[h1]Features[/h1]\r\n[list]\r\n[*] Display-P3 wide gamut rendering + optional HDR-mode compensation (auto-detects Windows HDR)\r\n[*] Soft-knee brightness compression and saturation restore: colors stay pure, never wash to white or mud\r\n[*] Autonomous wanderer splats with screen-fullness governor: paints, pauses, decays, repaints on its own\r\n[*] Survivor wanderer + separating dart keep compositions evolving while the field rests\r\n[*] Duty-cycled hue-shift bursts rotate the whole palette on a schedule\r\n[*] Hold left mouse to pour dye; every behavior above is a slider\r\n[/list]\r\n\r\n[h1]Notes[/h1]\r\nDye Resolution ships at 4096 for maximum detail - lower it to 1024/512 on weaker GPUs.\r\nAuthor's Wallpaper Engine color settings (right panel, optional): saturation 57, contrast 67, brightness 53, hue 54.\r\nLooks best on an OLED in a dim room with Windows HDR on.\r\n\r\n[h1]Credits[/h1]\r\nBased on PavelDoGreat's WebGL-Fluid-Simulation (MIT): https://github.com/PavelDoGreat/WebGL-Fluid-Simulation\r\nWallpaper Engine port by Delivator: https://github.com/Delivator/WebGL-Fluid-Simulation\r\nFPS limiter by fuchst. Extended feature set built on top of both.",
+	"file": "index.html",
+	"general": {
+		"properties": {
+			"audio_responsive": {
+				"index": 17,
+				"order": 117,
+				"text": "Audio Responsive",
+				"type": "bool",
+				"value": false
+			},
+			"auto_pause": {
+				"condition": "auto_splats.value",
+				"index": 65,
+				"order": 165,
+				"text": "Auto-Pause Wanderers When Screen Full (rec: on)",
+				"type": "bool",
+				"value": true
+			},
+			"auto_splats": {
+				"index": 40,
+				"order": 140,
+				"text": "Auto Wanderer Splats",
+				"type": "bool",
+				"value": true
+			},
+			"background_color": {
+				"index": 6,
+				"order": 106,
+				"text": "Background Color",
+				"type": "color",
+				"value": "0 0 0"
+			},
+			"bloom_intensity": {
+				"fraction": true,
+				"index": 31,
+				"max": 2,
+				"min": 0.1,
+				"order": 131,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Bloom Intensity",
+				"type": "slider",
+				"value": 0.8
+			},
+			"bloom_threshold": {
+				"fraction": true,
+				"index": 32,
+				"max": 1,
+				"min": 0,
+				"order": 132,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Bloom Threshold",
+				"type": "slider",
+				"value": 0.6
+			},
+			"color_cycle_period": {
+				"condition": "colorful.value",
+				"fraction": false,
+				"index": 47,
+				"max": 120,
+				"min": 2,
+				"order": 147,
+				"text": "Color Cycle Time Seconds (rec: 30)",
+				"type": "slider",
+				"value": 19
+			},
+			"colorful": {
+				"index": 10,
+				"order": 110,
+				"text": "Random Color",
+				"type": "bool",
+				"value": true
+			},
+			"contrast_req": {
+				"condition": "auto_splats.value && auto_pause.value",
+				"fraction": false,
+				"index": 70,
+				"max": 100,
+				"min": 0,
+				"order": 170,
+				"text": "Contrast Required % (rec: 30, 0 = off)",
+				"type": "slider",
+				"value": 30
+			},
+			"dark_floor": {
+				"condition": "auto_splats.value && auto_pause.value",
+				"fraction": false,
+				"index": 66,
+				"max": 60,
+				"min": 5,
+				"order": 166,
+				"text": "Min Dark Area % Before Pause (rec: 20)",
+				"type": "slider",
+				"value": 9
+			},
+			"dark_level": {
+				"condition": "auto_splats.value && auto_pause.value",
+				"fraction": true,
+				"index": 67,
+				"max": 0.1,
+				"min": 0.005,
+				"order": 167,
+				"precision": 3,
+				"step": 0.005,
+				"text": "Dark Pixel Brightness Cutoff (rec: 0.02)",
+				"type": "slider",
+				"value": 0.07
+			},
+			"dart_enabled": {
+				"condition": "auto_splats.value && auto_pause.value",
+				"index": 71,
+				"order": 171,
+				"text": "Separating Dart While Paused (rec: on)",
+				"type": "bool",
+				"value": true
+			},
+			"dart_interval": {
+				"condition": "auto_splats.value && dart_enabled.value",
+				"fraction": false,
+				"index": 72,
+				"max": 30,
+				"min": 1,
+				"order": 172,
+				"text": "Dart Interval Seconds (rec: 6)",
+				"type": "slider",
+				"value": 7
+			},
+			"dart_speed": {
+				"condition": "auto_splats.value && dart_enabled.value",
+				"fraction": false,
+				"index": 73,
+				"max": 6000,
+				"min": 500,
+				"order": 173,
+				"text": "Dart Speed px/s (rec: 2500)",
+				"type": "slider",
+				"value": 967
+			},
+			"decay_fast": {
+				"fraction": true,
+				"index": 48,
+				"max": 1,
+				"min": 0.5,
+				"order": 148,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Tail Decay Speed (rec: 0.90, lower = snappier end)",
+				"type": "slider",
+				"value": 1
+			},
+			"decay_threshold": {
+				"fraction": true,
+				"index": 49,
+				"max": 0.3,
+				"min": 0,
+				"order": 149,
+				"precision": 3,
+				"step": 0.005,
+				"text": "Decay Curve Threshold (rec: 0.08)",
+				"type": "slider",
+				"value": 0.29
+			},
+			"density_diffusion": {
+				"fraction": true,
+				"index": 23,
+				"max": 1,
+				"min": 0.9,
+				"order": 123,
+				"precision": 3,
+				"step": 0.001,
+				"text": "Density Diffusion (rec: 0.999 for long linger)",
+				"type": "slider",
+				"value": 0.999
+			},
+			"dye_resolution": {
+				"index": 22,
+				"options": [
+					{
+						"label": "32",
+						"value": "32"
+					},
+					{
+						"label": "64",
+						"value": "64"
+					},
+					{
+						"label": "128",
+						"value": "128"
+					},
+					{
+						"label": "256",
+						"value": "256"
+					},
+					{
+						"label": "512",
+						"value": "512"
+					},
+					{
+						"label": "1024",
+						"value": "1024"
+					},
+					{
+						"label": "2048",
+						"value": "2048"
+					},
+					{
+						"label": "4096",
+						"value": "4096"
+					}
+				],
+				"order": 122,
+				"text": "Dye Resolution",
+				"type": "combo",
+				"value": "4096"
+			},
+			"enable_bloom": {
+				"index": 30,
+				"order": 130,
+				"text": "Enable Bloom",
+				"type": "bool",
+				"value": false
+			},
+			"frequency_range": {
+				"condition": "audio_responsive.value",
+				"fraction": false,
+				"index": 19,
+				"max": 62,
+				"min": 1,
+				"order": 119,
+				"text": "Frequency Range",
+				"type": "slider",
+				"value": 8
+			},
+			"frequency_range_start": {
+				"condition": "audio_responsive.value",
+				"fraction": false,
+				"index": 20,
+				"max": 62,
+				"min": 0,
+				"order": 120,
+				"text": "Frequency Range Start",
+				"type": "slider",
+				"value": 0
+			},
+			"hdr_brightness": {
+				"condition": "hdr_mode.value != 'off'",
+				"fraction": true,
+				"index": 62,
+				"max": 1.5,
+				"min": 0.8,
+				"order": 162,
+				"precision": 2,
+				"step": 0.01,
+				"text": "HDR Brightness Boost (rec: 1.08)",
+				"type": "slider",
+				"value": 1.08
+			},
+			"hdr_contrast": {
+				"condition": "hdr_mode.value != 'off'",
+				"fraction": true,
+				"index": 63,
+				"max": 1.5,
+				"min": 0.8,
+				"order": 163,
+				"precision": 2,
+				"step": 0.01,
+				"text": "HDR Contrast (rec: 1.0)",
+				"type": "slider",
+				"value": 1
+			},
+			"hdr_mode": {
+				"index": 60,
+				"options": [
+					{
+						"label": "Auto (detect Windows HDR)",
+						"value": "auto"
+					},
+					{
+						"label": "Always On",
+						"value": "on"
+					},
+					{
+						"label": "Off",
+						"value": "off"
+					}
+				],
+				"order": 160,
+				"text": "HDR Compensation",
+				"type": "combo",
+				"value": "auto"
+			},
+			"hdr_saturation": {
+				"condition": "hdr_mode.value != 'off'",
+				"fraction": true,
+				"index": 61,
+				"max": 2,
+				"min": 1,
+				"order": 161,
+				"precision": 2,
+				"step": 0.01,
+				"text": "HDR Saturation Boost (rec: 1.2)",
+				"type": "slider",
+				"value": 1.2
+			},
+			"hold_to_splat": {
+				"index": 46,
+				"order": 146,
+				"text": "Hold Left Mouse = Continuous Splat",
+				"type": "bool",
+				"value": true
+			},
+			"hueshift_burst_steps": {
+				"condition": "hueshift_enabled.value",
+				"fraction": false,
+				"index": 78,
+				"max": 12,
+				"min": 1,
+				"order": 178,
+				"text": "Hue Shift Steps per Burst (rec: 3)",
+				"type": "slider",
+				"value": 2
+			},
+			"hueshift_enabled": {
+				"index": 74,
+				"order": 174,
+				"text": "Hue Shift Cycler (rec: on)",
+				"type": "bool",
+				"value": true
+			},
+			"hueshift_glide": {
+				"condition": "hueshift_enabled.value",
+				"fraction": true,
+				"index": 77,
+				"max": 10,
+				"min": 0.1,
+				"order": 177,
+				"precision": 1,
+				"step": 0.1,
+				"text": "Hue Shift Glide Seconds (rec: 2)",
+				"type": "slider",
+				"value": 7.2
+			},
+			"hueshift_linger": {
+				"condition": "hueshift_enabled.value",
+				"fraction": true,
+				"index": 76,
+				"max": 15,
+				"min": 0,
+				"order": 176,
+				"precision": 1,
+				"step": 0.5,
+				"text": "Hue Shift Linger Seconds (rec: 3)",
+				"type": "slider",
+				"value": 6.5
+			},
+			"hueshift_off_time": {
+				"condition": "hueshift_enabled.value",
+				"fraction": false,
+				"index": 79,
+				"max": 120,
+				"min": 0,
+				"order": 179,
+				"text": "Hue Shift Off Time Seconds (rec: 20)",
+				"type": "slider",
+				"value": 10
+			},
+			"hueshift_step": {
+				"condition": "hueshift_enabled.value",
+				"fraction": false,
+				"index": 75,
+				"max": 180,
+				"min": 10,
+				"order": 175,
+				"text": "Hue Shift Step Degrees (rec: 60)",
+				"type": "slider",
+				"value": 83
+			},
+			"idle_random_splats": {
+				"index": 7,
+				"order": 107,
+				"text": "Idle Random Splats",
+				"type": "bool",
+				"value": true
+			},
+			"ignore_fps_limit": {
+				"index": 33,
+				"order": 133,
+				"text": "Ignore FPS Limit",
+				"type": "bool",
+				"value": false
+			},
+			"max_brightness": {
+				"fraction": true,
+				"index": 50,
+				"max": 4,
+				"min": 0.3,
+				"order": 150,
+				"precision": 2,
+				"step": 0.05,
+				"text": "Color Intensity Cap (rec: 1.2)",
+				"type": "slider",
+				"value": 1.35
+			},
+			"more_colors": {
+				"condition": "!colorful.value",
+				"index": 12,
+				"order": 112,
+				"text": "More Colors",
+				"type": "bool",
+				"value": true
+			},
+			"paused": {
+				"index": 29,
+				"order": 129,
+				"text": "Paused",
+				"type": "bool",
+				"value": false
+			},
+			"pressure_diffusion": {
+				"fraction": true,
+				"index": 25,
+				"max": 1,
+				"min": 0,
+				"order": 125,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Pressure Diffusion",
+				"type": "slider",
+				"value": 0.85
+			},
+			"random_splat_amount": {
+				"condition": "idle_random_splats.value",
+				"fraction": true,
+				"index": 9,
+				"max": 100,
+				"min": 1,
+				"order": 109,
+				"precision": 2,
+				"step": 1,
+				"text": "Random Splat Amount",
+				"type": "slider",
+				"value": 8
+			},
+			"random_splat_interval": {
+				"condition": "idle_random_splats.value",
+				"fraction": true,
+				"index": 8,
+				"max": 30,
+				"min": 0,
+				"order": 108,
+				"precision": 2,
+				"step": 0.1,
+				"text": "Random Splat Interval",
+				"type": "slider",
+				"value": 9.6
+			},
+			"saturation_restore": {
+				"fraction": true,
+				"index": 51,
+				"max": 1,
+				"min": 0,
+				"order": 151,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Saturation Restore per Second (rec: 0.5)",
+				"type": "slider",
+				"value": 0.93
+			},
+			"schemecolor": {
+				"order": 0,
+				"text": "ui_browse_properties_scheme_color",
+				"type": "color",
+				"value": "0 0 0"
+			},
+			"shading": {
+				"index": 28,
+				"order": 128,
+				"text": "Shading",
+				"type": "bool",
+				"value": true
+			},
+			"show_mouse_movement": {
+				"index": 0,
+				"order": 100,
+				"text": "Show Mouse Movement",
+				"type": "bool",
+				"value": true
+			},
+			"simulation_resolution": {
+				"index": 21,
+				"options": [
+					{
+						"label": "32",
+						"value": "32"
+					},
+					{
+						"label": "64",
+						"value": "64"
+					},
+					{
+						"label": "128",
+						"value": "128"
+					},
+					{
+						"label": "256",
+						"value": "256"
+					}
+				],
+				"order": 121,
+				"text": "Simulation Resolution",
+				"type": "combo",
+				"value": "256"
+			},
+			"sound_sensitivity": {
+				"condition": "audio_responsive.value",
+				"fraction": true,
+				"index": 18,
+				"max": 10,
+				"min": 0,
+				"order": 118,
+				"precision": 3,
+				"step": 0.01,
+				"text": "Sound Sensitivity",
+				"type": "slider",
+				"value": 0
+			},
+			"splat_color": {
+				"condition": "!colorful.value",
+				"index": 11,
+				"order": 111,
+				"text": "Splat Color",
+				"type": "color",
+				"value": "0 1 0"
+			},
+			"splat_color_2": {
+				"condition": "more_colors.value && !colorful.value",
+				"index": 13,
+				"order": 113,
+				"text": "Splat Color 2",
+				"type": "color",
+				"value": "0 1 1"
+			},
+			"splat_color_3": {
+				"condition": "more_colors.value && !colorful.value",
+				"index": 14,
+				"order": 114,
+				"text": "Splat Color 3",
+				"type": "color",
+				"value": "0 0 1"
+			},
+			"splat_color_4": {
+				"condition": "more_colors.value && !colorful.value",
+				"index": 15,
+				"order": 115,
+				"text": "Splat Color 4",
+				"type": "color",
+				"value": "1 0 0"
+			},
+			"splat_color_5": {
+				"condition": "more_colors.value && !colorful.value",
+				"index": 16,
+				"order": 116,
+				"text": "Splat Color 5",
+				"type": "color",
+				"value": "0.9411764705882353 1 0"
+			},
+			"splat_on_click": {
+				"index": 1,
+				"order": 101,
+				"text": "Splat on click",
+				"type": "bool",
+				"value": true
+			},
+			"splat_radius": {
+				"fraction": true,
+				"index": 27,
+				"max": 1,
+				"min": 0.01,
+				"order": 127,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Splat Radius",
+				"type": "slider",
+				"value": 0.64
+			},
+			"surv_dark_floor": {
+				"condition": "auto_splats.value && auto_pause.value",
+				"fraction": false,
+				"index": 69,
+				"max": 40,
+				"min": 0,
+				"order": 169,
+				"text": "Survivor Wanderer Dark Floor % (rec: 8)",
+				"type": "slider",
+				"value": 8
+			},
+			"velocity_diffusion": {
+				"fraction": true,
+				"index": 24,
+				"max": 1,
+				"min": 0.9,
+				"order": 124,
+				"precision": 3,
+				"step": 0.001,
+				"text": "Velocity Diffusion",
+				"type": "slider",
+				"value": 0.999
+			},
+			"vorticity": {
+				"fraction": false,
+				"index": 26,
+				"max": 50,
+				"min": 0,
+				"order": 126,
+				"text": "Vorticity",
+				"type": "slider",
+				"value": 48
+			},
+			"wanderer_brightness": {
+				"condition": "auto_splats.value",
+				"fraction": true,
+				"index": 68,
+				"max": 1,
+				"min": 0.05,
+				"order": 168,
+				"precision": 2,
+				"step": 0.05,
+				"text": "Wanderer Emission Brightness (rec: 0.5)",
+				"type": "slider",
+				"value": 0.1
+			},
+			"wanderer_count": {
+				"condition": "auto_splats.value",
+				"fraction": false,
+				"index": 41,
+				"max": 8,
+				"min": 1,
+				"order": 141,
+				"text": "Wanderer Count (rec: 3)",
+				"type": "slider",
+				"value": 2
+			},
+			"wanderer_mode": {
+				"condition": "auto_splats.value",
+				"index": 42,
+				"options": [
+					{
+						"label": "Random Wander",
+						"value": "random"
+					},
+					{
+						"label": "Circle",
+						"value": "circle"
+					},
+					{
+						"label": "Figure 8",
+						"value": "figure8"
+					}
+				],
+				"order": 142,
+				"text": "Wanderer Path",
+				"type": "combo",
+				"value": "random"
+			},
+			"wanderer_resume_delay": {
+				"condition": "auto_splats.value",
+				"fraction": true,
+				"index": 45,
+				"max": 30,
+				"min": 0,
+				"order": 145,
+				"precision": 1,
+				"step": 0.5,
+				"text": "Resume After Idle Seconds (rec: 4)",
+				"type": "slider",
+				"value": 4.5
+			},
+			"wanderer_scale": {
+				"condition": "auto_splats.value && wanderer_mode.value != 'random'",
+				"fraction": true,
+				"index": 44,
+				"max": 0.9,
+				"min": 0.1,
+				"order": 144,
+				"precision": 2,
+				"step": 0.01,
+				"text": "Wanderer Path Size (rec: 0.35)",
+				"type": "slider",
+				"value": 0.1
+			},
+			"wanderer_speed": {
+				"condition": "auto_splats.value",
+				"fraction": false,
+				"index": 43,
+				"max": 1200,
+				"min": 50,
+				"order": 143,
+				"text": "Wanderer Speed (rec: 300)",
+				"type": "slider",
+				"value": 246
+			},
+			"wide_gamut": {
+				"index": 64,
+				"order": 164,
+				"text": "Wide Gamut P3 (rec: on, QD-OLED)",
+				"type": "bool",
+				"value": true
+			}
+		},
+		"supportsaudioprocessing": true
+	},
+	"preview": "preview.gif",
+	"ratingsex": "none",
+	"ratingviolence": "none",
+	"tags": [
+		"Abstract"
+	],
+	"title": "Hyper-Vivid Fluid \u2014 OLED / Wide Gamut Edition",
+	"type": "Web",
+	"version": 5,
+	"visibility": "public"
+}

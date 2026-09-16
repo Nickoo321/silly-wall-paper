@@ -39,40 +39,7 @@ static float RandF() { return (float)rand() / (float)RAND_MAX; }
 static float HalfToFloat(uint16_t h);   // defined below
 
 struct RGB { float r, g, b; };
-struct Mat3 { float m[9]; };   // row-major
-
-static Mat3 Mat3Identity() { return { 1,0,0, 0,1,0, 0,0,1 }; }
-static Mat3 Mat3Mul(const Mat3& a, const Mat3& b) {
-    Mat3 r = {};
-    for (int i = 0; i < 3; i++)
-        for (int j = 0; j < 3; j++)
-            r.m[i * 3 + j] = a.m[i * 3 + 0] * b.m[0 * 3 + j] +
-                             a.m[i * 3 + 1] * b.m[1 * 3 + j] +
-                             a.m[i * 3 + 2] * b.m[2 * 3 + j];
-    return r;
-}
-static Mat3 Mat3Scale(const Mat3& a, float s) {
-    Mat3 r = a;
-    for (int i = 0; i < 9; i++) r.m[i] *= s;
-    return r;
-}
-// CSS filter matrices (SVG/W3C spec, applied in gamma space like the browser)
-static Mat3 CssHueRotate(float deg) {
-    float c = cosf(deg * 3.14159265f / 180.0f);
-    float s = sinf(deg * 3.14159265f / 180.0f);
-    return {
-        0.213f + 0.787f * c - 0.213f * s, 0.715f - 0.715f * c - 0.715f * s, 0.072f - 0.072f * c + 0.787f * s,
-        0.213f - 0.213f * c + 0.143f * s, 0.715f + 0.285f * c + 0.140f * s, 0.072f - 0.072f * c - 0.283f * s,
-        0.213f - 0.213f * c - 0.787f * s, 0.715f - 0.715f * c + 0.715f * s, 0.072f + 0.928f * c + 0.072f * s,
-    };
-}
-static Mat3 CssSaturate(float s) {
-    return {
-        0.213f + 0.787f * s, 0.715f - 0.715f * s, 0.072f - 0.072f * s,
-        0.213f - 0.213f * s, 0.715f + 0.285f * s, 0.072f - 0.072f * s,
-        0.213f - 0.213f * s, 0.715f - 0.715f * s, 0.072f + 0.928f * s,
-    };
-}
+// (CSS filter matrices now live in the display shader; see kDisplaySrc.)
 
 static RGB HSVtoRGB(float h, float s, float v) {
     int i = (int)floorf(h * 6.0f);
@@ -817,33 +784,14 @@ void FluidRenderer::BuildDisplayConstants(float out[32]) {
 
 void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
                                             float sdrScale, float peakNits) {
-    // CSS-filter chain in reference order: saturate -> brightness -> contrast
-    // -> hue-rotate. Composed into one matrix + offset. Hue-rotate preserves
-    // white, so the contrast offset passes through unchanged.
-    Mat3 M = Mat3Identity();
-    float off = 0.0f;
-    if (m_hdrActive && m_cfg.hdrCompensation) {
-        M = CssSaturate(m_cfg.hdrSaturation);
-        M = Mat3Scale(M, m_cfg.hdrBrightness * m_cfg.hdrContrast);
-        off = 0.5f * (1.0f - m_cfg.hdrContrast);
-    }
+    // CSS-filter chain parameters. The shader evaluates them primitive by
+    // primitive with a clamp after each (Chromium/Skia behaviour); see
+    // kDisplaySrc. Canvas filter: saturate -> brightness -> contrast ->
+    // hue-rotate (the hue-shift burst). Then WE's right-panel adjust,
+    // outermost: saturate -> brightness -> contrast -> hue-rotate.
+    float hdrOn = (m_hdrActive && m_cfg.hdrCompensation) ? 1.0f : 0.0f;
     float hue = fmodf(m_hueAngle, 360.0f);
-    if (hue < -0.05f || hue > 0.05f)
-        M = Mat3Mul(CssHueRotate(hue), M);
-
-    // Post color filter (WE right-panel equivalent), applied outermost.
-    // All these matrices map grey to grey, so the running offset stays scalar:
-    // it just picks up the brightness*contrast gain plus the contrast shift.
-    if (m_cfg.postSaturation != 1.0f || m_cfg.postContrast != 1.0f ||
-        m_cfg.postBrightness != 1.0f || m_cfg.postHue != 0.0f) {
-        Mat3 P = CssSaturate(m_cfg.postSaturation);
-        P = Mat3Scale(P, m_cfg.postBrightness * m_cfg.postContrast);
-        if (m_cfg.postHue != 0.0f)
-            P = Mat3Mul(CssHueRotate(m_cfg.postHue), P);
-        M = Mat3Mul(P, M);
-        off = off * m_cfg.postBrightness * m_cfg.postContrast +
-              0.5f * (1.0f - m_cfg.postContrast);
-    }
+    if (hue > -0.05f && hue < 0.05f) hue = 0.0f;
 
     // HDR highlight expansion: gain that carries hot dye from SDR white up to
     // the peak-nits target (resolved by the shell; 0 = parity mode).
@@ -857,10 +805,10 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
                          m_cfg.shading ? 1.0f : 0.0f, sdrScale,
                          (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
-                         M.m[0], M.m[1], M.m[2], 0,
-                         M.m[3], M.m[4], M.m[5], 0,
-                         M.m[6], M.m[7], M.m[8], 0,
-                         off, off, off, 0,
+                         m_cfg.hdrSaturation, m_cfg.hdrBrightness, m_cfg.hdrContrast, hdrOn,
+                         hue, m_cfg.postSaturation, m_cfg.postBrightness, m_cfg.postContrast,
+                         m_cfg.postHue, 0, 0, 0,
+                         0, 0, 0, 0,
                          m_cfg.curveEnabled ? 1.0f : 0.0f,
                          m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight,
                          m_cfg.shadowFloor, m_cfg.shadowKnee, 0.0f, 0.0f };

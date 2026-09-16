@@ -1071,6 +1071,7 @@ struct ShotOpts {
     float    sdrWhiteNits = 240.0f;
     float    panelMaxNits = 1000.0f;   // stands in for the DXGI-reported max
     bool     mouseNone = true;
+    int      yieldMs = 2;              // --shot-yield ms: sleep per simulated frame
 };
 
 static void ShotLog(const char* fmt, ...) {
@@ -1223,6 +1224,8 @@ static int RunShotMode() {
                         o.width = w; o.height = h;
                     }
                 }
+            } else if (wcscmp(argv[i], L"--shot-yield") == 0 && i + 1 < argc) {
+                o.yieldMs = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
                 if (const wchar_t* v = next()) o.delaySec = (float)_wtof(v);
             } else if (wcscmp(argv[i], L"--shot-series") == 0) {
@@ -1322,6 +1325,10 @@ static int RunShotMode() {
             renderer.SetHdrOptions(peak, g_gamutMode);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
             frames++;
+            // Leave the GPU some air: an unthrottled full-res sim starves the
+            // compositor and Wallpaper Engine (the OLED went grey once when
+            // two of these ran at once). Never run two shot processes together.
+            if (o.yieldMs > 0) Sleep((DWORD)o.yieldMs);
             if (frames >= nextLog) {
                 ShotLog("[shot] simulated %.1f s (%lld frames, %.1f s wall)\n",
                         frames / 144.0, frames, (GetTickCount() - wallStart) / 1000.0);

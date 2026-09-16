@@ -477,3 +477,51 @@ skipped moods grayed (owner-draw, still clickable for forcing).
   build/acid-p0b.png + acid-p1b.png (flatter/brighter interiors, moodier
   medium, rim-hugging speckle; hole-ier web with thinner strands).
   ~57 fps at 2560×1440. SDR only; HDR is a follow-up (same as oil).
+
+## 2026-09-15 — Color parity vs the WE original (session with Opus subagents)
+
+User verdict: the modded WE version (reference/script.js) looked awesome, the
+port's colors "are ass". Priority: WE-look parity first, oil-as-render-mode
+after (see OIL-REVIEW.md for the oil PoC review + recommendation).
+
+- **Ground truth extracted from Wallpaper Engine's config.json** into
+  WE-LIVE-PROPERTIES.json (live per-monitor property values of "Fluid Custom")
+  and WE-PRESETS.json (saved presets). WE right-panel color adjust =
+  wec_sa/con/brs/hue on 0..100 (50 neutral); user's look = 57/67/53/54 ->
+  saturate 1.14, contrast 1.34, brightness 1.06, hue +14.4 deg. WE global fps
+  cap is 240 (wallpaper ran ~100 fps). Monitor layout corrected: the fluid
+  runs full-bleed on the PRIMARY X27U (WE calls that slot "Monitor1").
+- **Reference captures** of the live WE original: reference/shots/ (3-min
+  series + 3 bursts + workshop gif frames; contact sheets + gifs tracked,
+  raw frames gitignored). Screenshots clip the panel's P3 green; hue and
+  composition only. Look: extreme saturation, true black + hue-tinted haze,
+  hard dark rims, global hue steps every 10-20 s.
+- **COLOR-AUDIT.md** (Opus): the port's pipeline is a faithful translation;
+  the bad colors are configuration: moods conductor on (recipes desaturate,
+  grey-lift, hue-lock), shadow_floor=0.10 neutral grey add, hue band vs full
+  wheel, gamut=2 BT.2020 vs WE's Display-P3, post_contrast drift 1.27 vs
+  1.34, peak_nits gain firing only on already-clipped pixels, decay_fast
+  0.614 vs WE's 1.0 (erases the accumulate-then-ignite faint field).
+  Code-level: no clamp before the CSS filter matrix (canvas was 8-bit) and
+  no clamp between primitives (Skia clamps after every colour-matrix stage —
+  verified in cc/paint/render_surface_filters.cc).
+- **Offscreen `--shot` mode** (Opus): headless deterministic render, see
+  main.cpp header comment; configs in reference/configs/, sheets via
+  reference/configs/ab.py + blind.py. LESSON: never run two shot processes
+  at once — the OLED went grey (GPU starvation of DWM/WE); shot mode now
+  yields per frame (`--shot-yield`, default 2 ms; 25 ms ~= 30 fps wall while
+  the user games). Long batches: build/shots/batch.cmd detached.
+- **Code changes**: display shader evaluates the CSS chain primitive by
+  primitive with saturate() after each (input clamp first); shadow floor is
+  now chroma-preserving (scales the pixel's own colour, no grey add); HDR
+  expansion gain is driven by the RAW dye intensity and scales all channels
+  in linear light (hue/sat preserved, "fluorescent" headroom) — identity at
+  peak_nits=0; InitMoods no longer applies the default base mood's
+  peak_nits when moods are off and no base_mood is persisted.
+- **A/B step 1** (live config vs parity config, same seed): user preferred
+  parity ("B looked better"). Going forward: BLIND A/B/C/D sheets, key kept
+  in build/shots/blindN-key.txt until the user picks.
+- Pending: blind sheet of s1 parity / s2 +clamps / s3 +chroma shadow 0.10 /
+  s4 +HDR 700 nits knee 0.7; on-screen verification with HDR on (screenshots
+  can't show the P3 green); then fix presets\WE Original.ini to carry every
+  parity key; decide moods policy (moods must not go below parity sat).

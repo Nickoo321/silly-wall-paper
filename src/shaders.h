@@ -268,9 +268,13 @@ cbuffer CB : register(b0) {
     float  peakGain;    // HDR highlight expansion: peakNits / sdrWhiteNits (1 = off)
     float  knee;        // dye brightness where highlight expansion starts
     float  capBright;   // dye brightness cap (expansion reaches peakGain here)
-    // Combined CSS-filter matrix (hue-rotate burst + HDR compensation
-    // saturate/brightness/contrast), applied in gamma space like the
-    // reference's canvas filter. Identity when inactive.
+    // CSS-filter chain parameters, evaluated primitive by primitive in gamma
+    // space with a clamp to [0,1] after each one — exactly what Chromium/Skia
+    // does with the reference's canvas filter (each filter function is its
+    // own colour-matrix stage, and Skia clamps after every stage).
+    //   fm0 = (hdrSaturate, hdrBrightness, hdrContrast, hdrEnabled)
+    //   fm1 = (hueBurstDeg, postSaturate, postBrightness, postContrast)
+    //   fm2 = (postHueDeg, 0, 0, 0)
     float4 fm0;
     float4 fm1;
     float4 fm2;
@@ -309,8 +313,29 @@ float3 SRGBToLinear(float3 c) {
     return lerp(lo, hi, step(0.04045, c));
 }
 
+// CSS/SVG colour-matrix primitives (W3C Filter Effects), Rec.709 luma.
+float3 CssSaturate(float3 c, float s) {
+    return float3(
+        dot(float3(0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s), c),
+        dot(float3(0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s), c),
+        dot(float3(0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s), c));
+}
+float3 CssHueRotate(float3 c, float deg) {
+    float a = radians(deg);
+    float co = cos(a), si = sin(a);
+    return float3(
+        dot(float3(0.213 + 0.787 * co - 0.213 * si, 0.715 - 0.715 * co - 0.715 * si, 0.072 - 0.072 * co + 0.787 * si), c),
+        dot(float3(0.213 - 0.213 * co + 0.143 * si, 0.715 + 0.285 * co + 0.140 * si, 0.072 - 0.072 * co - 0.283 * si), c),
+        dot(float3(0.213 - 0.213 * co - 0.787 * si, 0.715 - 0.715 * co + 0.715 * si, 0.072 + 0.928 * co + 0.072 * si), c));
+}
+float3 CssContrast(float3 c, float k) { return c * k + 0.5 * (1.0 - k); }
+
 float4 PSMain(VSOut i) : SV_Target {
     float3 C = Dye.SampleLevel(linearClamp, i.uv, 0).rgb;
+    // Raw dye intensity, before shading/filters/clamps: drives the HDR
+    // highlight expansion below so it can see how hot the dye really is
+    // (the clamped, filtered colour can't exceed 1.0 any more).
+    float m = max(C.r, max(C.g, C.b));
     if (shading > 0.5) {
         float3 L = Dye.SampleLevel(linearClamp, i.uv - float2(texelSize.x, 0), 0).rgb;
         float3 R = Dye.SampleLevel(linearClamp, i.uv + float2(texelSize.x, 0), 0).rgb;
@@ -322,8 +347,21 @@ float4 PSMain(VSOut i) : SV_Target {
         float diffuse = clamp(dot(n, float3(0, 0, 1)) + 0.7, 0.7, 1.0);
         C *= diffuse;
     }
-    // CSS-filter equivalent (gamma space, like the reference's canvas filter)
-    C = float3(dot(fm0.xyz, C), dot(fm1.xyz, C), dot(fm2.xyz, C)) + fmOff.xyz;
+    // The reference composited the dye into an 8-bit canvas before any CSS
+    // filter touched it, so dye above 1.0 (cap 1.35, bursts 1.5) was flattened
+    // to 1.0 first. Then: canvas filter (HDR compensation + hue-rotate burst),
+    // then Wallpaper Engine's right-panel adjust, each primitive clamped.
+    C = saturate(C);
+    if (fm0.w > 0.5) {
+        C = saturate(CssSaturate(C, fm0.x));
+        C = saturate(C * fm0.y);
+        C = saturate(CssContrast(C, fm0.z));
+    }
+    if (abs(fm1.x) > 0.05) C = saturate(CssHueRotate(C, fm1.x));
+    C = saturate(CssSaturate(C, fm1.y));
+    C = saturate(C * fm1.z);
+    C = saturate(CssContrast(C, fm1.w));
+    if (abs(fm2.x) > 0.05) C = saturate(CssHueRotate(C, fm2.x));
 
     // Response curve: remap brightness through a Gaussian hump. Hue preserved
     // (all channels scaled together); pixels below ~0.2% forced to black so the
@@ -336,15 +374,16 @@ float4 PSMain(VSOut i) : SV_Target {
         C *= scale;
     }
 
-    // Shadow floor: neutral gray lift, strongest at black, gone above the
-    // knee. Keeps dark-region marbling visible on OLED instead of crushing.
+    // Shadow floor: chroma-preserving lift, strongest at black, gone above
+    // the knee. Scales the pixel's own colour up toward the floor (hue and
+    // saturation intact) instead of adding neutral grey, so dark marbling
+    // stays visible without washing the blacklight look. Pixels that are
+    // exactly zero stay zero — there is no marbling to reveal in empty fluid.
     if (shadow.x > 0.0001) {
         float lum = max(C.r, max(C.g, C.b));
-        C += shadow.x * (1.0 - smoothstep(0.0, max(shadow.y, 0.001), lum));
+        float lift = shadow.x * (1.0 - smoothstep(0.0, max(shadow.y, 0.001), lum));
+        C *= (lum + lift) / max(lum, 1e-4);
     }
-
-    // pre-clamp brightness drives the HDR highlight expansion below
-    float m = max(C.r, max(C.g, C.b));
 
     float3 lin = SRGBToLinear(saturate(C));
     // Interpret the dye in a wider gamut and convert to the swap chain's 709
@@ -362,8 +401,12 @@ float4 PSMain(VSOut i) : SV_Target {
             dot(float3(-0.01964, -0.07868,  1.09832), lin));
     }
 
-    // True HDR: bright dye rises past SDR white toward the peak-nits target,
-    // with a soft knee so mids stay at parity and only hot spots bloom.
+    // True HDR ("parity-plus"): the SDR-parity colour above is complete and
+    // already clamped, so this gain scales ALL channels together in linear
+    // light — hue and saturation are untouched, hot dye just gets brighter
+    // than SDR white (a saturated red at 600 nits, not a white core). Driven
+    // by the raw dye intensity with a soft knee: below `knee` exact parity,
+    // reaching peakGain at the dye cap. Identity when peak_nits = 0.
     float gain = 1.0;
     if (peakGain > 1.001) {
         float t = smoothstep(knee, max(capBright, knee + 0.01), m);

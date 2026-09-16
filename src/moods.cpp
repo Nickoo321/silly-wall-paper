@@ -160,7 +160,7 @@ void ApplyMoodPeakNits(const wchar_t* moodPath) {
     if (buf[0]) {
         g_hdrPeakNits = (float)_wtof(buf);
     } else {
-        GetPrivateProfileStringW(L"hdr", L"peak_nits", L"-1", buf, 64, g_iniPath);
+        GetPrivateProfileStringW(L"hdr", L"peak_nits", L"-1", buf, 64, g_configIniPath);
         g_hdrPeakNits = (float)_wtof(buf);
     }
 }
@@ -208,7 +208,7 @@ int NextUnskipped(int from) {
 void LoadSkipList() {
     s_skipNames.clear();
     wchar_t buf[4096];
-    DWORD n = GetPrivateProfileStringW(L"moods", L"skip", L"", buf, 4096, g_iniPath);
+    DWORD n = GetPrivateProfileStringW(L"moods", L"skip", L"", buf, 4096, g_configIniPath);
     std::wstring cur;
     for (DWORD i = 0; i < n; i++) {
         if (buf[i] == L';') {
@@ -227,6 +227,7 @@ void PersistSkipList() {
         if (!joined.empty()) joined += L';';
         joined += nm;
     }
+    if (g_configReadOnly) return;   // --shot: never touch the live config
     WritePrivateProfileStringW(L"moods", L"skip", joined.c_str(), g_iniPath);
 }
 
@@ -267,7 +268,8 @@ void RescanKeepCurrent() {
 
 // one-time fold of the legacy presets folder into the moods folder
 void MigratePresetsOnce() {
-    if (GetPrivateProfileIntW(L"moods", L"migrated", 0, g_iniPath)) return;
+    if (g_configReadOnly) return;   // --shot: no file copies
+    if (GetPrivateProfileIntW(L"moods", L"migrated", 0, g_configIniPath)) return;
     wchar_t pdir[MAX_PATH], mdir[MAX_PATH], pattern[MAX_PATH];
     wcscpy_s(pdir, MAX_PATH, g_iniPath);
     wchar_t* sl = wcsrchr(pdir, L'\\');
@@ -287,11 +289,12 @@ void MigratePresetsOnce() {
         } while (FindNextFileW(find, &fd));
         FindClose(find);
     }
-    WritePrivateProfileStringW(L"moods", L"migrated", L"1", g_iniPath);
+    if (!g_configReadOnly) WritePrivateProfileStringW(L"moods", L"migrated", L"1", g_iniPath);
     if (copied) printf("[moods] migrated %d preset(s) into the moods folder\n", copied);
 }
 
 void WriteFileIfMissing(const wchar_t* path, const char* text) {
+    if (g_configReadOnly) return;   // --shot: ship nothing, write nothing
     if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) return;
     HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
@@ -425,7 +428,7 @@ void MoodsApplyBase(FluidConfig& cfg) {
     // pick) — an absent key means "the user's own settings", never stomp them.
     if (s_moods.empty()) return;
     wchar_t buf[64];
-    GetPrivateProfileStringW(L"moods", L"base_mood", L"", buf, 64, g_iniPath);
+    GetPrivateProfileStringW(L"moods", L"base_mood", L"", buf, 64, g_configIniPath);
     if (!buf[0]) return;
     for (int i = 0; i < (int)s_moods.size(); i++) {
         if (_wcsicmp(s_moods[i].name.c_str(), buf) != 0) continue;
@@ -443,30 +446,41 @@ void InitMoods() {
 
     wchar_t buf[64];
     // migration: old [cycle] enabled=1 with no [moods] section -> enable moods
-    GetPrivateProfileStringW(L"moods", L"enabled", L"", buf, 64, g_iniPath);
+    GetPrivateProfileStringW(L"moods", L"enabled", L"", buf, 64, g_configIniPath);
     if (buf[0] == L'\0') {
-        int oldCycle = GetPrivateProfileIntW(L"cycle", L"enabled", 0, g_iniPath);
+        int oldCycle = GetPrivateProfileIntW(L"cycle", L"enabled", 0, g_configIniPath);
         if (oldCycle) {
             g_moodSettings.enabled = true;
-            WritePrivateProfileStringW(L"moods", L"enabled", L"1", g_iniPath);
+            if (!g_configReadOnly)
+                WritePrivateProfileStringW(L"moods", L"enabled", L"1", g_iniPath);
         }
     } else {
         g_moodSettings.enabled = wcstol(buf, nullptr, 10) != 0;
     }
-    g_moodSettings.dwellMinutes = (float)GetPrivateProfileIntW(L"moods", L"dwell_minutes", 3, g_iniPath);
-    g_moodSettings.transitionSec = (float)GetPrivateProfileIntW(L"moods", L"transition_seconds", 4, g_iniPath);
-    GetPrivateProfileStringW(L"moods", L"jitter", L"0.3", buf, 64, g_iniPath);
+    g_moodSettings.dwellMinutes = (float)GetPrivateProfileIntW(L"moods", L"dwell_minutes", 3, g_configIniPath);
+    g_moodSettings.transitionSec = (float)GetPrivateProfileIntW(L"moods", L"transition_seconds", 4, g_configIniPath);
+    GetPrivateProfileStringW(L"moods", L"jitter", L"0.3", buf, 64, g_configIniPath);
     g_moodSettings.jitter = (float)_wtof(buf);
-    g_moodSettings.earlySwitchDarkPct = (float)GetPrivateProfileIntW(L"moods", L"early_switch_darkpct", 92, g_iniPath);
-    g_moodSettings.minDwellSec = (float)GetPrivateProfileIntW(L"moods", L"min_dwell_seconds", 60, g_iniPath);
+    g_moodSettings.earlySwitchDarkPct = (float)GetPrivateProfileIntW(L"moods", L"early_switch_darkpct", 92, g_configIniPath);
+    g_moodSettings.minDwellSec = (float)GetPrivateProfileIntW(L"moods", L"min_dwell_seconds", 60, g_configIniPath);
 
     // default to Neon when unset: the shipped live config is the Neon recipe,
     // so assuming Clouds would make the first "next mood" a no-op transition
-    GetPrivateProfileStringW(L"moods", L"base_mood", L"Neon", buf, 64, g_iniPath);
+    GetPrivateProfileStringW(L"moods", L"base_mood", L"Neon", buf, 64, g_configIniPath);
     s_current = 0;
     for (int i = 0; i < (int)s_moods.size(); i++)
         if (_wcsicmp(s_moods[i].name.c_str(), buf) == 0) { s_current = i; break; }
-    if (!s_moods.empty()) ApplyMoodPeakNits(s_moods[s_current].path.c_str());
+    // Only let the base mood override peak_nits when moods actually drive
+    // the look (cycling on, or base_mood explicitly persisted). Otherwise the
+    // ini's own [hdr] peak_nits is the truth — same rule as MoodsApplyBase.
+    {
+        wchar_t bm[64] = {};
+        GetPrivateProfileStringW(L"moods", L"base_mood", L"", bm, 64, g_configIniPath);
+        if (!s_moods.empty() && (g_moodSettings.enabled || bm[0]))
+            ApplyMoodPeakNits(s_moods[s_current].path.c_str());
+        else
+            ApplyMoodPeakNits(L"");   // no mood file -> falls through to the ini value
+    }
     if (s_moods.empty()) s_current = -1;
     RefreshLockCache();   // the config half of the UI cache needs the renderer;
                           // the settings window builds it via MoodsRefreshUiCache
@@ -529,7 +543,8 @@ void UpdateMoods(FluidRenderer& r, float dt) {
 
 void MoodsSetEnabled(bool on) {
     g_moodSettings.enabled = on;
-    WritePrivateProfileStringW(L"moods", L"enabled", on ? L"1" : L"0", g_iniPath);
+    if (!g_configReadOnly)
+        WritePrivateProfileStringW(L"moods", L"enabled", on ? L"1" : L"0", g_iniPath);
     if (g_renderer) g_renderer->SetCoverageWanted(on);
 }
 
@@ -551,7 +566,8 @@ void MoodsForceMood(FluidRenderer& r, int index) {
         r.ReleaseHueShift(false);
         FinishTransition(r);
     }
-    WritePrivateProfileStringW(L"moods", L"base_mood", s_moods[index].name.c_str(), g_iniPath);
+    if (!g_configReadOnly)
+        WritePrivateProfileStringW(L"moods", L"base_mood", s_moods[index].name.c_str(), g_iniPath);
     BeginTransition(r, index);
 }
 
@@ -573,7 +589,8 @@ void MoodsAdoptPath(FluidRenderer& r, const std::wstring& path) {
         float j = g_moodSettings.jitter;
         s_dwellTarget = g_moodSettings.dwellMinutes * 60.0f *
                         (1.0f - j + 2.0f * j * ((float)rand() / RAND_MAX));
-        WritePrivateProfileStringW(L"moods", L"base_mood", s_moods[i].name.c_str(), g_iniPath);
+        if (!g_configReadOnly)
+            WritePrivateProfileStringW(L"moods", L"base_mood", s_moods[i].name.c_str(), g_iniPath);
         JourneyAttach(s_moods[i].path.c_str());   // self-detaches if no [journey]
         ApplyMoodPeakNits(s_moods[i].path.c_str());
         MoodsRefreshUiCache(r);                   // markers compare vs this mood now

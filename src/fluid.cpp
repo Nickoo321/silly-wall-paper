@@ -115,12 +115,35 @@ static void GetResolution(int base, int screenW, int screenH, int* outW, int* ou
     else                   { *outW = mn; *outH = mx; }
 }
 
+// --shot determinism: when non-zero, every rand()-driven behavior (startup
+// splat burst, wanderer placement, darts, idle bursts, mood jitter) replays
+// from this seed instead of the wall clock.
+static unsigned g_randSeed = 0;
+void FluidRenderer::SetRandomSeed(unsigned seed) { g_randSeed = seed; }
+
 void FluidRenderer::Init(HWND hwnd, int width, int height, const FluidConfig& cfg) {
+    m_headless = false;
+    InitCommon(hwnd, width, height, cfg);
+}
+
+// Headless: same setup, no window and no swap chain. CreateDevice branches on
+// m_headless and builds an offscreen FP16 render target instead.
+void FluidRenderer::InitOffscreen(int width, int height, const FluidConfig& cfg) {
+    m_headless = true;
+    InitCommon(nullptr, width, height, cfg);
+}
+
+void FluidRenderer::InitCommon(HWND hwnd, int width, int height, const FluidConfig& cfg) {
     m_cfg = cfg;
     m_width = width;
     m_height = height;
-    m_globalHue = RandF();
-    srand(GetTickCount());
+    if (g_randSeed) {
+        srand(g_randSeed);
+        m_globalHue = RandF();
+    } else {
+        m_globalHue = RandF();
+        srand(GetTickCount());
+    }
 
     CreateDevice(hwnd, width, height);
     if (!m_cfg.gradientMode) CreateSimResources();
@@ -155,29 +178,34 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
     HR(m_device->CreateCommandQueue(&qd, IID_PPV_ARGS(&m_queue)));
 
-    DXGI_SWAP_CHAIN_DESC1 sd = {};
-    sd.Width = width;
-    sd.Height = height;
-    sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-    sd.SampleDesc.Count = 1;
-    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = kFrames;
-    sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-    sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    if (!m_headless) {
+        DXGI_SWAP_CHAIN_DESC1 sd = {};
+        sd.Width = width;
+        sd.Height = height;
+        sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = kFrames;
+        sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
-    ComPtr<IDXGISwapChain1> sc1;
-    HR(m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1));
-    HR(sc1.As(&m_swapChain));
-    m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
+        ComPtr<IDXGISwapChain1> sc1;
+        HR(m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1));
+        HR(sc1.As(&m_swapChain));
+        m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
-    const DXGI_COLOR_SPACE_TYPE scRGB = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
-    UINT support = 0;
-    HR(m_swapChain->CheckColorSpaceSupport(scRGB, &support));
-    if (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) {
-        HR(m_swapChain->SetColorSpace1(scRGB));
-        printf("Swap chain: R16G16B16A16_FLOAT, scRGB color space set (1.0 = 80 nits)\n");
+        const DXGI_COLOR_SPACE_TYPE scRGB = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+        UINT support = 0;
+        HR(m_swapChain->CheckColorSpaceSupport(scRGB, &support));
+        if (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) {
+            HR(m_swapChain->SetColorSpace1(scRGB));
+            printf("Swap chain: R16G16B16A16_FLOAT, scRGB color space set (1.0 = 80 nits)\n");
+        } else {
+            printf("WARNING: scRGB color space not supported on this output!\n");
+        }
     } else {
-        printf("WARNING: scRGB color space not supported on this output!\n");
+        printf("Headless: no swap chain, offscreen R16G16B16A16_FLOAT target "
+               "%dx%d (linear scRGB, 1.0 = 80 nits)\n", width, height);
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC hd = {};
@@ -188,8 +216,10 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < kFrames; i++) {
-        HR(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])));
-        m_device->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, rtv);
+        if (!m_headless) {   // headless: no back buffers; RTV slot 0 = shot target
+            HR(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])));
+            m_device->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, rtv);
+        }
         rtv.ptr += m_rtvStride;
         HR(m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
                                             IID_PPV_ARGS(&m_allocators[i])));
@@ -200,7 +230,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
 
     HR(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence)));
     m_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+    m_frameIndex = m_headless ? 0 : m_swapChain->GetCurrentBackBufferIndex();
 
     // Shader-visible heap: 2 slots (SRV, UAV) per texture, 16 textures max.
     D3D12_DESCRIPTOR_HEAP_DESC sh = {};
@@ -322,6 +352,47 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     };
     makeGfx(kDisplaySrc, m_psoDisplay);
     makeGfx(kGradientSrc, m_psoGradient);
+
+    if (m_headless) CreateOffscreenTarget();
+}
+
+// Headless render target: one FP16 texture the size of the requested shot,
+// plus a readback buffer. RTV slot 0 (the first back-buffer slot, unused when
+// there is no swap chain) — the analyzer keeps slot kFrames, the mirror
+// kFrames+1.., so nothing collides.
+void FluidRenderer::CreateOffscreenTarget() {
+    D3D12_HEAP_PROPERTIES hp = {};
+    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = (UINT64)m_width;
+    rd.Height = (UINT)m_height;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, m_shotState,
+                                         nullptr, IID_PPV_ARGS(&m_shotTex)));
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_device->CreateRenderTargetView(m_shotTex.Get(), nullptr, rtv);
+
+    m_shotPitch = ((UINT)m_width * 8 + 255) & ~255u;
+    D3D12_RESOURCE_DESC bd = {};
+    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bd.Width = (UINT64)m_shotPitch * m_height;
+    bd.Height = 1;
+    bd.DepthOrArraySize = 1;
+    bd.MipLevels = 1;
+    bd.SampleDesc.Count = 1;
+    bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    D3D12_HEAP_PROPERTIES rb = {};
+    rb.Type = D3D12_HEAP_TYPE_READBACK;
+    HR(m_device->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &bd,
+                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                         IID_PPV_ARGS(&m_shotReadback)));
 }
 
 FluidRenderer::Tex FluidRenderer::CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot) {
@@ -456,6 +527,13 @@ void FluidRenderer::EndFrameAndPresent() {
     HR(m_cmd->Close());
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
+    if (m_headless) {
+        // no swap chain: just fence the frame and rotate the allocator ring
+        m_fenceValues[m_frameIndex] = m_nextFence;
+        HR(m_queue->Signal(m_fence.Get(), m_nextFence++));
+        m_frameIndex = (m_frameIndex + 1) % kFrames;
+        return;
+    }
     // Present fails (not fatally) when Explorer tears our window down
     // mid-frame — flag it so the shell can rebuild instead of dying.
     HRESULT phr = m_swapChain->Present(1, 0);
@@ -642,6 +720,95 @@ void FluidRenderer::RenderDisplay() {
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     m_cmd->ResourceBarrier(1, &b);
+}
+
+// Same display pass as RenderDisplay(), aimed at the offscreen FP16 target.
+// Identical constants, identical shader — only the render target differs, so
+// the captured pixels are exactly what the swap chain would have received.
+void FluidRenderer::RenderDisplayOffscreen() {
+    Transition(*m_dye.read, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    if (m_shotState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+        D3D12_RESOURCE_BARRIER b = {};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = m_shotTex.Get();
+        b.Transition.StateBefore = m_shotState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_cmd->ResourceBarrier(1, &b);
+        m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    }
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    m_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    D3D12_VIEWPORT vp = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
+    D3D12_RECT sc = { 0, 0, m_width, m_height };
+    m_cmd->RSSetViewports(1, &vp);
+    m_cmd->RSSetScissorRects(1, &sc);
+
+    m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
+    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    float consts[32];
+    BuildDisplayConstants(consts);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
+    m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_cmd->DrawInstanced(3, 1, 0, 0);
+}
+
+// Copy the offscreen target back to the CPU as linear scRGB floats. Runs its
+// own one-shot command list after a full GPU flush, so it can be called
+// between Frame() calls without disturbing the frame ring.
+bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
+    if (!m_headless || !m_shotTex || !m_shotReadback) return false;
+    WaitForGpuIdle();
+
+    HR(m_allocators[0]->Reset());
+    HR(m_cmd->Reset(m_allocators[0].Get(), nullptr));
+
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = m_shotTex.Get();
+    b.Transition.StateBefore = m_shotState;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    if (m_shotState != D3D12_RESOURCE_STATE_COPY_SOURCE) m_cmd->ResourceBarrier(1, &b);
+    m_shotState = D3D12_RESOURCE_STATE_COPY_SOURCE;
+
+    D3D12_TEXTURE_COPY_LOCATION src = {}, dst = {};
+    src.pResource = m_shotTex.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.pResource = m_shotReadback.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    dst.PlacedFootprint.Footprint.Width = (UINT)m_width;
+    dst.PlacedFootprint.Footprint.Height = (UINT)m_height;
+    dst.PlacedFootprint.Footprint.Depth = 1;
+    dst.PlacedFootprint.Footprint.RowPitch = m_shotPitch;
+    m_cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    HR(m_cmd->Close());
+    ID3D12CommandList* lists[] = { m_cmd.Get() };
+    m_queue->ExecuteCommandLists(1, lists);
+    WaitForGpuIdle();
+
+    uint8_t* data = nullptr;
+    D3D12_RANGE range = { 0, (SIZE_T)m_shotPitch * m_height };
+    if (FAILED(m_shotReadback->Map(0, &range, (void**)&data))) return false;
+    out.resize((size_t)m_width * m_height * 4);
+    for (int y = 0; y < m_height; y++) {
+        const uint16_t* row = (const uint16_t*)(data + (SIZE_T)y * m_shotPitch);
+        float* d = out.data() + (size_t)y * m_width * 4;
+        for (int i = 0; i < m_width * 4; i++) d[i] = HalfToFloat(row[i]);
+    }
+    D3D12_RANGE none = { 0, 0 };
+    m_shotReadback->Unmap(0, &none);
+
+    // the frame ring's allocator 0 was reset out of band — resync so the next
+    // BeginFrame() doesn't try to reset an allocator whose work is in flight
+    for (UINT i = 0; i < kFrames; i++) m_fenceValues[i] = 0;
+    m_frameIndex = 0;
+    return true;
 }
 
 void FluidRenderer::BuildDisplayConstants(float out[32]) {
@@ -1037,7 +1204,8 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         }
     }
 
-    RenderDisplay();
+    if (m_headless) RenderDisplayOffscreen();
+    else            RenderDisplay();
     if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
     if (m_anaEnabled) MaybeRenderAnalyzer();
     EndFrameAndPresent();
@@ -1129,6 +1297,11 @@ void FluidRenderer::Shutdown() {
     m_anaReadback.Reset();
     m_anaPending = false;
     m_anaState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+
+    // headless capture target
+    m_shotTex.Reset();
+    m_shotReadback.Reset();
+    m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
 
     // stats + coverage readbacks
     m_readback.Reset();
@@ -1504,9 +1677,19 @@ void FluidRenderer::UpdateCoverage() {
         m_survivorTooFull = false;
         return;
     }
+    // Headless capture: the harvest must land on a FIXED frame, not "whenever
+    // the GPU happened to finish" — otherwise the governor flips a frame or
+    // two earlier/later between runs and the images diverge. Pin it to the
+    // same 1 Hz cadence as the issue, blocking if the copy isn't done yet.
+    if (m_headless && m_covPending && m_time - m_lastCovTime >= 1.0f &&
+        m_fence->GetCompletedValue() < m_covFence) {
+        HR(m_fence->SetEventOnCompletion(m_covFence, m_fenceEvent));
+        WaitForSingleObject(m_fenceEvent, INFINITE);
+    }
     // harvest a finished readback (issued a frame or more ago; 1 Hz cadence
     // makes the staleness irrelevant and avoids any GPU sync)
-    if (m_covPending && m_fence->GetCompletedValue() >= m_covFence) {
+    if (m_covPending && m_fence->GetCompletedValue() >= m_covFence &&
+        (!m_headless || m_time - m_lastCovTime >= 1.0f)) {
         uint8_t* data = nullptr;
         D3D12_RANGE range = { 0, (SIZE_T)m_covPitch * kCovH };
         if (SUCCEEDED(m_covReadback->Map(0, &range, (void**)&data))) {

@@ -1,2 +1,10 @@
 build/
 *.user
+
+# raw capture frames (keep contact sheets, gifs, README)
+reference/shots/we-*.png
+reference/shots/burst?-??.png
+reference/shots/gif-0?.png
+reference/shots/_*.txt
+build/shots/
+

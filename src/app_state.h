@@ -29,6 +29,14 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& cfg, bool includeS
 
 void ShowScenesWindow();            // scenes.cpp — RGB-suite style manager
 extern wchar_t  g_iniPath[MAX_PATH];
+// Where config VALUES are read from. Identical to g_iniPath in normal mode;
+// --shot --ini <path> points it at a throwaway copy so a capture run can be
+// driven from an arbitrary ini. Folder layout (moods\, presets\, journeys\)
+// always derives from g_iniPath, so it stays at the default location.
+extern wchar_t  g_configIniPath[MAX_PATH];
+// --shot: never write an ini, a mood file, or a journey file. The capture run
+// must leave the user's live configuration byte-for-byte untouched.
+extern bool     g_configReadOnly;
 extern FluidRenderer* g_renderer;
 
 void ShowSettingsWindow();          // settings.cpp — creates or focuses the panel

@@ -9,13 +9,30 @@
 //   --dyeres N         override dye resolution (default 1024)
 //   --force-render     ignore fullscreen pause (automated testing)
 //   --test-suspend     force one renderer suspend ~3 s in, resume ~8 s (test)
+//
+// Headless capture (never shows anything, never touches the live config):
+//   --shot <out.png>   render OFFSCREEN and write <out>.png + <out>-hdr.png
+//   --shot-size WxH    capture size (default 2560x1440)
+//   --shot-delay N     seconds of wallpaper time to simulate first (default 40)
+//   --shot-series N:S  N captures, S seconds apart, named by elapsed seconds
+//   --seed N           seed every rand() behavior (default 1234) -> determinism
+//   --ini <path>       read config from this file instead of the live ini
+//   --hdr on|off       set the HDR state instead of querying the display
+//   --sdr-white <nits> SDR-content brightness for HDR mode (default 240)
+//   --panel-max <nits> stands in for the DXGI-reported max (peak_nits=-1 only)
+//   --mouse-none       no mouse splats (the default in shot mode)
 
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <dxgi1_6.h>
+#include <wincodec.h>
 #include <wrl/client.h>
 #include <cstdio>
+#include <cstdarg>
+#include <cstdint>
+#include <cmath>
+#include <share.h>
 #include <vector>
 #include <string>
 #include "fluid.h"
@@ -25,6 +42,7 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 using Microsoft::WRL::ComPtr;
 
@@ -58,6 +76,8 @@ bool IsManualPaused() { return g_manualPause; }
 static bool     g_fsPaused = false;
 static HMONITOR g_monitor = nullptr;
 wchar_t         g_iniPath[MAX_PATH] = {};
+wchar_t         g_configIniPath[MAX_PATH] = {};   // == g_iniPath unless --ini
+bool            g_configReadOnly = false;         // --shot: never write config
 
 static void InitSettingsPath() {
     wchar_t* appdata = nullptr;
@@ -68,21 +88,22 @@ static void InitSettingsPath() {
         CreateDirectoryW(dir, nullptr);
         _snwprintf_s(g_iniPath, _TRUNCATE, L"%s\\settings.ini", dir);
     }
+    wcscpy_s(g_configIniPath, MAX_PATH, g_iniPath);
 }
 
 static void LoadSettings() {
-    if (!g_iniPath[0]) return;
-    g_pauseOnFullscreen = GetPrivateProfileIntW(L"general", L"pause_on_fullscreen", 1, g_iniPath) != 0;
-    g_pauseOnMaximized = GetPrivateProfileIntW(L"general", L"pause_on_maximized", 1, g_iniPath) != 0;
+    if (!g_configIniPath[0]) return;
+    g_pauseOnFullscreen = GetPrivateProfileIntW(L"general", L"pause_on_fullscreen", 1, g_configIniPath) != 0;
+    g_pauseOnMaximized = GetPrivateProfileIntW(L"general", L"pause_on_maximized", 1, g_configIniPath) != 0;
     wchar_t buf[64] = {};
-    GetPrivateProfileStringW(L"hdr", L"peak_nits", L"-1", buf, 64, g_iniPath);
+    GetPrivateProfileStringW(L"hdr", L"peak_nits", L"-1", buf, 64, g_configIniPath);
     g_hdrPeakNits = (float)_wtof(buf);
-    g_gamutMode = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, g_iniPath);
+    g_gamutMode = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, g_configIniPath);
     if (g_gamutMode < 0 || g_gamutMode > 2) g_gamutMode = 2;
 }
 
 static void SaveSettings() {
-    if (!g_iniPath[0]) return;
+    if (!g_iniPath[0] || g_configReadOnly) return;
     WritePrivateProfileStringW(L"general", L"pause_on_fullscreen",
                                g_pauseOnFullscreen ? L"1" : L"0", g_iniPath);
     WritePrivateProfileStringW(L"general", L"pause_on_maximized",
@@ -191,7 +212,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
            cfg.densityDissipation, cfg.decayFast, cfg.curl, cfg.simRes, cfg.dyeRes);
 }
 
-static void LoadFullConfig(FluidConfig& cfg) { LoadConfigFromIni(g_iniPath, cfg); }
+static void LoadFullConfig(FluidConfig& cfg) { LoadConfigFromIni(g_configIniPath, cfg); }
 
 void LoadConfigFromFile(const wchar_t* ini, FluidConfig& cfg) { LoadConfigFromIni(ini, cfg); }
 
@@ -834,7 +855,7 @@ L"[behavior]\r\nwanderer_count=2\r\nwanderer_brightness=0.15\r\ndark_floor=25\r\
 L"idle_amount=3\r\nidle_interval=8\r\ncolor_cycle_period=40\r\n";
 
 static void EnsureBuiltinPresets() {
-    if (!g_iniPath[0]) return;
+    if (!g_iniPath[0] || g_configReadOnly) return;
     wchar_t dir[MAX_PATH];
     GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
@@ -874,7 +895,7 @@ static void EnsureBuiltinPresets() {
 // includeShell=false skips the machine/shell keys (sim_res, dye_res,
 // fps_limit, mirror_second) — used for mood files, which never touch them.
 void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShell) {
-    if (!path || !path[0]) return;
+    if (!path || !path[0] || g_configReadOnly) return;
     auto putF = [path](const wchar_t* sec, const wchar_t* key, float v, int dec) {
         wchar_t b[48];
         swprintf_s(b, L"%.*f", dec, v);
@@ -1030,8 +1051,313 @@ void PersistShellSettings() { SaveSettings(); }
 void PersistFullConfigNow() { if (g_renderer) SaveFullConfig(g_renderer->Config()); }
 
 // ---------------------------------------------------------------------------
+// --shot: headless deterministic capture
+//
+// Renders the wallpaper offscreen (no window, no WorkerW, no tray, no focus
+// change, no writes to the live config) and dumps the display pass to PNG.
+// The renderer runs on a FIXED timestep with no vsync and no sleeping, so
+// "40 seconds of wallpaper" costs a few seconds of wall clock.
+// ---------------------------------------------------------------------------
+
+struct ShotOpts {
+    std::wstring out;
+    std::wstring ini;
+    int      width = 2560, height = 1440;
+    float    delaySec = 40.0f;
+    int      seriesCount = 1;       // --shot-series N:interval
+    float    seriesInterval = 0.0f;
+    unsigned seed = 1234;
+    bool     hdrOn = false;
+    float    sdrWhiteNits = 240.0f;
+    float    panelMaxNits = 1000.0f;   // stands in for the DXGI-reported max
+    bool     mouseNone = true;
+};
+
+static void ShotLog(const char* fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    char buf[1024];
+    _vsnprintf_s(buf, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    fputs(buf, stdout);
+    // Mirror to a log file: this is a /SUBSYSTEM:WINDOWS exe, so stdout only
+    // lands somewhere when the launching shell gave us a pipe or a file.
+    wchar_t path[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, path);
+    wcscat_s(path, L"FluidWallpaper-shot.log");
+    if (FILE* f = _wfsopen(path, L"a", _SH_DENYNO)) {
+        fputs(buf, f);
+        fclose(f);
+    }
+}
+
+static float LinearToSrgb(float c) {
+    if (c <= 0.0f) return 0.0f;
+    if (c >= 1.0f) return 1.0f;
+    return c <= 0.0031308f ? c * 12.92f : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+}
+static uint8_t ToByte(float srgb) {
+    int v = (int)(srgb * 255.0f + 0.5f);
+    return (uint8_t)(v < 0 ? 0 : (v > 255 ? 255 : v));
+}
+
+// WIC PNG writer (24bpp BGR).
+static bool WritePng(const wchar_t* path, const std::vector<uint8_t>& bgr, int w, int h) {
+    ComPtr<IWICImagingFactory> fac;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&fac)))) return false;
+    ComPtr<IWICStream> stream;
+    if (FAILED(fac->CreateStream(&stream))) return false;
+    if (FAILED(stream->InitializeFromFilename(path, GENERIC_WRITE))) return false;
+    ComPtr<IWICBitmapEncoder> enc;
+    if (FAILED(fac->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc))) return false;
+    if (FAILED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache))) return false;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> props;
+    if (FAILED(enc->CreateNewFrame(&frame, &props))) return false;
+    if (FAILED(frame->Initialize(props.Get()))) return false;
+    if (FAILED(frame->SetSize((UINT)w, (UINT)h))) return false;
+    WICPixelFormatGUID fmt = GUID_WICPixelFormat24bppBGR;
+    if (FAILED(frame->SetPixelFormat(&fmt))) return false;
+    const UINT stride = (UINT)w * 3;
+    if (FAILED(frame->WritePixels((UINT)h, stride, stride * (UINT)h,
+                                  const_cast<BYTE*>(bgr.data())))) return false;
+    if (FAILED(frame->Commit())) return false;
+    return SUCCEEDED(enc->Commit());
+}
+
+static void EnsureParentDir(const wchar_t* path) {
+    wchar_t dir[MAX_PATH];
+    wcscpy_s(dir, MAX_PATH, path);
+    wchar_t* slash = wcsrchr(dir, L'\\');
+    if (!slash) return;
+    *slash = 0;
+    // create the chain (one level of nesting is the common case here)
+    wchar_t parent[MAX_PATH];
+    wcscpy_s(parent, MAX_PATH, dir);
+    if (wchar_t* s2 = wcsrchr(parent, L'\\')) { *s2 = 0; CreateDirectoryW(parent, nullptr); }
+    CreateDirectoryW(dir, nullptr);
+}
+
+// Encode the captured linear-scRGB frame two ways and report what's in it.
+//   <stem>.png      display-referred SDR: /sdrScale, clip at 1.0, sRGB encode
+//   <stem>-hdr.png  highlight-preserving: hue-preserving Reinhard on the max
+//                   channel, so anything above SDR white stays visible
+static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rgba,
+                          int w, int h, float sdrScale, float elapsed) {
+    const size_t n = (size_t)w * h;
+    std::vector<uint8_t> sdr(n * 3), hdr(n * 3);
+
+    double lumSum = 0.0;
+    size_t aboveWhite = 0, negative = 0;
+    float maxScrgb = 0.0f;
+
+    for (size_t p = 0; p < n; p++) {
+        float r = rgba[p * 4 + 0], g = rgba[p * 4 + 1], b = rgba[p * 4 + 2];
+        if (r != r) r = 0; if (g != g) g = 0; if (b != b) b = 0;   // NaN guard
+        if (r < 0.0f || g < 0.0f || b < 0.0f) negative++;
+        maxScrgb = fmaxf(maxScrgb, fmaxf(r, fmaxf(g, b)));
+        // Rec.709 luminance of the scRGB value (1.0 = 80 nits)
+        lumSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        if (fmaxf(r, fmaxf(g, b)) > sdrScale) aboveWhite++;
+
+        // display-referred: SDR white -> 1.0, negatives (wide gamut) clip to 0
+        float dr = fmaxf(0.0f, r / sdrScale);
+        float dg = fmaxf(0.0f, g / sdrScale);
+        float db = fmaxf(0.0f, b / sdrScale);
+        sdr[p * 3 + 0] = ToByte(LinearToSrgb(fminf(db, 1.0f)));   // B
+        sdr[p * 3 + 1] = ToByte(LinearToSrgb(fminf(dg, 1.0f)));   // G
+        sdr[p * 3 + 2] = ToByte(LinearToSrgb(fminf(dr, 1.0f)));   // R
+
+        // highlight-preserving: Reinhard on the max channel, ratios preserved
+        float m = fmaxf(dr, fmaxf(dg, db));
+        float k = m > 1e-6f ? (m / (1.0f + m)) / m : 0.0f;
+        hdr[p * 3 + 0] = ToByte(LinearToSrgb(db * k));
+        hdr[p * 3 + 1] = ToByte(LinearToSrgb(dg * k));
+        hdr[p * 3 + 2] = ToByte(LinearToSrgb(dr * k));
+    }
+
+    std::wstring sdrPath = stem + L".png";
+    std::wstring hdrPath = stem + L"-hdr.png";
+    EnsureParentDir(sdrPath.c_str());
+    bool okS = WritePng(sdrPath.c_str(), sdr, w, h);
+    bool okH = WritePng(hdrPath.c_str(), hdr, w, h);
+
+    const double meanLum = lumSum / (double)n;
+    ShotLog("[shot] t=%.1fs %ls %dx%d  mean_lum=%.4f scRGB (%.1f nits)  "
+            "above_sdr_white=%.2f%%  max_scRGB=%.3f (%.0f nits)  negative_px=%.2f%%  "
+            "sdr=%s hdr=%s\n",
+            elapsed, sdrPath.c_str(), w, h, meanLum, meanLum * 80.0,
+            100.0 * aboveWhite / (double)n, maxScrgb, maxScrgb * 80.0f,
+            100.0 * negative / (double)n,
+            okS ? "ok" : "FAILED", okH ? "ok" : "FAILED");
+}
+
+// Cheap pre-scan so the normal launch path below stays untouched.
+static bool ShotModeRequested() {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool found = false;
+    for (int i = 1; i < argc && !found; i++)
+        if (wcscmp(argv[i], L"--shot") == 0) found = true;
+    LocalFree(argv);
+    return found;
+}
+
+static int RunShotMode() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    ShotOpts o;
+    {
+        int argc = 0;
+        wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        for (int i = 1; i < argc; i++) {
+            auto next = [&](void) -> const wchar_t* { return i + 1 < argc ? argv[++i] : nullptr; };
+            if (wcscmp(argv[i], L"--shot") == 0) {
+                if (const wchar_t* v = next()) o.out = v;
+            } else if (wcscmp(argv[i], L"--shot-size") == 0) {
+                if (const wchar_t* v = next()) {
+                    int w = 0, h = 0;
+                    if (swscanf_s(v, L"%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+                        o.width = w; o.height = h;
+                    }
+                }
+            } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
+                if (const wchar_t* v = next()) o.delaySec = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--shot-series") == 0) {
+                if (const wchar_t* v = next()) {
+                    int n = 0; float iv = 0;
+                    if (swscanf_s(v, L"%d:%f", &n, &iv) == 2 && n > 0) {
+                        o.seriesCount = n; o.seriesInterval = iv;
+                    }
+                }
+            } else if (wcscmp(argv[i], L"--seed") == 0) {
+                if (const wchar_t* v = next()) o.seed = (unsigned)_wtoi(v);
+            } else if (wcscmp(argv[i], L"--ini") == 0) {
+                if (const wchar_t* v = next()) o.ini = v;
+            } else if (wcscmp(argv[i], L"--hdr") == 0) {
+                if (const wchar_t* v = next()) o.hdrOn = (_wcsicmp(v, L"on") == 0);
+            } else if (wcscmp(argv[i], L"--sdr-white") == 0) {
+                if (const wchar_t* v = next()) o.sdrWhiteNits = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--panel-max") == 0) {
+                if (const wchar_t* v = next()) o.panelMaxNits = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--mouse-none") == 0) {
+                o.mouseNone = true;
+            }
+        }
+        LocalFree(argv);
+    }
+    if (o.out.empty()) {
+        ShotLog("[shot] ERROR: --shot needs an output .png path\n");
+        return 2;
+    }
+    if (o.sdrWhiteNits < 1.0f) o.sdrWhiteNits = 80.0f;
+
+    // Config: read-only for the whole run. Nothing below may write an ini, a
+    // mood, a journey, or an autostart key.
+    g_configReadOnly = true;
+    InitSettingsPath();
+    if (!o.ini.empty()) {
+        if (GetFileAttributesW(o.ini.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            ShotLog("[shot] ERROR: --ini file not found: %ls\n", o.ini.c_str());
+            return 2;
+        }
+        wcscpy_s(g_configIniPath, MAX_PATH, o.ini.c_str());
+    }
+
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+        ShotLog("[shot] ERROR: CoInitializeEx failed\n");
+        return 3;
+    }
+
+    ShotLog("[shot] FluidWallpaper offscreen capture\n");
+    ShotLog("[shot] ini=%ls\n", g_configIniPath);
+    ShotLog("[shot] size=%dx%d seed=%u delay=%.1fs series=%d:%.1fs hdr=%s sdr_white=%.0f nits\n",
+            o.width, o.height, o.seed, o.delaySec, o.seriesCount, o.seriesInterval,
+            o.hdrOn ? "on" : "off", o.sdrWhiteNits);
+
+    FluidConfig cfg;
+    LoadSettings();          // shell globals: peak_nits, gamut (from the shot ini)
+    LoadFullConfig(cfg);     // full look config
+    EnsureBuiltinPresets();  // no-op while read-only
+    srand(o.seed);           // mood dwell jitter is drawn during InitMoods
+    InitMoods();
+    MoodsApplyBase(cfg);
+
+    // HDR state exactly as the shell would resolve it, without querying the
+    // real display (see the main loop: sdrScale / peak / SetHdrOptions).
+    const bool  hdrActive = o.hdrOn;
+    g_maxNits = o.panelMaxNits;
+    const float sdrScale = hdrActive ? (o.sdrWhiteNits / 80.0f) : 1.0f;
+    ShotLog("[shot] HDR %s, sdrScale=%.4f, peak_nits=%.0f (ini), gamut=%d\n",
+            hdrActive ? "ON" : "OFF", sdrScale, g_hdrPeakNits, g_gamutMode);
+
+    FluidRenderer::SetRandomSeed(o.seed);
+    FluidRenderer renderer;
+    renderer.InitOffscreen(o.width, o.height, cfg);
+    g_renderer = &renderer;
+    renderer.SetCoverageWanted(g_moodSettings.enabled);
+
+    const float dt = 1.0f / 144.0f;   // fixed timestep, no vsync, no sleeping
+    FrameInput fin;                   // --mouse-none: all-zero, no user input
+    (void)o.mouseNone;
+
+    long long frames = 0;
+    long long nextLog = 0;
+    const DWORD wallStart = GetTickCount();
+
+    // strip a trailing .png so series/-hdr names hang off a clean stem
+    std::wstring stem = o.out;
+    if (stem.size() > 4 && _wcsicmp(stem.c_str() + stem.size() - 4, L".png") == 0)
+        stem.resize(stem.size() - 4);
+
+    std::vector<float> pixels;
+    for (int s = 0; s < o.seriesCount; s++) {
+        const double target = o.delaySec + (double)s * o.seriesInterval;
+        const long long want = (long long)llround(target * 144.0);
+        while (frames < want) {
+            UpdateMoods(renderer, dt);
+            float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
+            renderer.SetHdrOptions(peak, g_gamutMode);
+            renderer.Frame(dt, sdrScale, hdrActive, fin);
+            frames++;
+            if (frames >= nextLog) {
+                ShotLog("[shot] simulated %.1f s (%lld frames, %.1f s wall)\n",
+                        frames / 144.0, frames, (GetTickCount() - wallStart) / 1000.0);
+                nextLog = frames + 144 * 5;
+            }
+        }
+        if (!renderer.CaptureOffscreen(pixels)) {
+            ShotLog("[shot] ERROR: readback failed\n");
+            renderer.Shutdown();
+            CoUninitialize();
+            return 4;
+        }
+        std::wstring shotStem = stem;
+        if (o.seriesCount > 1) {
+            wchar_t suffix[32];
+            swprintf_s(suffix, L"-%03d", (int)llround(target));
+            shotStem += suffix;
+        }
+        WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));
+    }
+
+    ShotLog("[shot] done: %lld frames simulated in %.1f s wall\n",
+            frames, (GetTickCount() - wallStart) / 1000.0);
+    g_renderer = nullptr;
+    renderer.Shutdown();
+    CoUninitialize();
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // Headless capture: no window, no WorkerW, no tray, no single-instance
+    // handshake (a running wallpaper must not be disturbed), no config writes.
+    if (ShotModeRequested()) return RunShotMode();
+
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"FluidWallpaper_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Second launch = "open the settings of the running instance".

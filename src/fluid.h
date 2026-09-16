@@ -117,6 +117,16 @@ struct FrameInput {
 class FluidRenderer {
 public:
     void Init(HWND hwnd, int width, int height, const FluidConfig& cfg);
+    // Headless capture mode (--shot): device WITHOUT a swap chain, no window.
+    // The display pass renders into an FP16 (R16G16B16A16_FLOAT) offscreen RT
+    // of the requested size; CaptureOffscreen() reads it back as linear scRGB.
+    void InitOffscreen(int width, int height, const FluidConfig& cfg);
+    bool IsHeadless() const { return m_headless; }
+    // width*height*4 floats, row-major RGBA, linear scRGB (1.0 = 80 nits).
+    bool CaptureOffscreen(std::vector<float>& outRgba);
+    // Deterministic runs: seed every rand()-based behavior. 0 (default) keeps
+    // the normal time-seeded startup. Must be set before Init/InitOffscreen.
+    static void SetRandomSeed(unsigned seed);
     void Frame(float dtSec, float sdrScale, bool hdrActive, const FrameInput& input);
     void ReassertColorSpace();
     // Full GPU teardown (swapchain, all textures, heaps, PSOs, device): frees
@@ -176,7 +186,10 @@ private:
     };
     struct DoubleTex { Tex a, b; Tex* read = &a; Tex* write = &b; void Swap() { Tex* t = read; read = write; write = t; } };
 
+    void InitCommon(HWND hwnd, int width, int height, const FluidConfig& cfg);
     void CreateDevice(HWND hwnd, int width, int height);
+    void CreateOffscreenTarget();      // headless render target + readback
+    void RenderDisplayOffscreen();     // display pass -> m_shotTex
     void CreateSimResources();
     Tex  CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot);
     void Transition(Tex& t, D3D12_RESOURCE_STATES to);
@@ -217,6 +230,7 @@ private:
     float m_statsTimer = 0.0f;
     bool  m_hdrActive = false;
     bool  m_firstFrame = true;
+    bool  m_headless = false;   // --shot: no swap chain, no window, no Present
 
     static const UINT kFrames = 3;
     Microsoft::WRL::ComPtr<IDXGIFactory6> m_factory;
@@ -253,6 +267,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_readback;  // stats
     UINT m_readbackPitch = 0;
     bool m_readbackPending = false;
+
+    // headless capture target (--shot)
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_shotTex;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_shotReadback;
+    D3D12_RESOURCE_STATES m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    UINT m_shotPitch = 0;
 
     // --- M3 state ---
     bool m_prevMouseDown = false;

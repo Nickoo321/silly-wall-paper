@@ -96,6 +96,7 @@ const char* kDuetTxt =
 // ship the sample journeys next to settings.ini (write-if-missing, like the
 // built-in moods) so users have curated files to copy and edit
 void WriteTextIfMissing(const wchar_t* path, const char* text) {
+    if (g_configReadOnly) return;   // --shot: never write into the config tree
     if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) return;
     HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_NEW, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
@@ -261,7 +262,7 @@ void JourneyAttach(const wchar_t* moodPath) {
     // emit=1 legs restore the stub's own emission switches (absent = on)
     s_moodWanderers  = GetPrivateProfileIntW(L"behavior", L"wanderers", 1, moodPath);
     s_moodIdleSplats = GetPrivateProfileIntW(L"behavior", L"idle_splats", 1, moodPath);
-    s_maxLoops = GetPrivateProfileIntW(L"journey", L"loops", 2, g_iniPath);
+    s_maxLoops = GetPrivateProfileIntW(L"journey", L"loops", 2, g_configIniPath);
     if (s_maxLoops < 1) s_maxLoops = 1;
     s_active = true;
     s_loopsDone = 0;

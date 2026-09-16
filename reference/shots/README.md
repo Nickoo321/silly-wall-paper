@@ -130,3 +130,18 @@ saturation 0.83–0.91, 0% pure-black pixels, a slow magenta → rose → red �
 single green intruder at the end, over a warm near-black ground. The live wallpaper on this
 machine is more saturated, higher contrast, and cycles hue far more aggressively. That gap is
 the user's own property settings (and the HDR path), not a different wallpaper.
+
+## photos/ — user's phone photos of the panel (added 2026-09-16)
+
+Phone photos show the real P3 gamut (screenshots clip it). All are the WE original.
+- `we-2026-09-16-salmon-red-purple-*.jpg`: what the user calls the trippy hue fade — one
+  dye mass grading salmon core -> orange -> saturated red -> dark red -> purple haze at
+  the rim, and walking down that ladder as it decays. Mechanism: per-channel clipping in
+  the 8-bit canvas + WE contrast crush + global hue-rotate; not a painted gradient.
+- `we-old-cyan-clouds-on-magenta.jpg`: older WE revision; mint/cyan clouds with navy rims on a
+  fully tinted magenta-red haze (the background is never black here).
+- `we-old-cream-red-full-pour.jpg`: older WE revision; full-screen acrylic-pour look, cream/
+  salmon cores clipped toward yellow-white on deep red, dense fine curls (sim_res 256,
+  vorticity 48), green pocket on the left.
+Earlier photos from 2026-09-15 (cyan marble, green cloud, red/blue/green on black) were shown
+in chat only.

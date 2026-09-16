@@ -214,7 +214,7 @@ static void BuildDefs() {
         { L"Hump center (input brightness)",    0.05f, 1,    0.01f, 2, &c.curveCenter,        nullptr, L"color", L"curve_center", false, L"Response curve (bright rims)", 3, L"Response curve shape: glowing rims when enabled" },
         { L"Hump width",                        0.02f, 0.5f, 0.01f, 2, &c.curveWidth,         nullptr, L"color", L"curve_width", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
         { L"Hump height (output brightness)",   0.1f,  2,    0.05f, 2, &c.curveHeight,       nullptr, L"color", L"curve_height", false, nullptr, 3, L"Response curve shape: glowing rims when enabled" },
-        { L"Shadow floor (gray lift)",          0,     0.25f,0.005f,3, &c.shadowFloor,        nullptr, L"color", L"shadow_floor", false, L"Shadow floor (dark marbling)", 3, L"Lift near-black toward gray so dark marbling stays visible" },
+        { L"Shadow floor (colour lift)",          0,     0.25f,0.005f,3, &c.shadowFloor,        nullptr, L"color", L"shadow_floor", false, L"Shadow floor (dark marbling)", 3, L"Lift near-black along its own hue so dark marbling stays visible" },
         { L"Shadow knee (lift range)",          0.02f, 0.6f, 0.01f, 2, &c.shadowKnee,         nullptr, L"color", L"shadow_knee", false, nullptr, 3, L"Brightness range the lift fades over" },
     };
     s_checks = {

@@ -26,7 +26,7 @@ struct FluidConfig {
                                     // Tail snappiness is a settings slider now — user taste, not a default.
     float decayThreshold = 0.29f;
     // M4 HDR output mapping (controlled live from the tray menu)
-    int   gamutMode = 2;            // 0 sRGB, 1 Display-P3 (WE parity), 2 BT.2020 (QD-OLED)
+    int   gamutMode = 1;            // 0 sRGB, 1 Display-P3 (WE parity, default), 2 BT.2020 (over-saturates vs WE)
     float hdrPeakNits = 0.0f;       // resolved target nits for hot spots; 0 = off (match SDR)
     float hdrKnee = 0.6f;           // dye brightness where highlight expansion starts
     float maxBrightness = 1.35f;

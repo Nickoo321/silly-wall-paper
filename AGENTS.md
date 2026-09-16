@@ -18,7 +18,7 @@ Single exe, no deps beyond Windows SDK libs.
 ## Hard constraints (user directives)
 
 - **Bloom: never.**
-- **sim_res/dye_res frozen at 512/4096** — moods/presets must never carry them.
+- **sim_res/dye_res live at 256/4096** (256 = the WE grid; verified 2026-09-16 that the WE motion — droplet curls, marbled cores — only appears at 256, vorticity 48). Moods/presets must never carry them.
 - Every mood recipe is finalized only via a calibration quiz with the user
   (protocol: CALIBRATION.md + cloud-quiz-round2-proposal.md).
 - Everything must look good with Windows HDR **on AND off** — verify both.

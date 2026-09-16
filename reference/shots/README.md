@@ -145,3 +145,8 @@ Phone photos show the real P3 gamut (screenshots clip it). All are the WE origin
   vorticity 48), green pocket on the left.
 Earlier photos from 2026-09-15 (cyan marble, green cloud, red/blue/green on black) were shown
 in chat only.
+- `we-pour-1..7.jpg` (2026-09-16): the user holding LMB on the WE original (cursor visible near
+  the centre). The poured mass is a huge cream/pale core that STILL shows fine marbling (shading
+  lines) even where clipped, ringed by orange -> red -> magenta bands, with many small vortices
+  in the outer band feeding toward the cursor. The port's pour at the same time was a flat,
+  textureless disc expanding radially with no vortices near the cursor (see WORKLOG 2026-09-16).

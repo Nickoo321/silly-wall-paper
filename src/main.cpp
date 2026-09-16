@@ -793,21 +793,26 @@ static void WriteTextFileUtf16(const wchar_t* path, const wchar_t* text) {
 // The user's original Wallpaper Engine preset: project.json values + the WE
 // right-panel color filter they ran it with. peak off / P3 = how WE looked.
 static const wchar_t* kWEOriginalIni =
-L"[hdr]\r\npeak_nits=0\r\ncompensation=1\r\nknee=0.60\r\nsaturation=1.20\r\nbrightness=1.08\r\ncontrast=1.00\r\ngamut=1\r\n"
+// True WE parity (rebuilt 2026-09-16): every key the look depends on, from WE
+// config.json (wproperties + wec_* panel: sat 57 / con 67 / brs 53 / hue 54).
+// sim_res/dye_res intentionally absent - presets never touch them.
+L"[moods]\r\nenabled=0\r\n"
+L"[hdr]\r\npeak_nits=700\r\ncompensation=1\r\nknee=0.70\r\nsaturation=1.20\r\nbrightness=1.08\r\ncontrast=1.00\r\ngamut=1\r\n"
 L"[sim]\r\nvorticity=48\r\nsplat_radius=0.64\r\ndensity_diffusion=0.999\r\nvelocity_diffusion=0.999\r\n"
 L"pressure_diffusion=0.85\r\npressure_iterations=20\r\ndecay_fast=1.000\r\ndecay_threshold=0.290\r\n"
-L"saturation_restore=0.93\r\nmax_brightness=1.35\r\nshading=1\r\nsim_res=256\r\ndye_res=4096\r\n"
+L"saturation_restore=0.93\r\nmax_brightness=1.35\r\nshading=1\r\ndye_diffusion=0.000\r\nbaroclinic=0.000\r\nflow_speed=1.00\r\n"
 L"[behavior]\r\ncolor_cycle_period=19\r\nwanderers=1\r\nwanderer_count=2\r\nwanderer_mode=0\r\n"
 L"wanderer_speed=246\r\nwanderer_brightness=0.10\r\nwanderer_scale=0.10\r\nwanderer_resume_delay=4.5\r\n"
 L"auto_pause=1\r\ndark_floor=9\r\ndark_level=0.070\r\nsurv_dark_floor=8\r\ncontrast_req=30\r\n"
 L"dart_enabled=1\r\ndart_interval=7\r\ndart_speed=967\r\n"
 L"hueshift_enabled=1\r\nhueshift_step=83\r\nhueshift_linger=6.5\r\nhueshift_glide=7.2\r\n"
 L"hueshift_burst_steps=2\r\nhueshift_off_time=10\r\n"
-L"idle_splats=1\r\nidle_interval=9.6\r\nidle_amount=8\r\n"
+L"idle_splats=1\r\nidle_interval=9.6\r\nidle_amount=8\r\nidle_brightness=1.50\r\n"
 L"hold_to_splat=1\r\nsplat_on_click=1\r\nshow_mouse=1\r\n"
 L"[color]\r\ncolorful=1\r\nmore_colors=1\r\npost_saturation=1.14\r\npost_contrast=1.34\r\n"
-L"post_brightness=1.06\r\npost_hue=14\r\n"
-L"[general]\r\npause_on_fullscreen=1\r\npause_on_maximized=1\r\nfps_limit=60\r\n";
+L"post_brightness=1.06\r\npost_hue=14.4\r\nhue_center=0\r\nhue_range=180\r\nhue_linger=0\r\n"
+L"curve_enabled=0\r\nshadow_floor=0.100\r\nshadow_knee=0.15\r\n"
+L"[general]\r\npause_on_fullscreen=1\r\npause_on_maximized=1\r\n";
 
 // Themed presets (partial inis — unspecified keys inherit the user's current
 // settings). Sunny Embers: the orange-majority mood the user loves, pinned via
@@ -1072,6 +1077,10 @@ struct ShotOpts {
     float    panelMaxNits = 1000.0f;   // stands in for the DXGI-reported max
     bool     mouseNone = true;
     int      yieldMs = 2;              // --shot-yield ms: sleep per simulated frame
+    // --shot-pour X,Y,START,DUR : hold LMB at (X,Y) px from START for DUR seconds,
+    // with a slow circular drift (radius 40 px, 0.5 rev/s) like a resting hand.
+    bool     pour = false;
+    float    pourX = 1280, pourY = 720, pourStart = 0, pourDur = 0;
 };
 
 static void ShotLog(const char* fmt, ...) {
@@ -1224,6 +1233,9 @@ static int RunShotMode() {
                         o.width = w; o.height = h;
                     }
                 }
+            } else if (wcscmp(argv[i], L"--shot-pour") == 0 && i + 1 < argc) {
+                if (swscanf_s(argv[++i], L"%f,%f,%f,%f", &o.pourX, &o.pourY, &o.pourStart, &o.pourDur) == 4)
+                    o.pour = true;
             } else if (wcscmp(argv[i], L"--shot-yield") == 0 && i + 1 < argc) {
                 o.yieldMs = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
@@ -1320,6 +1332,20 @@ static int RunShotMode() {
         const double target = o.delaySec + (double)s * o.seriesInterval;
         const long long want = (long long)llround(target * 144.0);
         while (frames < want) {
+            fin = FrameInput{};
+            if (o.pour) {
+                const float t = frames / 144.0f;
+                if (t >= o.pourStart && t < o.pourStart + o.pourDur) {
+                    const float ang = (t - o.pourStart) * 3.14159265f;   // 0.5 rev/s
+                    const float px = o.pourX + 40.0f * cosf(ang);
+                    const float py = o.pourY + 40.0f * sinf(ang);
+                    static float lx = 0, ly = 0; static bool have = false;
+                    fin.mouseX = px; fin.mouseY = py;
+                    if (have) { fin.mouseMoved = true; fin.mouseDx = (px - lx) * 5.0f; fin.mouseDy = (py - ly) * 5.0f; }
+                    lx = px; ly = py; have = true;
+                    fin.mouseDown = true; fin.userInteracted = true;
+                }
+            }
             UpdateMoods(renderer, dt);
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
             renderer.SetHdrOptions(peak, g_gamutMode);

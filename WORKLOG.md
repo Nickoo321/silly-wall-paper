@@ -525,3 +525,28 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   s4 +HDR 700 nits knee 0.7; on-screen verification with HDR on (screenshots
   can't show the P3 green); then fix presets\WE Original.ini to carry every
   parity key; decide moods policy (moods must not go below parity sat).
+
+## 2026-09-16 — WE parity landed: config + 256 grid; pour test; eyes
+
+- Blind sheet 1 (s1 parity / s2 +clamps / s3 +chroma shadow / s4 +HDR700): user
+  "probably B and D, can barely tell" = chroma shadow 0.10 and HDR 700 — both are
+  invisible in SDR PNGs by construction; judged on the panel instead.
+- Live settings.ini = reference/configs/we-look-live.ini (parity + clamps + shadow
+  0.10 + peak 700 knee 0.70). Backup of the old live ini:
+  %APPDATA%\FluidWallpaper\settings-backup-2026-09-16.ini.
+- **Motion**: user's WE pour (reference/shots/photos/we-pour-*.jpg) shows big
+  vortices feeding the cursor, droplet curls, marbled cores. The port's pour was a
+  flat textureless disc expanding radially. Added `--shot-pour X,Y,START,DUR` to
+  shot mode; matrix 512/20it vs 256/20it vs 512/40it vs 512/vort48: pressure
+  iterations irrelevant; **only sim_res 256 (vorticity 48) reproduces the WE
+  curls/droplets/marbling**. Live + defaults switched to 256/48; AGENTS.md freeze
+  note updated (moods/presets still never carry sim_res/dye_res).
+  User: "never using kimi k3 again this is heat".
+- presets\WE Original.ini + moods\WE Original.ini rebuilt as true parity (every
+  key; no sim_res); builtin kWEOriginalIni in main.cpp matches; fluid.h default
+  gamut 2 -> 1 (P3). Settings label "Shadow floor (colour lift)".
+- Open: "eyes" (tiny vortex-trapped dye pockets of an older hue) read stronger in
+  the port than in WE. Candidates: HDR peak gain lifting small saturated cores,
+  crisp 4096 dye + shading ring (WE's canvas scaling softened them), chroma
+  shadow lift. Knobs: peak_nits 0, dye_diffusion 0.02-0.05, shadow_floor 0.
+- Next: oil as a render mode (OIL-REVIEW.md phases 0-1).

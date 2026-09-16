@@ -16,7 +16,7 @@ target_link_libraries(FluidWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell
 add_executable(OilWallpaper WIN32 src_oil/main.cpp src_oil/oil.cpp)
 target_compile_definitions(OilWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(OilWallpaper PRIVATE /utf-8)
-target_link_libraries(OilWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32)
+target_link_libraries(OilWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)
 
 # AcidWallpaper — standalone "liquid acid" oil-and-ink proof of concept (src_acid/).
 # Separate launcher; shares no sources with the other targets.

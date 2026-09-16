@@ -5,23 +5,45 @@
 //
 // GUI app. Flags:
 //   --console            open a diagnostics console
-//   --shot <path.bmp>    dump one rendered frame (GPU readback) to a BMP, exit
-//   --shot-delay <sec>   delay before the --shot capture (default 5)
 //   --palette <0|1>      0 = Acid (default), 1 = Royal
+//   --step <0..8>        Phase 0 look gate (see oil.h); default 8 = everything
+//
+// --shot is a fully HEADLESS path (see RunShotMode below): no window, no
+// WorkerW attach, no tray, no single-instance mutex, no SPI_SETDESKWALLPAPER.
+// It renders into an offscreen R8G8B8A8 target on a fixed timestep with no
+// vsync, so "70 seconds of wallpaper" costs a few seconds of wall clock and a
+// running wallpaper (FluidWallpaper / Wallpaper Engine) is never disturbed.
+//   --shot <out.png>     offscreen capture, then exit
+//   --shot-delay <sec>   simulated time before the first capture (default 25)
+//   --shot-series N:IV   N captures IV simulated seconds apart
+//   --shot-size WxH      capture size (default 2560x1440)
+//   --shot-fps <hz>      fixed simulation timestep (default 60)
+//   --shot-yield <ms>    sleep per rendered frame (0; only for long bench runs)
+//   --shot-warm <n>      frames actually rendered before each capture (6);
+//                        everything before that is CPU sim only, no GPU work
+//   --seed <n>           deterministic blob seeding (default 1234)
+//   --refract <k>        override OilConfig::refractK    (A/B without a rebuild)
+//   --marble-scale <s>   override OilConfig::marbleScale
+//   --rim-width <w>      override OilConfig::rimWidth
 //
 // fps + diagnostics are also appended to %TEMP%\OilWallpaper.log every 5 s
 // (the --console re-attaches stdout, so shell redirection would go silent).
 
 #include <windows.h>
 #include <shellapi.h>
+#include <wincodec.h>
 #include <cstdio>
 #include <cstdarg>
+#include <cmath>
 #include <share.h>
+#include <string>
+#include <vector>
 #include "oil.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 void Fail(const char* what, HRESULT hr) {
     char buf[512];
@@ -63,6 +85,244 @@ static bool         g_manualPause = false;
 static bool         g_shuttingDown = false;
 static bool         g_wallpaperLost = false;
 static OilRenderer* g_renderer = nullptr;
+
+// ===========================================================================
+// --shot: headless offscreen capture
+//
+// Nothing in this path creates a window, finds Progman/WorkerW, adds a tray
+// icon, takes the single-instance mutex or calls SPI_SETDESKWALLPAPER.
+// ===========================================================================
+static void ShotLog(const char* fmt, ...) {
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(buf, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    fputs(buf, stdout);
+    wchar_t path[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, path);
+    wcscat_s(path, L"OilWallpaper-shot.log");
+    if (FILE* f = _wfsopen(path, L"a", _SH_DENYNO)) { fputs(buf, f); fclose(f); }
+}
+
+// WIC PNG writer (24bpp BGR).
+static bool WritePng(const wchar_t* path, const std::vector<unsigned char>& bgr,
+                     int w, int h) {
+    IWICImagingFactory* fac = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&fac)))) return false;
+    bool ok = false;
+    IWICStream* stream = nullptr;
+    IWICBitmapEncoder* enc = nullptr;
+    IWICBitmapFrameEncode* frame = nullptr;
+    IPropertyBag2* props = nullptr;
+    do {
+        if (FAILED(fac->CreateStream(&stream))) break;
+        if (FAILED(stream->InitializeFromFilename(path, GENERIC_WRITE))) break;
+        if (FAILED(fac->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc))) break;
+        if (FAILED(enc->Initialize(stream, WICBitmapEncoderNoCache))) break;
+        if (FAILED(enc->CreateNewFrame(&frame, &props))) break;
+        if (FAILED(frame->Initialize(props))) break;
+        if (FAILED(frame->SetSize((UINT)w, (UINT)h))) break;
+        WICPixelFormatGUID fmt = GUID_WICPixelFormat24bppBGR;
+        if (FAILED(frame->SetPixelFormat(&fmt))) break;
+        const UINT stride = (UINT)w * 3;
+        if (FAILED(frame->WritePixels((UINT)h, stride, stride * (UINT)h,
+                                      const_cast<BYTE*>(bgr.data())))) break;
+        if (FAILED(frame->Commit())) break;
+        ok = SUCCEEDED(enc->Commit());
+    } while (false);
+    if (props) props->Release();
+    if (frame) frame->Release();
+    if (enc) enc->Release();
+    if (stream) stream->Release();
+    fac->Release();
+    return ok;
+}
+
+static void EnsureParentDir(const wchar_t* path) {
+    wchar_t dir[MAX_PATH];
+    wcscpy_s(dir, MAX_PATH, path);
+    wchar_t* slash = wcsrchr(dir, L'\\');
+    if (!slash) return;
+    *slash = 0;
+    wchar_t parent[MAX_PATH];
+    wcscpy_s(parent, MAX_PATH, dir);
+    if (wchar_t* s2 = wcsrchr(parent, L'\\')) { *s2 = 0; CreateDirectoryW(parent, nullptr); }
+    CreateDirectoryW(dir, nullptr);
+}
+
+static float SrgbToLinear(float c) {
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+}
+
+static bool ShotModeRequested() {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool found = false;
+    for (int i = 1; i < argc && !found; i++)
+        if (wcscmp(argv[i], L"--shot") == 0) found = true;
+    LocalFree(argv);
+    return found;
+}
+
+static int RunShotMode() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    std::wstring out;
+    int   width = 2560, height = 1440;
+    float delaySec = 25.0f, seriesInterval = 0.0f, shotFps = 60.0f;
+    int   seriesCount = 1, yieldMs = 0, warmFrames = 6;
+    OilConfig cfg;
+    cfg.seed = 1234;
+    {
+        int argc = 0;
+        wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        for (int i = 1; i < argc; i++) {
+            auto next = [&]() -> const wchar_t* { return i + 1 < argc ? argv[++i] : nullptr; };
+            if (wcscmp(argv[i], L"--shot") == 0) {
+                if (const wchar_t* v = next()) out = v;
+            } else if (wcscmp(argv[i], L"--shot-size") == 0) {
+                if (const wchar_t* v = next()) {
+                    int w = 0, h = 0;
+                    if (swscanf_s(v, L"%dx%d", &w, &h) == 2 && w > 0 && h > 0) { width = w; height = h; }
+                }
+            } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
+                if (const wchar_t* v = next()) delaySec = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--shot-series") == 0) {
+                if (const wchar_t* v = next()) {
+                    int n = 0; float iv = 0;
+                    if (swscanf_s(v, L"%d:%f", &n, &iv) == 2 && n > 0) { seriesCount = n; seriesInterval = iv; }
+                }
+            } else if (wcscmp(argv[i], L"--shot-fps") == 0) {
+                if (const wchar_t* v = next()) shotFps = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--shot-yield") == 0) {
+                if (const wchar_t* v = next()) yieldMs = _wtoi(v);
+            } else if (wcscmp(argv[i], L"--shot-warm") == 0) {
+                if (const wchar_t* v = next()) warmFrames = _wtoi(v);
+            } else if (wcscmp(argv[i], L"--palette") == 0) {
+                if (const wchar_t* v = next()) cfg.palette = _wtoi(v) & 1;
+            } else if (wcscmp(argv[i], L"--step") == 0) {
+                if (const wchar_t* v = next()) cfg.lookStep = _wtoi(v);
+            } else if (wcscmp(argv[i], L"--seed") == 0) {
+                if (const wchar_t* v = next()) cfg.seed = (unsigned)_wtoi(v);
+            } else if (wcscmp(argv[i], L"--refract") == 0) {
+                if (const wchar_t* v = next()) cfg.refractK = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--marble-scale") == 0) {
+                if (const wchar_t* v = next()) cfg.marbleScale = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--rim-width") == 0) {
+                if (const wchar_t* v = next()) cfg.rimWidth = (float)_wtof(v);
+            }
+        }
+        LocalFree(argv);
+    }
+    if (out.empty()) {
+        ShotLog("[shot] ERROR: --shot needs an output .png path\n");
+        return 2;
+    }
+    if (shotFps < 10.0f) shotFps = 10.0f;
+
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+        ShotLog("[shot] ERROR: CoInitializeEx failed\n");
+        return 3;
+    }
+
+    ShotLog("[shot] OilWallpaper headless capture: %dx%d palette=%d step=%d seed=%u "
+            "delay=%.1fs series=%d:%.1fs fps=%.0f\n",
+            width, height, cfg.palette, cfg.lookStep, cfg.seed,
+            delaySec, seriesCount, seriesInterval, shotFps);
+
+    OilRenderer renderer;
+    renderer.InitOffscreen(width, height, cfg);
+
+    std::wstring stem = out;
+    if (stem.size() > 4 && _wcsicmp(stem.c_str() + stem.size() - 4, L".png") == 0)
+        stem.resize(stem.size() - 4);
+
+    const float dt = 1.0f / shotFps;
+    long long frames = 0, nextLog = 0;
+    const DWORD wallStart = GetTickCount();
+    std::vector<unsigned char> rgba;
+    std::vector<unsigned char> bgr((size_t)width * height * 3);
+
+    for (int s = 0; s < seriesCount; s++) {
+        const double target = delaySec + (double)s * seriesInterval;
+        const long long want = (long long)llround(target * shotFps);
+        // The oil look holds no GPU-side state, so the sim can be fast
+        // forwarded on the CPU and only the last `warmFrames` actually
+        // rendered. That keeps a capture to a fraction of a second of GPU
+        // work — the user's live wallpaper is on the same card.
+        const long long renderFrom = want - (long long)warmFrames;
+        renderer.ResetGpuStats();       // per-capture GPU cost
+        while (frames < want) {
+            if (frames >= renderFrom) {
+                renderer.Frame(dt);
+                // Leave the GPU air: an unthrottled full-screen render starves
+                // the compositor (and once greyed the OLED when two ran at the
+                // same time). Never run two of these concurrently.
+                if (yieldMs > 0) Sleep((DWORD)yieldMs);
+            } else {
+                renderer.Advance(dt);       // CPU sim only, no GPU submission
+            }
+            frames++;
+            if (frames >= nextLog) {
+                ShotLog("[shot] simulated %.1f s (%lld frames, %.1f s wall)\n",
+                        frames / shotFps, frames, (GetTickCount() - wallStart) / 1000.0);
+                nextLog = frames + (long long)(shotFps * 30);
+            }
+        }
+        if (!renderer.CaptureOffscreen(rgba)) {
+            ShotLog("[shot] ERROR: readback failed\n");
+            renderer.Shutdown();
+            CoUninitialize();
+            return 4;
+        }
+
+        // stats + BGR pack. Mean LINEAR luminance is the ABL-relevant number
+        // (proportional to panel light output); mean code luma is what the
+        // 8-bit frame actually carries.
+        double linSum = 0.0, codeSum = 0.0;
+        size_t hot = 0;
+        const size_t n = (size_t)width * height;
+        for (size_t p = 0; p < n; p++) {
+            const float r = rgba[p * 4 + 0] / 255.0f;
+            const float g = rgba[p * 4 + 1] / 255.0f;
+            const float b = rgba[p * 4 + 2] / 255.0f;
+            const float lin = 0.2126f * SrgbToLinear(r) + 0.7152f * SrgbToLinear(g)
+                            + 0.0722f * SrgbToLinear(b);
+            linSum += lin;
+            codeSum += 0.2126f * r + 0.7152f * g + 0.0722f * b;
+            if (lin > 0.5f) hot++;
+            bgr[p * 3 + 0] = rgba[p * 4 + 2];
+            bgr[p * 3 + 1] = rgba[p * 4 + 1];
+            bgr[p * 3 + 2] = rgba[p * 4 + 0];
+        }
+
+        std::wstring shotPath = stem;
+        if (seriesCount > 1) {
+            wchar_t suffix[32];
+            swprintf_s(suffix, L"-%03d", (int)llround(target));
+            shotPath += suffix;
+        }
+        shotPath += L".png";
+        EnsureParentDir(shotPath.c_str());
+        const bool ok = WritePng(shotPath.c_str(), bgr, width, height);
+        ShotLog("[shot] t=%.1fs %ls mean_lum_linear=%.4f mean_code_luma=%.4f "
+                "above_half=%.2f%% gpu_ms min=%.3f mean=%.3f  %s\n",
+                frames / shotFps, shotPath.c_str(), linSum / (double)n, codeSum / (double)n,
+                100.0 * hot / (double)n, renderer.GpuMsMin(), renderer.GpuMsMean(),
+                ok ? "ok" : "FAILED");
+    }
+
+    ShotLog("[shot] done: %lld frames in %.1f s wall, gpu %.3f ms min / %.3f ms mean "
+            "(%dx%d, step %d)\n",
+            frames, (GetTickCount() - wallStart) / 1000.0,
+            renderer.GpuMsMin(), renderer.GpuMsMean(), width, height, cfg.lookStep);
+    renderer.Shutdown();
+    CoUninitialize();
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // WorkerW: the layer behind the desktop icons (same dance as the fluid app)
@@ -159,8 +419,8 @@ static void ShowTrayMenu(HWND hwnd) {
     AppendMenuW(menu, MF_STRING | (g_manualPause ? MF_CHECKED : 0), CMD_PAUSE, L"Pause");
 
     HMENU pal = CreatePopupMenu();
-    AppendMenuW(pal, MF_STRING, CMD_PAL_ACID, L"Acid (orange / coral / teal)");
-    AppendMenuW(pal, MF_STRING, CMD_PAL_ROYAL, L"Royal (purple / red-orange)");
+    AppendMenuW(pal, MF_STRING, CMD_PAL_ACID, L"Acid (ink / coral / cyan)");
+    AppendMenuW(pal, MF_STRING, CMD_PAL_ROYAL, L"Royal (violet / orange / pink)");
     int active = g_renderer ? g_renderer->Palette() : 0;
     CheckMenuRadioItem(pal, CMD_PAL_ACID, CMD_PAL_ROYAL,
                        active == 0 ? CMD_PAL_ACID : CMD_PAL_ROYAL, MF_BYCOMMAND);
@@ -246,6 +506,13 @@ static void RemoveTrayIcon() {
 // ---------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+    // Headless capture first: no window, no WorkerW, no tray, no mutex
+    // handshake (a running wallpaper must not be disturbed).
+    if (ShotModeRequested()) {
+        SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        return RunShotMode();
+    }
+
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"OilWallpaper_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         MessageBoxW(nullptr, L"Oil Wallpaper is already running.",
@@ -253,9 +520,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         return 0;
     }
 
-    static char  g_shotPath[MAX_PATH] = {};
-    static float g_shotDelay = 5.0f;
-    static int   g_palette = 0;
+    static int g_palette = 0;
+    static int g_step = 8;
     {
         int argc = 0;
         wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
@@ -265,14 +531,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 FILE* f;
                 freopen_s(&f, "CONOUT$", "w", stdout);
                 freopen_s(&f, "CONOUT$", "w", stderr);
-            } else if (wcscmp(argv[i], L"--shot") == 0 && i + 1 < argc) {
-                // dump one rendered frame to this BMP, then exit (automation)
-                WideCharToMultiByte(CP_UTF8, 0, argv[++i], -1, g_shotPath, MAX_PATH,
-                                    nullptr, nullptr);
-            } else if (wcscmp(argv[i], L"--shot-delay") == 0 && i + 1 < argc) {
-                g_shotDelay = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--palette") == 0 && i + 1 < argc) {
                 g_palette = _wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--step") == 0 && i + 1 < argc) {
+                g_step = _wtoi(argv[++i]);
             }
         }
         LocalFree(argv);
@@ -298,10 +560,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     OilConfig cfg;   // hardcoded defaults
     cfg.palette = g_palette & 1;
+    cfg.lookStep = g_step;
     OilRenderer renderer;
     renderer.Init(hwnd, width, height, cfg);
     g_renderer = &renderer;
-    if (g_shotPath[0]) renderer.RequestSnapshot(g_shotPath, g_shotDelay);
 
     CreateTrayWindow();
 
@@ -368,18 +630,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             fps = fps * 0.95f + (1.0f / dt) * 0.05f;
 
         renderer.Frame(dt);
-        if (renderer.ShotDone()) {
-            Log("snapshot captured, exiting\n");
-            break;
-        }
 
         fpsTime += dt;
         fpsFrames++;
         if (fpsTime >= 5.0) {
-            Log("fps: %.1f (%d frames in %.1f s)\n",
-                fpsFrames / fpsTime, fpsFrames, fpsTime);
+            Log("fps: %.1f (%d frames in %.1f s), gpu %.3f ms mean\n",
+                fpsFrames / fpsTime, fpsFrames, fpsTime, renderer.GpuMsMean());
             fpsTime = 0.0;
             fpsFrames = 0;
+            renderer.ResetGpuStats();
         }
     }
 

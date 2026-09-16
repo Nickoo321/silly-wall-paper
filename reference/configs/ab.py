@@ -8,7 +8,7 @@ sys.path.insert(0, r"C:/Users/abg77/AppData/Local/Temp/claude/C--Users-abg77-One
 from PIL import Image, ImageDraw, ImageFont
 out = sys.argv[1]
 cols = [a.split('=', 1) for a in sys.argv[2:]]
-W = 960; H = 540  # thumbnails; pad = 8; head = 34
+W = 960; H = 540; pad = 8; head = 34  # thumbnails; pad = 8; head = 34
 times = sorted({os.path.basename(f).rsplit('-', 1)[1][:-4] for _, p in cols for f in glob.glob(p + '-[0-9][0-9][0-9].png')})
 sheet = Image.new('RGB', (pad + len(cols) * (W + pad), head + len(times) * (H + pad)), (18, 18, 18))
 d = ImageDraw.Draw(sheet)

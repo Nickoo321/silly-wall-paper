@@ -150,3 +150,13 @@ in chat only.
   lines) even where clipped, ringed by orange -> red -> magenta bands, with many small vortices
   in the outer band feeding toward the cursor. The port's pour at the same time was a flat,
   textureless disc expanding radially with no vortices near the cursor (see WORKLOG 2026-09-16).
+
+## Oil / "Liquid Acid" END GOAL (user, 2026-09-16) — `liquid-acid-ref-*.jpg`
+Macro footage of oil floating on inked water ("Liquid Acid" visual pack, Steven McFarlane).
+What defines the look: (1) oil regions are FLAT saturated fills with a thin dark rim (orange
+discs on teal/black ink; red-orange web on deep purple), (2) many circular holes/bubbles of
+every size — water droplets trapped in oil, and oil droplets in ink — i.e. positive AND
+negative blobs, (3) the ink underneath is a marbled FLUID (flat colour bands, dark seams,
+turbulent filaments = our fluid sim), (4) coarse film grain, (5) complementary palettes
+(orange/teal, red/purple, yellow/red). Lava-lamp metaballs on black (oil phase 0) are NOT this;
+the earlier AcidWallpaper PoC (posterised blobs + hot rims + hole-blobs) was closer.

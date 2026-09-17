@@ -314,6 +314,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.rimWidth     = getF(S, L"rim_width", a.rimWidth);
         a.rimInset     = getF(S, L"rim_inset", a.rimInset);
         a.rimDark      = getF(S, L"rim_dark", a.rimDark);
+        a.rimVary      = getF(S, L"rim_vary", a.rimVary);
+        a.rimInkFollow = getF(S, L"rim_ink_follow", a.rimInkFollow);
         a.meniscus     = getF(S, L"meniscus", a.meniscus);
         a.meniscusW    = getF(S, L"meniscus_width", a.meniscusW);
         a.meniscusOff  = getF(S, L"meniscus_offset", a.meniscusOff);

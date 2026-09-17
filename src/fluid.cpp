@@ -1788,9 +1788,9 @@ struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
-    float p10[4], p11[4], men[4];
+    float p10[4], p11[4], p12[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 336, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 352, "AcidCB layout");
 
 // GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
 struct InkParamsGPU {
@@ -2267,9 +2267,11 @@ void FluidRenderer::UploadAcidConstants() {
     float targetHue = fmodf(OilMeanHueDeg(effOil) + 180.0f, 360.0f);
     float p11[4] = { a.inkComplementLock ? 1.0f : 0.0f, a.inkComplementSpan,
                      targetHue, 0.0f };   // .w unused: the sweep is applied above
+    float p12[4] = { a.rimVary, a.rimInkFollow, 0.0f, 0.0f };
     float men[4] = { effMen[0], effMen[1], effMen[2], 0.0f };
     memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
-    memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.men, men, 16);
+    memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
+    memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 }
 

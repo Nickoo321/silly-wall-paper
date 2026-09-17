@@ -661,3 +661,33 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   tuned against the busy WE-parity flow and merges on the calm ink flow. Needs
   its own iteration (blob_count ~64, threshold ~0.95, support_scale ~1.7).
   Panel check with HDR on AND off still owed.
+
+## 2026-09-17 — rim variation keys + liquid-acid-water population re-tune
+
+- **`[liquid_acid] rim_vary` / `rim_ink_follow`** (both default **0** = the shipped
+  uniform rim; liquid-acid-a/b/c are unchanged unless the keys are set). In the OIL
+  block of `kDisplaySrc` (`src/shaders.h`), just before the dark-rim Gaussian:
+  `rim_vary` drives one low-frequency `AcidFbm` of position (+ a slow time drift),
+  contrast-stretched, that multiplies BOTH the rim half-width and the meniscus
+  half-width (0.4x..1.9x) and the halo intensity (0..1.55x), so the outline thickens,
+  thins and dies out along stretches. `rim_ink_follow` scales the halo by the dye
+  brightness sampled one tap OUTSIDE the isoline along -grad (the halo is refracted
+  ink): 0.55x over clear water .. 1.45x over bright ink — a floor, not zero, because
+  the halo is also the oil edge's own refraction. New cbuffer slot `laP12`
+  (AcidParamsGPU 336 -> 352 bytes), parsed in main.cpp, two Settings sliders.
+- Balance took one extra render: at `0.25 + 1.05*smoothstep` the halo only ever got
+  DIMMER than the current look (ink_mode=water is mostly clear water), which reads as
+  "weaker", not "varied". The shipped gains make the bright stretches ~= the old
+  uniform strength and the dead stretches ~0.15 alpha.
+- **liquid-acid-water.ini population is now its own** (was a copy of palette A's):
+  blob_count 96->64, disc_frac .16->.10, web_frac .32->.20, bubble_frac .28->.40,
+  disc 0.160-0.380 -> 0.300-0.420, web 0.070-0.200 -> 0.120-0.210, threshold
+  0.55->0.65, support_scale 2.00->1.60. Oil-region coverage **96% -> ~41%** (a12 is
+  ~50%): big discs with ink channels between them, holes clustered on the oil instead
+  of confetti over the whole frame. Nothing else touched (repulsion/flow keys as-is).
+- Shots (1920x1080, seed 1234, `--shot-drop 960,150,70`, t=90, `--hdr on`) in
+  build2/shots/rim/: r1 = rim keys off, r2 = first gains, r3 = shipped gains
+  (`rim_vary 0.7`, `rim_ink_follow 0.8`, ini build2/shots/rim/r2.ini). Sheets:
+  rim-ab.png, rim-refsheet.png.
+- `style=fluid` regression: we-look-live.ini 60 s 2560x1440 md5
+  **10E36EBF1A74EDFE609065D757300054** before and after (build2/shots/rim/regress-fluid.png).

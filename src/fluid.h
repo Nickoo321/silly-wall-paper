@@ -82,6 +82,15 @@ struct LiquidAcidConfig {
     float meniscusW   = 0.0020f;    // half-width, sdf units
     float meniscusOff = 0.0022f;    // band centre, OUTSIDE the isoline
     float meniscusCol[3] = { 0.353f, 0.918f, 0.894f };   // bright cyan (ref 1)
+    // Rim variation. The reference rim is not a uniform stroke: it thickens
+    // and brightens where the ink under it is bright and fades out along
+    // other stretches. BOTH DEFAULT TO 0 = the shipped, perfectly even rim.
+    float rimVary     = 0.0f;       // 0..1 low-frequency noise (position +
+                                    // slow drift) on rim/halo width and on
+                                    // halo intensity, incl. stretches at ~0
+    float rimInkFollow= 0.0f;       // 0..1 scale the halo by the ink
+                                    // brightness just OUTSIDE the isoline
+                                    // (the halo is refracted ink)
     float refraction  = 0.050f;     // ink uv offset along the field gradient near rims
     float translucency= 0.16f;      // how much the ink under the oil modulates it
     float oilTexture  = 0.07f;      // faint in-blob mottle (interiors stay flat)

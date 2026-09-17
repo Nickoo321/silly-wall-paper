@@ -358,6 +358,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
     float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w -
     float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
+    float4 laP12;        // x rimVary    y rimInkFollow z -         w -
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -814,9 +815,37 @@ R"hlsl(
                  + length(Dye.SampleLevel(linearClamp, uv - float2(bt.x, -bt.y), 0).rgb);
         oilC *= lerp(1.0, 0.88 + 0.30 * saturate(lw * 0.45 * laP4.x), saturate(laP2.z));
     }
+    // ---- rim variation (rim_vary / rim_ink_follow) -----------------------
+    // The reference rim is NOT a uniform stroke: it thickens and brightens
+    // where the ink under it is bright, and thins to nothing along other
+    // stretches. Two multipliers, both EXACTLY 1.0 when the keys are 0, so
+    // every shipped ini renders unchanged.
+    float rimMul = 1.0, haloMul = 1.0;
+    if (laP12.x > 0.0005) {
+        // low-frequency noise of POSITION (features ~1/3 of the frame) with a
+        // slow drift, contrast-stretched so it really reaches 0 and 1
+        float rn = AcidFbm(pp * 3.3 + float2(laP6.z * 0.011, -laP6.z * 0.008)) * 1.143;
+        rn = saturate((rn - 0.5) * 1.9 + 0.5);
+        float rv = saturate(laP12.x);
+        rimMul  = lerp(1.0, 0.40 + 1.50 * rn, rv);                  // 0.4x..1.9x width
+        haloMul = lerp(1.0, smoothstep(0.18, 0.72, rn) * 1.55, rv); // dies / thickens
+    }
+    if (laP12.y > 0.0005) {
+        // The halo IS refracted ink, so it can be no brighter than the ink
+        // just OUTSIDE the edge: one dye tap a few halo-widths along -grad
+        // (the outward normal), so it doesn't collapse under the oil itself.
+        float2 uvO = saturate(uv - (grad / gl) * (max(laP2.y, laP1.x) * 8.0)
+                                  * float2(1.0 / aspect, 1.0));
+        float3 dO  = Dye.SampleLevel(linearClamp, uvO, 0).rgb;
+        float  il  = saturate(max(dO.r, max(dO.g, dO.b)) * max(laP4.x, 1.0));
+        // Brightens where the ink outside is bright, and falls toward a floor
+        // -- not to nothing -- over clear water, because the halo is also the
+        // oil edge's own refraction (ink_mode=water is mostly clear water).
+        haloMul *= lerp(1.0, 0.55 + 0.90 * smoothstep(0.03, 0.45, il), saturate(laP12.y));
+    }
     // dark rim: a Gaussian band centred just INSIDE the boundary, forced to
     // zero deep inside a merged mass so no concentric rings appear there.
-    float rimX = (sdf - laP1.y) / max(laP1.x, 1e-5);
+    float rimX = (sdf - laP1.y) / max(laP1.x * rimMul, 1e-5);
     float rimB = exp(-rimX * rimX)
                * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field));
     oilC *= 1.0 - saturate(laP1.z) * rimB;
@@ -876,8 +905,8 @@ R"hlsl(
     // In the references this is the brightest thing in the frame (cyan on
     // ref 1) and it is what separates the oil from the ink. Painted with the
     // ramp's bright stop so it reads even over black ink.
-    if (laP2.x > 0.002) {
-        float hx = (sdf + laP7.z) / max(laP2.y, 1e-5);
+    if (laP2.x * haloMul > 0.002) {
+        float hx = (sdf + laP7.z) / max(laP2.y * rimMul, 1e-5);
         float halo = exp(-hx * hx);
         // sdf = (field - thresh) / |grad| is only a distance where |grad| is
         // strong. On a broad low-gradient plateau that never reaches the
@@ -886,7 +915,7 @@ R"hlsl(
         // no oil under it. Real blob surfaces have |grad| >~ 2 (it scales as
         // 1/radius, and the largest discs here are ~0.4), so gate on it.
         halo *= smoothstep(0.5, 1.5, gl);
-        col = lerp(col, laMen.rgb, saturate(halo * laP2.x));
+        col = lerp(col, laMen.rgb, saturate(halo * laP2.x * haloMul));
     }
 
     // ---- interface speckle: sparse cellular dots hugging the boundary ----

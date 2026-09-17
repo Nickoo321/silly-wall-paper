@@ -30,6 +30,7 @@ Everything below is committed on `main`; nothing is running in the background.
 | `tools/explore.py` random look-exploration tool + knob spaces (layering1 Sonnet batch, tile9 Haiku batch); tiles sent to the user one at a time; Pillow from user site-packages | 87e4c39, 5f18e0f |
 | Liquid Acid oil reads as a FILM, not a cut-out: `oil_thin_edge`/`oil_edge_frac` (soft thickness edge, thin oil goes dark), `meniscus_from_ink` (emergent halo: ink colour, weight = ink brightness, vanishes on black ink), `swarm_lens` (soft holes), `oil_glow`, `oil_specular`, `oil_iridescence`, `refraction_width`; all default 0. Configs `liquid-acid-a-real.ini`, `layering1-09-real.ini`; A/B build2/shots/oil/ | 54780a0 |
 | Transparent coloured oil FILM: `oil_transparency` (Beer-Lambert per channel over the refracted ink + backlit scatter), `oil_absorb`, `oil_film_bump`, `oil_refract_body`, `oil_ink_blur`; holes stay pure ink; all default 0. Configs `liquid-acid-a-glass.ini`, `liquid-acid-water-glass.ini`; A/B build2/shots/oil-trans/ | 08a89aa |
+| Screen mirroring / kaleidoscope `[mirror]` (display-pass uv fold, all three looks, overlay presets in reference/presets/) | (this commit) |
 
 Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
 

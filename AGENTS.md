@@ -57,6 +57,14 @@ Single exe, no deps beyond Windows SDK libs.
   erases neutral dye); vorticity 48 turns a drop into a smoke puff — the ink
   inis use 12; `idle_splats=0` also suppresses the startup burst so the water
   starts clear.
+- **`[mirror]`** — screen mirroring / kaleidoscope. ONE uv transform at the top of
+  `PSMain` in the SHARED part of `kDisplaySrc` (`MirrorFold`), so all three
+  looks fold together; `mode=0` returns early and the fluid PSO is
+  bit-identical. Keys: mode (0 off / 1 horiz / 2 vert / 3 quad / 4 kaleido),
+  segments, source, center_x/center_y, rotate_period, drift, soft. Root
+  CONSTANTS at b3 — bind it on EVERY display draw. Display-only and
+  look-agnostic, so it ships as PARTIAL overlay presets
+  (`reference/presets/Mirror - *.ini`) that fold whatever look is running.
 - `src/moods.cpp/h` — mood conductor (DWELL→SHIFT→EMIT→RETURN transitions).
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).

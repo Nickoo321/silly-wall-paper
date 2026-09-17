@@ -257,6 +257,30 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
             }
         }
     }
+    // ---- screen mirroring / kaleidoscope ([mirror]) -------------------------
+    // Display-only and look-agnostic, so this is the one block that is worth
+    // shipping as a PARTIAL preset: an ini carrying nothing but [mirror] folds
+    // whatever look happens to be running.
+    {
+        MirrorConfig& mr = cfg.mirror;
+        const wchar_t* S = L"mirror";
+        mr.mode         = getI(S, L"mode", mr.mode);
+        mr.segments     = getI(S, L"segments", mr.segments);
+        mr.source       = getI(S, L"source", mr.source);
+        mr.rotatePeriod = getF(S, L"rotate_period", mr.rotatePeriod);
+        mr.drift        = getF(S, L"drift", mr.drift);
+        mr.soft         = getF(S, L"soft", mr.soft);
+        // `center = "x y"` is the hand-written form; the settings sliders
+        // write the two singles, and a single that is actually PRESENT wins
+        // (same rule as [look] style vs the per-look int keys).
+        wchar_t buf[64] = {}; float cx, cy;
+        GetPrivateProfileStringW(S, L"center", L"", buf, 64, ini);
+        if (swscanf_s(buf, L"%f %f", &cx, &cy) == 2) {
+            mr.centerX = cx; mr.centerY = cy;
+        }
+        mr.centerX = getF(S, L"center_x", mr.centerX);
+        mr.centerY = getF(S, L"center_y", mr.centerY);
+    }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
         DropConfig& d = cfg.drops;
@@ -1260,6 +1284,19 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putRgb(S, L"paper_color", k.paper);
         putRgb(S, L"tint_thin", k.tintThin);
         putRgb(S, L"tint_thick", k.tintThick);
+    }
+    {
+        const MirrorConfig& mr = c.mirror;
+        const wchar_t* S = L"mirror";
+        putI(S, L"mode", mr.mode);
+        putI(S, L"segments", mr.segments);
+        putI(S, L"source", mr.source);
+        putF(S, L"rotate_period", mr.rotatePeriod, 1);
+        putF(S, L"drift", mr.drift, 2);
+        putF(S, L"soft", mr.soft, 4);
+        putF(S, L"center_x", mr.centerX, 4);
+        putF(S, L"center_y", mr.centerY, 4);
+        WritePrivateProfileStringW(S, L"center", nullptr, path);   // delete the pair form
     }
     {
         const DropConfig& d = c.drops;

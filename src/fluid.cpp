@@ -259,10 +259,14 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     // Param 4 is the shared ink-in-water parameter block (b2), read by the INK
     // PSO and by LIQUID_ACID when ink_mode=water. Same story: the fluid
     // display shader does not reference it.
+    // Param 6 is the [mirror] fold block (b3) — 12 ROOT CONSTANTS, because
+    // unlike the blocks above this one IS read by all three display PSOs
+    // (the fold is in the shared part of the shader), so it must be bound on
+    // every display draw and an upload-buffer ring would buy nothing.
     {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rSrv3 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, 0 };
-        D3D12_ROOT_PARAMETER params[6] = {};
+        D3D12_ROOT_PARAMETER params[7] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, 32 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -281,6 +285,9 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[5].DescriptorTable = { 1, &rSrv3 };  // t3 (low-res velocity)
         params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+        params[6].Constants = { 3, 0, 12 };         // b3 (MirrorCB)
+        params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -288,7 +295,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 6;
+        rsd.NumParameters = 7;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -809,6 +816,7 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    BindMirrorFold();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -849,6 +857,7 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    BindMirrorFold();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 }
@@ -945,6 +954,90 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
     memcpy(out, consts, sizeof(consts));
 }
 
+// ===========================================================================
+// [mirror] — screen mirroring / kaleidoscope.
+//
+// The fold itself is one uv transform at the top of the display pixel shader
+// (see MirrorFold in kDisplaySrc); everything here is its plumbing: the 12
+// root constants, and a CPU twin of the same fold so a pointer splat lands
+// where the user SEES it rather than where the pointer literally is.
+//
+// Note on names: m_mirrorChain / m_mirrorW below are the unrelated
+// SECOND-MONITOR mirror. Everything to do with the fold says "MirrorFold"
+// or lives in m_cfg.mirror.
+// ===========================================================================
+
+void FluidRenderer::BuildMirrorConstants(float out[12], int w, int h) const {
+    const MirrorConfig& mr = m_cfg.mirror;
+    const float aspect = (float)(w > 0 ? w : 1) / (float)(h > 0 ? h : 1);
+    const float c[12] = {
+        (float)mr.mode, (float)mr.segments, aspect, m_time,
+        mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
+        fminf(fmaxf(mr.drift, 0.0f), 1.0f),
+        fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
+    };
+    memcpy(out, c, sizeof(c));
+}
+
+void FluidRenderer::BindMirrorFold(int w, int h) {
+    float c[12];
+    BuildMirrorConstants(c, w > 0 ? w : m_width, h > 0 ? h : m_height);
+    m_cmd->SetGraphicsRoot32BitConstants(6, 12, c, 0);
+}
+
+// Must stay in step with MirrorFold()/MirFoldAxis() in kDisplaySrc. `soft` is
+// deliberately ignored: it is a display nicety a few pixels wide, and a splat
+// does not care. NOT compensated: the kaleidoscope's rotation makes the
+// impulse direction ill-defined, so there the flips stay 1.
+void FluidRenderer::MirrorMapPointer(float& px, float& py,
+                                     float& flipX, float& flipY) const {
+    flipX = flipY = 1.0f;
+    const MirrorConfig& mr = m_cfg.mirror;
+    if (mr.mode <= 0 || m_width <= 0 || m_height <= 0) return;
+
+    float u = px / (float)m_width, v = py / (float)m_height;
+    float cx = mr.centerX, cy = mr.centerY;
+    if (mr.drift > 0.0005f) {
+        auto wander = [](float t) {
+            return 0.55f * sinf(t) + 0.30f * sinf(t * 1.913f + 1.7f)
+                 + 0.15f * sinf(t * 3.271f + 4.1f);
+        };
+        const float t = m_time * 0.05f;
+        const float d = 0.18f * fminf(mr.drift, 1.0f);
+        cx = fminf(fmaxf(cx + d * wander(t), 0.2f), 0.8f);
+        cy = fminf(fmaxf(cy + d * wander(t * 0.83f + 11.0f), 0.2f), 0.8f);
+    }
+
+    if (mr.mode >= 4) {
+        const float aspect = (float)m_width / (float)m_height;
+        const float rot = (mr.rotatePeriod > 0.01f)
+                        ? (6.2831853f * m_time / mr.rotatePeriod) : 0.0f;
+        const float x = (u - cx) * aspect, y = v - cy;
+        // same central-disc scaling as MirrorFold()
+        const float r = sqrtf(x * x + y * y)
+                      * (0.5f / sqrtf(0.25f * aspect * aspect + 0.25f));
+        const float seg = 6.2831853f / fmaxf((float)mr.segments, 2.0f);
+        const float a = atan2f(y, x) - rot;
+        const float m2 = a - seg * 2.0f * floorf(a / (seg * 2.0f));
+        const float ang = fabsf(m2 - seg) + rot;
+        u = cx + cosf(ang) * r / aspect;
+        v = cy + sinf(ang) * r;
+    } else {
+        auto axis = [](float uu, float c, float sgn, float& flip) {
+            const float d = uu - c;
+            const float M = fmaxf(fmaxf(c, 1.0f - c), 1e-4f);
+            flip = sgn * ((d >= 0.0f) ? 1.0f : -1.0f) * (0.5f / M);
+            return 0.5f + sgn * fminf(fabsf(d) / M, 1.0f) * 0.5f;
+        };
+        const float sgnX = (mr.source & 1) ? 1.0f : -1.0f;
+        const float sgnY = (mr.source & 2) ? 1.0f : -1.0f;
+        if (mr.mode == 1 || mr.mode == 3) u = axis(u, cx, sgnX, flipX);
+        if (mr.mode == 2 || mr.mode == 3) v = axis(v, cy, sgnY, flipY);
+    }
+    px = u * (float)m_width;
+    py = v * (float)m_height;
+}
+
 void FluidRenderer::CreateAnalyzerResources() {
     D3D12_HEAP_PROPERTIES hp = {};
     hp.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1015,6 +1108,7 @@ void FluidRenderer::MaybeRenderAnalyzer() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    BindMirrorFold(kAnaW, kAnaH);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1142,6 +1236,7 @@ void FluidRenderer::RenderMirror() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    BindMirrorFold(m_mirrorW, m_mirrorH);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1793,10 +1888,17 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
     float c[3];
     PickSplatColor(0.0f, c);
     float es = m_emitScale;
+    // The sim still runs full-size under a mirror; only the DISPLAY folds. So
+    // map the pointer through the same fold: the pixel the user is pointing at
+    // is showing some source pixel, and that is where the dye must go. Land on
+    // a mirrored copy and it maps back to the source, which is the same thing.
+    // With mirror.mode = 0 this is the identity and costs nothing.
+    float mx = in.mouseX, my = in.mouseY, fx = 1.0f, fy = 1.0f;
+    MirrorMapPointer(mx, my, fx, fy);
     if (m_cfg.holdToSplat && in.mouseDown) {
         float jx = (RandF() - 0.5f) * 200.0f;
         float jy = (RandF() - 0.5f) * 200.0f;
-        Splat(in.mouseX, in.mouseY, in.mouseDx * 0.5f + jx, in.mouseDy * 0.5f + jy,
+        Splat(mx, my, in.mouseDx * 0.5f * fx + jx, in.mouseDy * 0.5f * fy + jy,
               c[0] * es, c[1] * es, c[2] * es);
     } else if (!m_cfg.holdToSplat && m_cfg.splatOnClick &&
                in.mouseDown && !m_prevMouseDown) {
@@ -1804,7 +1906,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
     }
     m_prevMouseDown = in.mouseDown;
     if (in.mouseMoved && m_cfg.showMouse)
-        Splat(in.mouseX, in.mouseY, in.mouseDx, in.mouseDy,
+        Splat(mx, my, in.mouseDx * fx, in.mouseDy * fy,
               c[0] * es, c[1] * es, c[2] * es);
 }
 

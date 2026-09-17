@@ -336,6 +336,106 @@ cbuffer CB : register(b0) {
 SamplerState linearClamp : register(s0);
 Texture2D<float4> Dye : register(t0);
 
+// ---------------------------------------------------------------------------
+// Screen mirroring / kaleidoscope ([mirror]). A uv transform applied FIRST in
+// PSMain, so EVERY look inherits it: the dye sample, the acid metaball field
+// (pp derives from uv) and InkWater all see the folded coordinate, and blobs,
+// rims, swarms and speckle mirror with the dye instead of floating over it.
+//
+// This lives in the SHARED part of the source — no macro, no extra PSO — so
+// mode 0 must be an exact no-op. It is: MirrorFold() returns uv untouched
+// before doing any arithmetic, which is why style=fluid stays bit-identical.
+//
+// Structured for the SWEEP transition sketched in PROGRESS.md: (1) MirrorFold
+// returns BOTH the source uv and the distance to the nearest fold line, and
+// (2) the line definition (centre, angle, mode) is this one cbuffer block. A
+// later "side weight" can call it for the distance alone.
+// ---------------------------------------------------------------------------
+cbuffer MirrorCB : register(b3) {
+    float4 mrP0;   // x mode     y segments  z aspect         w time
+    float4 mrP1;   // xy centre              z rotate_period  w drift
+    float4 mrP2;   // x soft     y source    z -              w -
+};
+
+// |d| with the corner rounded off over a band of half-width s: equals abs(d)
+// for |d| >> s, and has zero derivative at 0. That is the whole of `soft` —
+// a mirror is already continuous in VALUE at the seam, what gives it away is
+// the reversed gradient, the hard V. Rounding the fold itself removes it for
+// one sqrt, where "sample both sides and lerp" would cost a second run of the
+// entire look pipeline. The band is very slightly compressed in exchange.
+float MirSoftAbs(float d, float s) {
+    return (s > 1e-5) ? (sqrt(d * d + s * s) - s) : abs(d);
+}
+// Quasi-random wander in ~[-1,1]: three incommensurate sines, i.e. an fbm of
+// time with no texture and no hash. The slowest term sets the pace (~2 min).
+float MirWander(float t) {
+    return 0.55 * sin(t) + 0.30 * sin(t * 1.913 + 1.7) + 0.15 * sin(t * 3.271 + 4.1);
+}
+// One folded axis. The fold line maps to the MIDDLE of the sim (0.5) and the
+// screen edge to the outer edge of the chosen half, so the shown half is
+// stretched to fill its mirrored tile: the full sim resolution ends up on
+// screen and nothing is wasted. sgn picks which half of the sim is shown.
+// sd = distance from the pixel to the fold line, uv units.
+float MirFoldAxis(float u, float c, float sgn, float soft, out float sd) {
+    float d = u - c;
+    sd = abs(d);
+    float M = max(max(c, 1.0 - c), 1e-4);
+    return 0.5 + sgn * saturate(MirSoftAbs(d, soft) / M) * 0.5;
+}
+
+float2 MirrorFold(float2 uv, out float seam) {
+    seam = 1e9;
+    int mode = (int)(mrP0.x + 0.5);
+    if (mode <= 0) return uv;          // the no-op path: nothing below runs
+
+    float2 c = mrP1.xy;
+    if (mrP1.w > 0.0005) {
+        // drift: unglue the seam from the screen centre. Clamped well inside
+        // the frame so one tile never collapses to nothing.
+        float t = mrP0.w * 0.05;
+        c += 0.18 * mrP1.w * float2(MirWander(t), MirWander(t * 0.83 + 11.0));
+        c = clamp(c, 0.2, 0.8);
+    }
+    const float soft = max(mrP2.x, 0.0);
+
+    if (mode >= 4) {
+        // Kaleidoscope: N wedges about c, every other one REFLECTED, so each
+        // wedge boundary is a mirror seam and never a jump. Angles are taken
+        // in aspect-corrected space or the wedges come out sheared.
+        const float aspect = max(mrP0.z, 1e-3);
+        const float rot = (mrP1.z > 0.01) ? (6.2831853 * mrP0.w / mrP1.z) : 0.0;
+        float2 p = (uv - c) * float2(aspect, 1.0);
+        // Scale the radius so the wedge reads the sim's central DISC rather
+        // than running off the texture: the wedge points in one direction for
+        // the whole screen, so without this the far corners all land outside
+        // [0,1]^2 and the clamp sampler smears one row of texels into radial
+        // streaks. 0.5 is the largest disc that fits the frame in this space.
+        float  r = length(p) * (0.5 / max(length(float2(0.5 * aspect, 0.5)), 1e-3));
+        float  seg = 6.2831853 / max(mrP0.y, 2.0);
+        float  a = atan2(p.y, p.x) - rot;
+        float  m2 = a - seg * 2.0 * floor(a / (seg * 2.0));   // wrapped to [0, 2seg)
+        float  as = soft / max(r, 1e-3);                      // uv band -> radians
+        float  af = MirSoftAbs(m2 - seg, as);                 // soft at the wedge axis
+        af = seg - MirSoftAbs(seg - af, as);                  // and at the wedge edge
+        seam = r * min(af, seg - af);
+        float  ang = af + rot;
+        return c + float2(cos(ang), sin(ang)) * r * float2(1.0 / aspect, 1.0);
+    }
+
+    // Axis-aligned folds. Rotation is deliberately NOT applied here: a rotated
+    // quad fold no longer tiles the rectangle exactly, and the reference look
+    // is the fixed cross. The kaleidoscope is the mode that turns.
+    int   src  = (int)(mrP2.y + 0.5);
+    float sgnX = (src & 1) ? 1.0 : -1.0;
+    float sgnY = (src & 2) ? 1.0 : -1.0;
+    float2 s = uv;
+    float sdx = 1e9, sdy = 1e9;
+    if (mode == 1 || mode == 3) s.x = MirFoldAxis(uv.x, c.x, sgnX, soft, sdx);
+    if (mode == 2 || mode == 3) s.y = MirFoldAxis(uv.y, c.y, sgnY, soft, sdy);
+    seam = min(sdx, sdy);
+    return s;
+}
+
 #ifdef LIQUID_ACID
 // --------------------------------------------------------------------------
 // "Liquid Acid" look. Compiled as a SECOND PSO from this same source with
@@ -624,7 +724,12 @@ float3 CssHueRotate(float3 c, float deg) {
 float3 CssContrast(float3 c, float k) { return c * k + 0.5 * (1.0 - k); }
 
 float4 PSMain(VSOut i) : SV_Target {
-    float2 uv = i.uv;
+    // Mirroring first: everything downstream reads the folded coordinate.
+    // NOT mirrored, by design: i.pos.xy (the paper vignette and the film
+    // grain stay screen-space effects, as they would be on real film), and
+    // the one-pixel fwidth() spike exactly on a seam.
+    float mirrorSeam;
+    float2 uv = MirrorFold(i.uv, mirrorSeam);
 #ifdef LIQUID_ACID
     // ---- oil metaball field (evaluated first: it refracts the ink sample) ----
     const float aspect = laP6.w;

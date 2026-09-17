@@ -871,3 +871,61 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   build2/shots/oil/laa-real-075.png (md5 32e9b585...), i.e. the five keys at 0 are a no-op on
   the acid path too. `style=fluid`: we-look-live 60 s 2560x1440 md5
   **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged.
+
+- **Screen mirroring / kaleidoscope, `[mirror]` (Opus executor).** User, showing two 4-fold
+  mirrored "Liquid Acid" loops: "mirroring the sim ... as a random wallpaper would be cool,
+  shouldn't be hard". It is one uv transform at the TOP of the display pixel shader
+  (`MirrorFold` in the shared part of `kDisplaySrc`), applied before the dye sample, before the
+  acid metaball field (`pp` derives from `uv`) and before `InkWater` -- so all three looks fold
+  together and blobs, rims, swarms, speckle and bands all mirror WITH the dye instead of
+  floating over it. No macro and no fourth PSO: `mode = 0` returns `uv` untouched before doing
+  any arithmetic, which is why `style=fluid` stays bit-identical. Keys, all inert at default:
+  `mode` (0 off / 1 horizontal / 2 vertical / 3 quad / 4 kaleidoscope), `segments` (kaleidoscope
+  wedges, default 6), `source` (which quarter of the SIM you see and that gets copied around:
+  +1 right half, +2 bottom half), `center_x`/`center_y` (also accepts the hand-written
+  `center = "x y"`), `rotate_period`, `drift`, `soft`.
+  How the fold maps: each folded axis sends the FOLD LINE to the middle of the sim and the
+  screen edge to the outer edge of the chosen half, so the shown half is stretched to fill its
+  mirrored tile -- the full sim resolution lands on screen and nothing is wasted. `soft` is a
+  SMOOTH ABS (`sqrt(d*d+s*s)-s`) on the fold itself rather than a second sample of the whole
+  look: a mirror is already continuous in value at the seam, what gives it away is the reversed
+  gradient, and rounding the fold removes exactly that for one sqrt. `drift` is three
+  incommensurate sines of time (an fbm with no table), clamped to 0.2..0.8 so a tile never
+  collapses. The kaleidoscope folds the ANGLE in aspect-corrected space (`af = |wrap(a,2seg) -
+  seg|`, every other wedge reflected, so a wedge edge is a mirror and never a jump) and scales
+  the radius to the sim's central DISC -- without that the far corners all sample outside
+  [0,1]^2 and the clamp sampler smears one row of texels into radial streaks (first kaleidoscope
+  render did exactly that).
+  Plumbing: `MirrorConfig` in fluid.h, `[mirror]` load/write in main.cpp, a "Mirror" settings
+  page, and a 12-DWORD ROOT-CONSTANT block at b3 (root params 6 -> 7). Root constants, not an
+  upload ring, because unlike AcidCB/InkCB this block IS read by all three display PSOs and must
+  be bound on every display draw (all four sites: swapchain, offscreen shot, analyzer,
+  second-monitor mirror -- the last two pass their own w/h for the aspect).
+  Pointer mapping: the sim still runs full-size, so `HandleInput` sends the pointer through a
+  CPU twin of the same fold -- the pixel you point at is showing some source pixel and that is
+  where the dye goes, so clicking a mirrored copy maps back to the source. The drag impulse is
+  signed by `d(source)/d(screen)` per axis so a drag in a reflected tile pushes the way it
+  looks. NOT mapped, by design: the kaleidoscope's impulse direction (ill-defined under
+  rotation, flips stay 1), `i.pos.xy` (the paper vignette and film grain stay screen-space, as
+  on real film), and the one-pixel `fwidth()` spike exactly on a seam.
+  Overlay presets: `[mirror]` is display-only and look-agnostic, so it is the one block worth
+  shipping PARTIAL. `reference/presets/Mirror - quad (overlay).ini`, `... kaleidoscope 6
+  (overlay).ini`, `... off (overlay).ini` and `reference/configs/mirror-quad.ini` carry nothing
+  else; applied from the tray they fold whatever look is running and leave every other key
+  alone. VERIFIED at runtime: `--shot-preset reference/configs/mirror-quad.ini AT 30` on the WE
+  look comes back 4-fold mirrored at t=60 with no PSO rebuild (build2/shots/mirror/ovl-060.png).
+  Sheets (960x540, seed 1234, --hdr on, --shot-delay 60, --shot-yield 2):
+  **build2/shots/mirror/sheet-mirror.png** -- WE off / WE quad / WE quad via the overlay at t30 /
+  WE kaleidoscope 6 / Liquid Acid A real oil quad / layering1-09 quad / layering1-09 kaleidoscope
+  6 -- and **sheet-drift.png**, ink-duo-pour-teal-vermillion quad with `drift 0.5` at t=30 and
+  t=90 (the seam has visibly walked off centre by t=90). What they show: the quad turns the ink
+  pour into a Rorschach butterfly and is the strongest of the modes on every look; the
+  kaleidoscope reads beautifully on the high-contrast WE look (a clean 6-fold rosette) and is
+  nearly wasted on layering1-09, whose near-solid magenta oil has little structure to fold.
+  Cost is a handful of ALU per pixel.
+  Left for the sweep (PROGRESS.md "End state"): `MirrorFold` already returns the signed distance
+  to the nearest fold line alongside the source uv, and the line's definition is the one cbuffer
+  block, so a future side weight can reuse the distance without touching the mirror modes.
+  Regression: `style=fluid` we-look-live 60 s 2560x1440 seed 1234 --hdr on md5
+  **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged --
+  re-checked after the kaleidoscope radius fix as well.

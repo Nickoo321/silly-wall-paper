@@ -356,6 +356,33 @@ struct DropConfig {
     float asymmetry   = 0.35f;
 };
 
+// Screen mirroring / kaleidoscope ([mirror]). A pure DISPLAY-pass uv
+// transform, applied FIRST in PSMain: before the dye sample, before the acid
+// metaball field (pp derives from uv) and before InkWater — so every look
+// (fluid / liquid_acid / ink) folds consistently, blobs, rims, swarms and
+// speckle included. mode 0 is a taken-early-out branch in the SHARED shader,
+// not a macro or a second PSO, so style=fluid stays bit-identical with it off.
+//
+// Deliberately split for the SWEEP transition sketched in PROGRESS.md: the
+// fold line's definition lives in this one struct (centre, angle, mode) and
+// MirrorFold() in the shader returns the source uv AND the distance to the
+// nearest fold line, so a later "side weight" can reuse the distance without
+// touching the mirror modes.
+struct MirrorConfig {
+    // 0 off | 1 horizontal | 2 vertical | 3 quad (both) | 4 kaleidoscope
+    int   mode = 0;
+    int   segments = 6;          // kaleidoscope wedges (mode 4)
+    // Which quadrant of the SIM is the one that gets shown and copied around:
+    // bit 0 = right half, bit 1 = bottom half. The shown region is stretched
+    // to fill its mirrored tile, so the full sim resolution is used.
+    int   source = 0;
+    float centerX = 0.5f;        // the fold point, uv
+    float centerY = 0.5f;
+    float rotatePeriod = 0.0f;   // s per turn of the fold axes (mode 4; 0 = fixed)
+    float drift = 0.0f;          // 0..1: slow wander of the centre (sines of time)
+    float soft = 0.0f;           // uv units: rounds the fold crease off (0 = hard)
+};
+
 // Defaults mirror reference/project.json (the shipped Wallpaper Engine values),
 // falling back to reference/script.js config for values project.json doesn't set.
 struct FluidConfig {
@@ -472,6 +499,8 @@ struct FluidConfig {
     InkConfig ink;
     // drop emitter — style-agnostic; inert unless drops.enabled
     DropConfig drops;
+    // screen mirroring / kaleidoscope — display-only; inert unless mirror.mode
+    MirrorConfig mirror;
 };
 
 // Per-frame input from the app shell (global cursor, desktop focus).
@@ -639,6 +668,14 @@ private:
     // --- "Ink in water" look (shared with Liquid Acid's ink_mode=water) ---
     void UploadInkConstants();      // fills this frame's InkCB upload buffer
     void BindInk();                 // root CBV b2 for the display draw
+    // [mirror] root constants (b3) for the display draw, and the CPU twin of
+    // the shader's fold used to put a pointer splat where the user sees it.
+    void BuildMirrorConstants(float out[12], int w, int h) const;
+    void BindMirrorFold(int w = 0, int h = 0);   // 0 = this monitor's size
+    // px in/out: the SOURCE pixel the pointer's screen pixel is showing.
+    // flipX/flipY come back as the local d(source)/d(screen) for each axis, so
+    // a drag impulse in a reflected copy pushes the dye the way it looks.
+    void MirrorMapPointer(float& px, float& py, float& flipX, float& flipY) const;
     void UpdateDrops(float dt);     // the [drops] scheduler (any style)
     // Which display PSO this frame uses. Identical to m_psoDisplay unless one
     // of the extra looks is on AND its variant compiled.

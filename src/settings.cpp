@@ -309,6 +309,15 @@ static void BuildDefs() {
         { L"Impulse spread (x drop radius)",    0.5f,  4,    0.05f, 2, &c.drops.impulseSpread,nullptr, L"drops", L"impulse_spread", false, nullptr, 3, L"How much wider the velocity impulse is than the dye stamp. Below ~1.5 the dye's outer halo parks at the entry as a bright orb" },
         { L"Lobe asymmetry",                    0,     1,    0.02f, 2, &c.drops.asymmetry,    nullptr, L"drops", L"asymmetry", false, nullptr, 3, L"0 = a textbook symmetric vortex pair. Higher = unequal lobes, one side leading" },
         { L"Entry band bottom (uv y)",          0.02f, 0.9f, 0.01f, 2, &c.drops.yMax,         nullptr, L"drops", L"y_max", false, nullptr, 3, L"How far down the screen a drop may enter" },
+        // --- screen mirroring / kaleidoscope (display only, any look) -------
+        { L"Mode (0 off 1 horiz 2 vert 3 quad 4 kaleido)", 0, 4, 1, 0, nullptr, &c.mirror.mode, L"mirror", L"mode", false, L"Mirror", 3, L"Folds the picture about a centre. 3 = the 4-fold quad; 4 = wedges around the centre" },
+        { L"Kaleidoscope segments",             2,    16,   1,     0, nullptr, &c.mirror.segments, L"mirror", L"segments", false, nullptr, 3, L"Number of wedges in mode 4. Every other one is reflected, so there is no jump at a wedge edge" },
+        { L"Shown quadrant (0-3)",              0,     3,   1,     0, nullptr, &c.mirror.source,   L"mirror", L"source", false, nullptr, 3, L"Which quarter of the sim is the one you see, and is copied around: +1 = right half, +2 = bottom half" },
+        { L"Fold centre x",                     0.1f, 0.9f, 0.01f, 2, &c.mirror.centerX,     nullptr, L"mirror", L"center_x", false, nullptr, 3, L"Where the vertical seam sits" },
+        { L"Fold centre y",                     0.1f, 0.9f, 0.01f, 2, &c.mirror.centerY,     nullptr, L"mirror", L"center_y", false, nullptr, 3, L"Where the horizontal seam sits" },
+        { L"Rotation (s per turn, 0=fixed)",    0,   600,   5,     0, &c.mirror.rotatePeriod, nullptr, L"mirror", L"rotate_period", false, nullptr, 3, L"Slowly turns the kaleidoscope's fold axes about the centre" },
+        { L"Centre drift",                      0,     1,   0.02f, 2, &c.mirror.drift,       nullptr, L"mirror", L"drift", false, nullptr, 3, L"Slow wander of the fold point, so the seam is not glued to the middle of the screen" },
+        { L"Seam softness (uv)",                0,  0.05f, 0.002f, 3, &c.mirror.soft,        nullptr, L"mirror", L"soft", false, nullptr, 3, L"Rounds the fold off over this band so the mirror crease is not a hard line. 0 = a hard mirror" },
     };
     s_checks = {
         { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0, L"Autonomous roaming emitters" },

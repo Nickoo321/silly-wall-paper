@@ -59,6 +59,23 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
 8. **Preview fidelity (optional)**: a panel-emulating PNG variant (SDR white mapped to PNG white,
    soft knee on the lifted cores) so previews stop under-reading brightness.
 
+## End state (user, 2026-09-17): automated cycling through everything
+
+"Ideally in the end the program should just cycle through whatever, basically never running out
+of combos: WE + variations, + ink sim, + the oil sim + the mirroring." Considered only, not built;
+"the last last step". Sketch, so it is not lost:
+- A *director* on top of the existing `[cycle]`/`[moods]` machinery: every N minutes pick
+  look (fluid / liquid_acid / ink) x palette or variation (curated lists: WE presets, acid
+  sweep hues, ink duotone pairs, tile9 family) x mirror overlay (off / quad / kaleido) x duration.
+- Transitions: all three looks share ONE sim, so switching the display look keeps the fluid
+  continuous. Organic hand-over = ramp the look-specific parameters instead of cross-fading
+  two renders: oil coverage (threshold) rising from empty, ink opacity/veil from 0, mirror
+  `soft`/centre drift, palette HSV lerp. No double rendering, no second PSO chain.
+- Needs from the queued work first: mirror overlays (brief-mirror), lava rise mode, the
+  transparent film, and a preset directory the director can enumerate (reference/presets/).
+- Open questions for later: minimum dwell time, blacklist of combos that clash (e.g. mirror on
+  the single-drop ink), whether the user wants a 'next' hotkey / tray item.
+
 ## How work is paced now
 Max 5x plan; the 5-hour session window is the limit that bites. One Opus executor at a time,
 resumed rather than respawned; code is read before renders are spent; the coordinator does

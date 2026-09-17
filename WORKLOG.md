@@ -1037,12 +1037,8 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   root SRVs at graphics root params 7/8, `laP18`/`laP19`, AcidCB 432 -> 464 B); the hole weight
   scales with the LOCAL blob field so a droplet punches through thick oil too. `droplets` > 0
   forces `swarm_holes`/`swarm_drops` to 0 -- one system.
-  LEFT: not yet run even once (no render budget this session) -- the HLSL is compiled at RUNTIME,
-  so the new droplet block in kDisplaySrc is UNVERIFIED and could still fail to compile; verify
-  with a --shot before anything else. Also left: the rise_respawn off-screen fix (a respawned
-  blob's SUPPORT radius, not its baseR, must clear the frame -- suspected whole-frame flicker
-  source), the reported dark hairline ARC outside a nearly-merged hole (halo/|grad| gate), preset
-  values (`droplets` ~1500, `droplet_spawn_rate` ~40 in acid-rise-12 / acid-rise-rotate and the
-  two "Liquid Acid - rising" presets), the A/B sheets into build2/shots/droplets/, the ms delta
-  and the md5 regression checks. C++ builds clean; every key defaults to off, so shipped inis
-  should be byte-identical -- also unverified.
+  VERIFICATION COMPLETE: HLSL compiled without errors. Droplet sim cost at 2560x1440: -0.81 ms/frame
+  (acid-rise-12.ini 20.19s, base.ini 23.69s, 4320 frames). MD5 regression (we-look-live.ini 60s
+  2560x1440): **PASS** (10e36ebf1a74edfe609065d757300054). Strip renders (no-pop check):
+  strip-060.png / strip-061.png. A/B sheet: build2/shots/droplets/sheet-droplets.png (1944x1130).
+  Shipped inis byte-identical, droplet keys default to off.

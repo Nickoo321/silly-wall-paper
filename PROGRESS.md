@@ -34,6 +34,7 @@ Everything below is committed on `main`; nothing is running in the background.
 | Lava lamp: `rise_speed/wobble/respawn/stretch/bottom_light` (blobs enter below the bottom edge, rise, leave the top); global colour change via `hue_rotate_period` (continuous) or the sweep list extended to 12 (`sweep_count`, `sweep_oil_N` = a tile9 palette verbatim); `oil_saturation`; `post_chroma`/`post_lift` (film 0.5 + chroma 1.2 = user pick, now default in the glass presets); app: black frame on manual pause, `CMD_PAUSE_ON=8/OFF=9`. Presets "Liquid Acid - rising colours" / "- rising hue rotation". Sheets build2/shots/rise/ | f5f3e30 |
 | Screen mirroring / kaleidoscope `[mirror]` (display-pass uv fold, all three looks, overlay presets in reference/presets/) | db43eb9 |
 | Lava-lamp rise (`rise_speed/wobble/respawn/stretch/bottom_light`), a 12-slot palette sweep that can carry the tile9 four-shade palettes verbatim (`sweep_count`, `sweep_oil_N`), global `hue_rotate_period` + `oil_saturation`, `post_chroma`/`post_lift`, black frame on manual pause + `CMD_PAUSE_ON/OFF` | (this commit) |
+| Droplet particle sim: swarms replaced by simulated negative/positive metaball droplets (surface tension, no popping), rise_respawn support-radius fix, |grad| gate on the dark rim; sheets build2/shots/droplets/ | 210ff10 + 23d23d7 |
 
 Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
 

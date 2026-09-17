@@ -1,0 +1,154 @@
+{
+  "_comment": "Tile 9 knob space: near-full-frame coloured oil with black holes/speckle, mono ink underneath. Base: layering1-09.ini (Liquid Acid water mode, magenta oil, grey/white ink on black).",
+  "keys": {
+    "liquid_acid.blob_count": [64, 96, 128],
+    "liquid_acid.threshold": {"min": 0.45, "max": 0.65},
+    "liquid_acid.speckle": {"min": 0.05, "max": 0.30},
+    "liquid_acid.swarm_density": {"min": 0.10, "max": 0.40},
+    "liquid_acid.swarm_holes": {"min": 0.5, "max": 1.0},
+    "liquid_acid.hole_weight": {"min": 0.5, "max": 1.0},
+    "liquid_acid.oil_texture": {"min": 0.05, "max": 0.30},
+    "liquid_acid.grain": {"min": 0.0, "max": 0.06},
+    "liquid_acid.rim_ink_follow": [0.5, 1.0],
+    "sim.gravity": [0, 1, 2]
+  },
+  "groups": {
+    "oil_palette": [
+      {
+        "label": "oil magenta",
+        "values": {
+          "liquid_acid.oil_color_1": "0.88 0.12 0.62",
+          "liquid_acid.oil_color_2": "0.85 0.10 0.55",
+          "liquid_acid.oil_color_3": "0.90 0.18 0.68",
+          "liquid_acid.oil_color_4": "0.80 0.08 0.50"
+        }
+      },
+      {
+        "label": "oil hot pink",
+        "values": {
+          "liquid_acid.oil_color_1": "0.98 0.20 0.50",
+          "liquid_acid.oil_color_2": "0.95 0.18 0.45",
+          "liquid_acid.oil_color_3": "1.00 0.25 0.55",
+          "liquid_acid.oil_color_4": "0.92 0.15 0.42"
+        }
+      },
+      {
+        "label": "oil violet",
+        "values": {
+          "liquid_acid.oil_color_1": "0.55 0.15 0.90",
+          "liquid_acid.oil_color_2": "0.50 0.10 0.85",
+          "liquid_acid.oil_color_3": "0.60 0.20 0.95",
+          "liquid_acid.oil_color_4": "0.48 0.08 0.80"
+        }
+      },
+      {
+        "label": "oil red",
+        "values": {
+          "liquid_acid.oil_color_1": "0.85 0.10 0.08",
+          "liquid_acid.oil_color_2": "0.90 0.12 0.06",
+          "liquid_acid.oil_color_3": "0.80 0.08 0.10",
+          "liquid_acid.oil_color_4": "0.95 0.15 0.05"
+        }
+      },
+      {
+        "label": "oil orange",
+        "values": {
+          "liquid_acid.oil_color_1": "0.95 0.40 0.10",
+          "liquid_acid.oil_color_2": "0.98 0.45 0.08",
+          "liquid_acid.oil_color_3": "0.92 0.35 0.12",
+          "liquid_acid.oil_color_4": "1.00 0.50 0.05"
+        }
+      },
+      {
+        "label": "oil teal",
+        "values": {
+          "liquid_acid.oil_color_1": "0.05 0.75 0.70",
+          "liquid_acid.oil_color_2": "0.08 0.80 0.75",
+          "liquid_acid.oil_color_3": "0.02 0.70 0.65",
+          "liquid_acid.oil_color_4": "0.10 0.85 0.78"
+        }
+      },
+      {
+        "label": "oil lime",
+        "values": {
+          "liquid_acid.oil_color_1": "0.60 0.90 0.10",
+          "liquid_acid.oil_color_2": "0.65 0.95 0.08",
+          "liquid_acid.oil_color_3": "0.55 0.85 0.12",
+          "liquid_acid.oil_color_4": "0.70 1.00 0.05"
+        }
+      },
+      {
+        "label": "oil cyan",
+        "values": {
+          "liquid_acid.oil_color_1": "0.10 0.80 0.95",
+          "liquid_acid.oil_color_2": "0.08 0.75 0.90",
+          "liquid_acid.oil_color_3": "0.12 0.85 1.00",
+          "liquid_acid.oil_color_4": "0.05 0.70 0.88"
+        }
+      }
+    ],
+    "ink_tint": [
+      {
+        "label": "ink ltgrey/white",
+        "values": {
+          "ink.tint_thin": "0.55 0.55 0.58",
+          "ink.tint_thick": "0.95 0.95 0.97"
+        }
+      },
+      {
+        "label": "ink grey/blk",
+        "values": {
+          "ink.tint_thin": "0.28 0.28 0.30",
+          "ink.tint_thick": "0.62 0.62 0.65"
+        }
+      },
+      {
+        "label": "ink white/white",
+        "values": {
+          "ink.tint_thin": "0.85 0.85 0.85",
+          "ink.tint_thick": "1.00 1.00 1.00"
+        }
+      }
+    ],
+    "paper": [
+      {
+        "label": "paper black",
+        "values": {
+          "ink.paper_color": "0.00 0.00 0.00"
+        }
+      },
+      {
+        "label": "paper warm-blk",
+        "values": {
+          "ink.paper_color": "0.05 0.03 0.02"
+        }
+      },
+      {
+        "label": "paper navy",
+        "values": {
+          "ink.paper_color": "0.01 0.02 0.07"
+        }
+      }
+    ],
+    "meniscus": [
+      {
+        "label": "meniscus teal",
+        "values": {
+          "liquid_acid.meniscus_color": "0.353 0.918 0.894"
+        }
+      },
+      {
+        "label": "meniscus white",
+        "values": {
+          "liquid_acid.meniscus_color": "0.95 0.95 0.95"
+        }
+      },
+      {
+        "label": "meniscus black",
+        "values": {
+          "liquid_acid.meniscus_color": "0.02 0.02 0.02"
+        }
+      }
+    ]
+  }
+}

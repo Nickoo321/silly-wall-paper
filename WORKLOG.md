@@ -804,3 +804,35 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   coverage failure (ink_mode=water + complement lock off -> oil fills the frame); 06 read as
   white paper with black dots (inverted ink lost under white oil). Pillow: installed to the
   user's site-packages; ab.py/refsheet.py/explore.py prefer it, scratchpad copy is the fallback.
+- **"Real oil" pass on Liquid Acid (Fable executor).** User on a 2x crop of white oil over teal
+  ink: "it just looks super dull and fake"; then, from refs 4-7, "there is no boundary" /
+  "some scenes have no boundary, and some do". The shipped oil was a hard cut-out with a
+  1-2 px stroke in a FIXED `meniscus_color`, which drew a teal line around black shapes on
+  mono ink for no reason. Eight `[liquid_acid]` keys, EVERY one defaulting to the old look:
+  `oil_thin_edge` (film thickness `thk = smoothstep(0, edgeW, sdf)`; the disc now fades over
+  `edgeW` and its colour slides toward `oil * saturate(0.30 + 1.10*ink)` — thin oil goes
+  darker and takes the ink's hue, never brighter), `oil_edge_frac` (that band as a fraction
+  of the LOCAL lens radius: the Wyvill kernel gives `R ~= 0.78/|grad|` for free, clamped to
+  0.02..0.35 because |grad| collapses on a merged mass and an unclamped R blew the halo into
+  frame-sized pale lobes), `refraction_width` (rim_width multiplier, 0 = the shipped 7),
+  `oil_specular` (broad Blinn lobe + Fresnel off a gradient+fbm normal, deliberately weak —
+  the rig is backlit; also lifts `m` under `oil_hdr`), `oil_iridescence` (thin-film hue ramp
+  on the fbm thickness, strongest where thin), `swarm_lens` (a trapped droplet is a HOLE IN
+  THE FILM: soft edge sized to the droplet, thin-oil fringe outside it, softened ring, one
+  offset highlight — `AcidSwarm` now also returns the winning droplet's normal and radius),
+  `oil_glow` (diffuse spill of the oil's colour into the ink, never a line),
+  `meniscus_from_ink` (the boundary becomes EMERGENT: colour = the local ink lifted in HSV,
+  width = a few % of the lens radius, weight = a dye tap taken OUTSIDE the isoline, and the
+  same weight gates the dark hairline; `meniscus_color` survives only as the legacy fallback).
+  So on liquid-acid-a's teal ink a wide soft teal halo appears (ref 7's regime) and on the
+  mono/near-black inks the halo and the hairline both vanish (refs 4/5/6) — no foreign cyan
+  line anywhere. Grain is boosted inside the halo band (the refs' halo is visibly grainy).
+  `AcidCB` gained laP13/laP14 (352 -> 384 bytes) and one more raw-string split in shaders.h.
+  Suggested "oil-real" set: oil_thin_edge 0.70, oil_edge_frac 0.14, oil_specular 0.35,
+  oil_iridescence 0.20, swarm_lens 0.80, meniscus_from_ink 0.90, oil_glow 0.45,
+  refraction_width 22. Sheets (base / real / stronger / weaker, 960x540, t=75, seed 1234,
+  --hdr on): build2/shots/oil/sheet-l03.png, sheet-laa.png, sheet-mono.png (layering1-09 and
+  tile9-01, base vs real), and the user's crop case at 2x in build2/shots/oil/crop2x-l03.png.
+  Shipped copies to compare: reference/configs/liquid-acid-a-real.ini, layering1-09-real.ini.
+  `style=fluid` regression: we-look-live 60 s 2560x1440 md5
+  **10E36EBF1A74EDFE609065D757300054** (-hdr 414B4321...), unchanged.

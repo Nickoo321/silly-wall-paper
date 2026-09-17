@@ -1824,9 +1824,9 @@ struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
-    float p10[4], p11[4], p12[4], men[4];
+    float p10[4], p11[4], p12[4], p13[4], p14[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 352, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 384, "AcidCB layout");
 
 // GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
 struct InkParamsGPU {
@@ -2306,9 +2306,14 @@ void FluidRenderer::UploadAcidConstants() {
                      targetHue, 0.0f };   // .w unused: the sweep is applied above
     float p12[4] = { a.rimVary, a.rimInkFollow, a.rimOrder ? 1.0f : 0.0f,
                      fmaxf(a.grainShadowW, 0.0f) };
+    float p13[4] = { fmaxf(a.oilThinEdge, 0.0f), fmaxf(a.oilEdgeFrac, 0.0f),
+                     fmaxf(a.oilSpecular, 0.0f), fmaxf(a.oilIrid, 0.0f) };
+    float p14[4] = { fmaxf(a.swarmLens, 0.0f), fmaxf(a.meniscusFromInk, 0.0f),
+                     fmaxf(a.oilGlow, 0.0f), fmaxf(a.refractionWidth, 0.0f) };
     float men[4] = { effMen[0], effMen[1], effMen[2], 0.0f };
     memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
     memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
+    memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 }

@@ -359,6 +359,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w toeTint
     float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
     float4 laP12;        // x rimVary    y rimInkFollow z rimOrder  w grainShadowW
+    float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
+    float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -422,11 +424,17 @@ float3 AcidHueShift(float3 c, float deg) {
 // hashes per pixel, where the same thing in metaballs would cost hundreds of
 // loop iterations. Returns the signed distance to the nearest droplet in
 // p-space units (negative inside).
+// `nrm` comes back as the unit vector from the winning droplet's centre
+// toward the pixel and `rad` as that droplet's radius (both in p-space), so
+// the caller can shade a droplet as a lens (soft edge, offset highlight)
+// instead of a flat disc. Free: the loop already has both.
 float AcidSwarm(float2 p, float scale, float density, float clumpAmt,
-                float rmin, float rmax) {
+                float rmin, float rmax, out float2 nrm, out float rad) {
     float2 pc = p * scale;
     float2 base = floor(pc);
     float d = 1e9;
+    float2 bestV = float2(1.0, 0.0);
+    float  bestR = 1e-3;
     [unroll] for (int oy = -1; oy <= 1; oy++) {
         [unroll] for (int ox = -1; ox <= 1; ox++) {
             float2 c = base + float2(ox, oy);
@@ -443,9 +451,13 @@ float AcidSwarm(float2 p, float scale, float density, float clumpAmt,
             // empty cells get a negative radius, so their distance never wins
             float  r  = (h < dens) ? lerp(rmin, rmax, hr * hr * hr) : -2.0;
             float2 j  = float2(AcidHash21(c + 3.71), AcidHash21(c + 9.13));
-            d = min(d, length(pc - (c + 0.18 + 0.64 * j)) - r);
+            float2 v  = pc - (c + 0.18 + 0.64 * j);
+            float  dd = length(v) - r;
+            if (dd < d) { d = dd; bestV = v; bestR = max(r, 1e-3); }
         }
     }
+    nrm = bestV / max(length(bestV), 1e-5);
+    rad = bestR / max(scale, 1e-3);
     return d / max(scale, 1e-3);
 }
 #endif
@@ -654,9 +666,27 @@ float4 PSMain(VSOut i) : SV_Target {
     float  sdf  = clamp((field - thresh) / gl, -0.25, 0.25);  // >0 inside the oil
     float  aaF  = fwidth(field) * laP0.w + 1e-4;
     float  cov  = smoothstep(thresh - aaF, thresh + aaF, field);
+    // ---- local lens radius and film thickness (oil_thin_edge) -----------
+    // The Wyvill kernel gives the blob radius for free: at the isoline
+    // |grad| ~= 1.72/S while the visible radius is 0.454*S, so R ~= 0.78/|grad|.
+    // That is what makes the soft edge a fixed FRACTION of each disc instead
+    // of a fixed number of pixels. Deep inside a merged mass |grad| -> 0, so
+    // the band is clamped; there the sdf clamp (0.25) saturates thk to 1.
+    // Clamped: on a broad merged mass |grad| collapses and an unclamped R
+    // blew the halo up into frame-sized pale lobes. The largest authored
+    // blob radius is ~0.4 p-units, so that is the ceiling.
+    float  lensR = clamp(0.78 / max(gl, 1e-3), 0.02, 0.35);
+    float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
+    float  thk   = 1.0;                       // 1 = full-thickness oil
+    if (laP13.x > 0.0005) thk = smoothstep(0.0, edgeW, sdf);
     // Refraction: the ink is seen through thinning oil near the rim, so shift
-    // the ink lookup along the field gradient inside a narrow edge band.
-    float  eb = sdf / max(laP1.x * 7.0, 1e-4);
+    // the ink lookup along the field gradient inside an edge band. Its width
+    // is rim_width * refraction_width (default the shipped 7), widened toward
+    // the soft-edge band so the ink is actually seen bending under the oil
+    // instead of only inside a hairline.
+    float  refrW = max(laP1.x * ((laP14.w > 0.0005) ? laP14.w : 7.0), 1e-4);
+    if (laP13.x > 0.0005) refrW = lerp(refrW, max(refrW, edgeW), saturate(laP13.x));
+    float  eb = sdf / refrW;
     float  edgeB = exp(-eb * eb);
     uv = saturate(uv + (grad / gl) * (laP1.w * edgeB) * float2(1.0 / aspect, 1.0));
 #endif
@@ -824,6 +854,52 @@ R"hlsl(
                  + length(Dye.SampleLevel(linearClamp, uv - float2(bt.x, -bt.y), 0).rgb);
         oilC *= lerp(1.0, 0.88 + 0.30 * saturate(lw * 0.45 * laP4.x), saturate(laP2.z));
     }
+    // ---- thin film: the oil is a LENS, not a cut-out (oil_thin_edge) -----
+    // refs 4/5/6: there is NO stroked boundary. The film thins to nothing at
+    // the edge, so the light reaching the eye there has crossed the ink AND a
+    // sliver of oil: the colour slides toward the PRODUCT of the two (orange
+    // over red ink goes red; white over teal goes teal) and loses level, over
+    // a band a few percent of the lens's own radius. That soft thickness
+    // gradient is the whole reason a real oil disc is not a sticker.
+    float3 oilThinC = oilC;
+    if (laP13.x > 0.0005) {
+        // saturate(): the factor is capped at 1, so a thinning film can only
+        // go DARKER and toward the ink's hue, never brighter and paler. Left
+        // uncapped it lifted every edge over bright ink into a milky lobe.
+        float3 prod = oilC * saturate(0.30 + 1.10 * inkC);
+        float  tt   = 1.0 - thk;
+        oilThinC = prod;
+        oilC = lerp(oilC, prod, saturate(tt * tt * laP13.x));
+    }
+    // ---- surface relief: specular (oil_specular) + thin-film iridescence --
+    // Kept deliberately weak: the references show almost no specular, because
+    // the rig is BACKLIT. What little there is comes from the lens curvature
+    // near the edge plus a slow thickness ripple, never a pin-point.
+    float specAmt = 0.0;
+    if (laP13.z > 0.0005 || laP13.w > 0.0005) {
+        float2 q  = pp * 4.3 + float2(laP6.z * 0.006, -laP6.z * 0.0045);
+        float  f0 = AcidFbm(q);
+        if (laP13.z > 0.0005) {
+            const float he = 0.035;
+            float2 bg = float2(AcidFbm(q + float2(he, 0.0)) - f0,
+                               AcidFbm(q + float2(0.0, he)) - f0) / he;
+            // dome normal: tilts OUTWARD (-grad) and hardest where the film is
+            // thin, with the fbm adding a low relief across the flat middle.
+            float2 nxy = (-grad / gl) * (1.0 - thk) * 0.85 - bg * 0.06;
+            float3 nS  = normalize(float3(nxy, 1.0));
+            float3 Lv  = float3(-0.406, -0.406, 0.819);   // top-left, ~55 deg up
+            float3 Hv  = normalize(Lv + float3(0.0, 0.0, 1.0));
+            float  sp  = pow(saturate(dot(nS, Hv)), 18.0);   // BROAD lobe
+            float  fr  = pow(saturate(1.0 - nS.z), 3.0);     // Fresnel edge
+            specAmt = (sp * 0.30 + fr * 0.12) * saturate(laP13.z);
+            oilC += specAmt;
+        }
+        if (laP13.w > 0.0005) {
+            float3 ir = 0.5 + 0.5 * cos(6.2831853 * (f0 * 3.0 + float3(0.0, 0.33, 0.67)));
+            float  iw = saturate(laP13.w) * lerp(0.30, 1.0, 1.0 - thk) * 0.45;
+            oilC *= lerp(1.0, ir * 1.5, iw);
+        }
+    }
     // ---- rim variation (rim_vary / rim_ink_follow) -----------------------
     // The reference rim is NOT a uniform stroke: it thickens and brightens
     // where the ink under it is bright, and thins to nothing along other
@@ -858,19 +934,70 @@ R"hlsl(
     // laP12.z = 1: force the physical pairing (Micromachines 13(7):1021) —
     // the dark band one half-width INSIDE the isoline and the bright caustic
     // one half-width OUTSIDE it, so they are adjacent and never overlap.
+    // ---- EMERGENT boundary (meniscus_from_ink) ---------------------------
+    // The reference boundary is not a stroke of some chosen colour: it is the
+    // INK, concentrated by the meniscus. Where the ink just outside is bright
+    // it makes a WIDE, soft, grainy halo of that ink's own hue (ref 7's cyan)
+    // with a dark hairline against it; where the ink is dark (refs 4/5/6, and
+    // every mono-ink ini) both simply vanish and the oil softens into the
+    // dark. One gate does both, so a foreign cyan line can never appear on
+    // black ink again. laMen (meniscus_color) survives only as the legacy
+    // fallback at meniscus_from_ink = 0.
+    float3 menC   = laMen.rgb;
+    float  menHWx = 1.0;      // halo half-width multiplier
+    float  haloInk = 1.0;     // ink-brightness gate on halo AND hairline
+    if (laP14.y > 0.0005) {
+        float  k  = saturate(laP14.y);
+        // The gate reads the ink OUTSIDE the isoline, not the ink under the
+        // oil: a bright dye patch beneath a disc must not summon a halo, and
+        // a hole punched into clear water must not get one either.
+        float2 uvO = saturate(uv - (grad / gl) * (0.06 * lensR + laP2.y * 2.0)
+                                  * float2(1.0 / aspect, 1.0));
+        float3 dO  = Dye.SampleLevel(linearClamp, uvO, 0).rgb;
+        float  ilo = saturate(max(dO.r, max(dO.g, dO.b)) * max(laP4.x, 1.0));
+        haloInk    = lerp(1.0, smoothstep(0.03, 0.40, ilo), k);
+        float3 hs = AcidRgb2Hsv(inkC);     // lift: more saturated, brighter
+        hs.y = saturate(hs.y * 1.35);
+        hs.z = saturate(hs.z * 1.55 + 0.05);
+        menC   = lerp(menC, AcidHsv2Rgb(hs), k);
+        // a few percent of the LOCAL lens radius, never a 1-2 px line
+        menHWx = lerp(1.0, max(1.0, (0.055 * lensR) / max(laP2.y, 1e-5)), k);
+    }
     float rimHW = max(laP1.x * rimMul, 1e-5);
-    float menHW = max(laP2.y * rimMul, 1e-5);
+    float menHW = clamp(laP2.y * rimMul * menHWx, 1e-5, 0.024);
     float rimCtr = laP12.z > 0.5 ?  rimHW : laP1.y;
     float menCtr = laP12.z > 0.5 ? -menHW : -laP7.z;
+    if (laP14.y > 0.0005) menCtr = lerp(menCtr, -menHW * 0.55, saturate(laP14.y));
     // dark rim: a Gaussian band centred just INSIDE the boundary, forced to
     // zero deep inside a merged mass so no concentric rings appear there.
     float rimX = (sdf - rimCtr) / rimHW;
     float rimB = exp(-rimX * rimX)
                * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field));
-    oilC *= 1.0 - saturate(laP1.z) * rimB;
+    // The hairline lives only where the halo does, and the soft thickness
+    // edge has already taken over most of its job.
+    float rimK = saturate(laP1.z) * haloInk * (1.0 - 0.65 * saturate(laP13.x));
+    oilC *= 1.0 - rimK * rimB;
 
-    float3 col = lerp(inkC, oilC, cov);
+    // Film alpha: with oil_thin_edge the disc fades out over the thickness
+    // band instead of over 1-2 px of coverage AA. Squared, because a lens
+    // thins fast near its edge.
+    float alpha = cov;
+    if (laP13.x > 0.0005) {
+        float aS = smoothstep(-edgeW * 0.35, edgeW, sdf);
+        alpha = lerp(cov, aS * aS, saturate(laP13.x));
+    }
+    float3 col = lerp(inkC, oilC, alpha);
+    // ---- outside glow (oil_glow): the lens spills a little of its own
+    // colour into the ink around it -- diffuse, never a line (refs 4/5).
+    if (laP14.z > 0.0005) {
+        float dOut = max(-sdf, 0.0) / max(edgeW * 1.3, 1e-5);
+        float go   = exp(-dOut * dOut) * (1.0 - alpha) * smoothstep(0.5, 1.5, gl);
+        col += oilThinC * (go * 0.45 * saturate(laP14.z));
+    }
 
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- bubble swarms ---------------------------------------------------
     // Two procedural cellular layers, each masked to one side of the oil
     // surface: dark water droplets trapped INSIDE the oil (ref 2, ref 3) and
@@ -891,32 +1018,71 @@ R"hlsl(
         // seams. p-space y spans 0..1 over the frame height, so one pixel is
         // texelSize.y — use that fixed width instead.
         float aaS = texelSize.y * 1.2;
+        // swarm_lens: a trapped droplet is a HOLE IN THE FILM, not a punched
+        // disc. The oil thins into it, so it gets the same soft edge and the
+        // same thin-oil colour fringe as the outer boundary (ref 6), a
+        // softened dark ring, and one small lens highlight offset toward the
+        // light instead of a flat black interior.
+        float lensK = saturate(laP14.x);
         if (laP8.x > 0.002) {
             float2 sp = pp + warp * 0.030 + st * float2(0.0040, -0.0030);
             // two octaves 2.7x apart so the sizes run from ~1 px to ~2% of the
             // frame height; the fine one stays sparse or the oil reads as dust
-            float  sd = min(AcidSwarm(sp, laP9.x, laP8.z, laP10.x, laP9.z, laP9.w),
-                            AcidSwarm(sp + 7.31, laP9.x * 2.7, laP8.z * 0.12, laP10.x,
-                                      laP9.z, laP9.w));
-            float  scov = 1.0 - smoothstep(-aaS, aaS, sd);
-            float  sx = sd / (aaS * 2.4);
+            float2 sn1, sn2; float sr1, sr2;
+            float  sda = AcidSwarm(sp, laP9.x, laP8.z, laP10.x, laP9.z, laP9.w, sn1, sr1);
+            float  sdb = AcidSwarm(sp + 7.31, laP9.x * 2.7, laP8.z * 0.12, laP10.x,
+                                   laP9.z, laP9.w, sn2, sr2);
+            bool   wa = (sda <= sdb);
+            float  sd = wa ? sda : sdb;
+            float2 sn = wa ? sn1 : sn2;
+            float  sr = max(wa ? sr1 : sr2, 1e-4);
+            float  sw   = lerp(aaS, max(sr * 0.26, aaS), lensK);
+            float  scov = 1.0 - smoothstep(-sw, sw, sd);
+            float  sx = sd / max(lerp(aaS * 2.4, sw * 1.15, lensK), 1e-6);
             float  srim = exp(-sx * sx);
             float  mask = smoothstep(0.004, 0.030, sdf) * laP8.x;   // inside the oil only
+            if (lensK > 0.0005) {   // thin-oil fringe just OUTSIDE the droplet
+                float fx = max(sd, 0.0) / max(sw * 1.8, 1e-5);
+                col = lerp(col, oilThinC,
+                           exp(-fx * fx) * (1.0 - scov) * mask * lensK * 0.75);
+            }
             // a trapped water droplet shows the INK through the oil film
-            col = lerp(col, inkC * (1.0 - laP10.y), scov * mask);
-            col *= 1.0 - laP8.w * srim * mask;
+            col = lerp(col, inkC * (1.0 - laP10.y * (1.0 - 0.40 * lensK)), scov * mask);
+            col *= 1.0 - laP8.w * (1.0 - 0.55 * lensK) * srim * mask;
+            if (lensK > 0.0005) {
+                float2 vc = sn * (sd + sr);
+                float  hd = length(vc - float2(-0.707, -0.707) * (0.42 * sr))
+                          / max(sr * 0.30, 1e-5);
+                col += oilC * (exp(-hd * hd) * scov * mask * lensK * 0.30);
+            }
         }
         if (laP8.y > 0.002) {
             float2 sp = pp * 1.31 - warp * 0.024 + st * float2(-0.0031, 0.0042) + 41.7;
-            float  sd = min(AcidSwarm(sp, laP9.y, laP8.z, laP10.x, laP9.z, laP9.w),
-                            AcidSwarm(sp + 3.17, laP9.y * 2.7, laP8.z * 0.12, laP10.x,
-                                      laP9.z, laP9.w));
-            float  scov = 1.0 - smoothstep(-aaS, aaS, sd);
-            float  sx = sd / (aaS * 2.4);
+            float2 sn1, sn2; float sr1, sr2;
+            float  sda = AcidSwarm(sp, laP9.y, laP8.z, laP10.x, laP9.z, laP9.w, sn1, sr1);
+            float  sdb = AcidSwarm(sp + 3.17, laP9.y * 2.7, laP8.z * 0.12, laP10.x,
+                                   laP9.z, laP9.w, sn2, sr2);
+            bool   wa = (sda <= sdb);
+            float  sd = wa ? sda : sdb;
+            float2 sn = wa ? sn1 : sn2;
+            float  sr = max(wa ? sr1 : sr2, 1e-4);
+            float  sw   = lerp(aaS, max(sr * 0.26, aaS), lensK);
+            float  scov = 1.0 - smoothstep(-sw, sw, sd);
+            float  sx = sd / max(lerp(aaS * 2.4, sw * 1.15, lensK), 1e-6);
             float  srim = exp(-sx * sx);
             float  mask = smoothstep(0.004, 0.030, -sdf) * laP8.y;  // open ink only
             col = lerp(col, laOil[3].rgb, scov * mask);
-            col *= 1.0 - laP8.w * srim * mask;
+            col *= 1.0 - laP8.w * (1.0 - 0.55 * lensK) * srim * mask;
+            if (lensK > 0.0005) {
+                // an oil droplet on open ink is a lens too: a faint caustic
+                // just OUTSIDE it and one small highlight inside.
+                float fx = max(sd, 0.0) / max(sw * 1.6, 1e-5);
+                col += laOil[3].rgb * (exp(-fx * fx) * (1.0 - scov) * mask * lensK * 0.22);
+                float2 vc = sn * (sd + sr);
+                float  hd = length(vc - float2(-0.707, -0.707) * (0.42 * sr))
+                          / max(sr * 0.30, 1e-5);
+                col += exp(-hd * hd) * scov * mask * lensK * 0.15;
+            }
         }
     }
 
@@ -924,7 +1090,8 @@ R"hlsl(
     // In the references this is the brightest thing in the frame (cyan on
     // ref 1) and it is what separates the oil from the ink. Painted with the
     // ramp's bright stop so it reads even over black ink.
-    if (laP2.x * haloMul > 0.002) {
+    float haloW = 0.0;
+    if (laP2.x * haloMul * haloInk > 0.002) {
         float hx = (sdf - menCtr) / menHW;
         float halo = exp(-hx * hx);
         // sdf = (field - thresh) / |grad| is only a distance where |grad| is
@@ -934,7 +1101,8 @@ R"hlsl(
         // no oil under it. Real blob surfaces have |grad| >~ 2 (it scales as
         // 1/radius, and the largest discs here are ~0.4), so gate on it.
         halo *= smoothstep(0.5, 1.5, gl);
-        col = lerp(col, laMen.rgb, saturate(halo * laP2.x * haloMul));
+        haloW = saturate(halo * laP2.x * haloMul * haloInk);
+        col = lerp(col, menC, haloW);
     }
 
     // ---- interface speckle: sparse cellular dots hugging the boundary ----
@@ -969,13 +1137,19 @@ R"hlsl(
         float gl2 = saturate(1.0 - dot(col, float3(0.2126, 0.7152, 0.0722)));
         grainAmp *= lerp(1.0, gl2 * gl2, saturate(laP12.w));
     }
+    // The reference halo band is visibly GRAINY (film grain over a bright,
+    // thin, refracted band); the shadow weighting above would scrub it clean.
+    grainAmp *= 1.0 + haloW * 1.2 * saturate(laP14.y);
     col += (AcidHash21(floor(i.pos.xy / max(laP5.w, 1.0)) + frac(laP6.z) * 913.7) - 0.5)
          * grainAmp;
     C = saturate(col);
     // HDR: the oil is a flat fill, so give it its own highlight level rather
     // than inheriting the ink's. Keep the hot part small (ABL): the rim band.
-    if (laP7.x > 0.001) m = lerp(m, laP7.x, cov);
-    if (laP7.y > 0.001) m = max(m, laP7.y * rimB * cov);
+    if (laP7.x > 0.001) m = lerp(m, laP7.x, alpha);
+    if (laP7.y > 0.001) m = max(m, laP7.y * rimB * alpha);
+    // a specular on a real oil surface is a highlight, not a paler fill
+    if (laP7.x > 0.001 && specAmt > 0.0005)
+        m = max(m, min(laP7.x * (1.0 + 2.5 * specAmt), 1.6) * alpha);
 #endif
 
     float3 lin = SRGBToLinear(saturate(C));

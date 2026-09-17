@@ -105,6 +105,33 @@ struct LiquidAcidConfig {
                                     // survives on the ink (refs are flat; 1 = normal)
     float oilHdr      = 0.0f;       // >0: drive HDR highlight gain for oil pixels
     float rimHdr      = 0.0f;       // >0: extra HDR level on the rim band only
+    // --- "real oil" block (refs 4-7). EVERY key defaults to 0 = the shipped
+    // cut-out look, so no existing ini changes by a single pixel. ----------
+    // The film thins to nothing at its edge, so there the light has crossed
+    // the ink AND a sliver of oil: the colour slides toward the product of
+    // the two (orange over red ink goes red) and the disc fades out over a
+    // band a few percent of its own radius instead of over 1-2 px of AA.
+    // Also scales the dark hairline down.                     oil_thin_edge
+    float oilThinEdge = 0.0f;
+    float oilEdgeFrac = 0.14f;      // that band as a fraction of the LOCAL
+                                    // lens radius (R ~= 0.78/|grad|)  oil_edge_frac
+    float oilSpecular = 0.0f;       // broad Blinn lobe + Fresnel off a
+                                    // gradient+fbm normal (refs are backlit,
+                                    // so keep it weak)             oil_specular
+    float oilIrid     = 0.0f;       // thin-film hue ramp indexed by the fbm
+                                    // thickness, strongest where thin  oil_iridescence
+    float swarmLens   = 0.0f;       // trapped droplets as holes in the film:
+                                    // soft edge, thin-oil fringe, offset
+                                    // highlight, softened ring        swarm_lens
+    float meniscusFromInk = 0.0f;   // the halo becomes EMERGENT: its colour is
+                                    // the ink beneath (lifted), its weight the
+                                    // ink's own brightness, its width a few %
+                                    // of the lens radius. On dark ink the halo
+                                    // AND the hairline vanish.   meniscus_from_ink
+    float oilGlow     = 0.0f;       // diffuse spill of the oil's colour into
+                                    // the ink outside it, never a line  oil_glow
+    float refractionWidth = 0.0f;   // rim_width multiplier for the refraction
+                                    // band; 0 = the shipped 7      refraction_width
     // oil palette: up to 4 colours, dominant-blob pick (no colour-bleed averaging)
     float oilColors[12] = { 0.902f, 0.278f, 0.157f,     // vermillion disc
                             0.976f, 0.400f, 0.078f,     // hot orange web

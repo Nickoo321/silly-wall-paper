@@ -5,9 +5,11 @@ Single exe, no deps beyond Windows SDK libs.
 
 ## Build & run
 
-- `cmd //c build.bat` (CMake + Ninja, output `build/FluidWallpaper.exe`).
-- **Always stop the exe first**: `powershell Stop-Process -Name FluidWallpaper -Force`
-  — build fails LNK1104 if it's running.
+- Agents build ONLY into `build2/` (`build2.cmd FluidWallpaper`, run from PowerShell; see the
+  GPU-lock section). `build.bat` -> `build/` is the USER's live exe: never build there and
+  **never stop the running FluidWallpaper.exe** — it is the user's wallpaper. If a build into
+  `build/` is ever needed, the user relaunches it themselves (or via tools/panel-check.ps1 with
+  their go-ahead).
 - Config: `%APPDATA%\FluidWallpaper\settings.ini` (+ `moods\*.ini`, `presets\*.ini`).
   **No disk hot-reload** — hand-edited ini needs an app restart. The Settings
   window writes config live.

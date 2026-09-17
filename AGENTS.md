@@ -80,3 +80,7 @@ two at once starved DWM and greyed the user's OLED. Before any render: wait unti
 does not exist (poll every 5 s; give up after 30 min and report), then create it containing
 your agent name + time, render, and delete it in a `finally`/trap. Builds need no lock. Never
 stop the user's FluidWallpaper.exe or Wallpaper Engine.
+
+## Pausing the live sim
+
+The only sanctioned way to touch the user's running FluidWallpaper.exe is a PAUSE via its tray window (WM_COMMAND CMD_PAUSE=1, a toggle): `toolsway-pause.ps1` does this when the user is away and resumes on input. Never stop, kill or relaunch the exe; never SC_MONITORPOWER.

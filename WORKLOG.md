@@ -786,3 +786,7 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   dark around its midpoint, like real ink). A hue-arc blend was tried first and rejected (the
   midpoint became lime, a third colour). A/B: build2/shots/mud/mud-ab2.png (0.12 / 0.7).
   Fluid md5 unchanged. Also: build2.cmd (vswhere + vcvars + cmake) — run it from PowerShell.
+- User: "maybe just a switch to background colour, not black" -> tint_mid_dip now dips OPACITY so
+  the midpoint shows paper_color (4449681); paper_color is the background for the inverted
+  look (black in the shipped inis, any colour works). Demo build2/shots/mud/mud-ab4.png (deep
+  purple, dip 1.0). Fluid md5 unchanged. Awaiting verdict; shipped duotone inis untouched.

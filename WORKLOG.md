@@ -790,3 +790,17 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   the midpoint shows paper_color (4449681); paper_color is the background for the inverted
   look (black in the shipped inis, any colour works). Demo build2/shots/mud/mud-ab4.png (deep
   purple, dip 1.0). Fluid md5 unchanged. Awaiting verdict; shipped duotone inis untouched.
+- **Random layering exploration (Sonnet explorer, 87e4c39).** `tools/explore.py` + `tools/explore-space-layering.json`:
+  mutate a base ini per a knob space (random keys + curated groups, shuffle-without-replacement
+  per group), render each variant headless under gpu.lock, write `<out>-NN.ini/.png`, a labeled
+  sheet and a JSON record. Batch `layering1` (seed 7, 12 tiles, 960x540, t=75 s) cycled the
+  water / duo / bands bases with: sparse mono (grey/white/black) ink under coloured oil, colour
+  moved between ink and oil, black/white "element" switches, paper_color navy/plum/black, dip 1.
+  Tiles were sent to the user one at a time with the mutated keys. Sheet:
+  build2/shots/explore/layering1-sheet.png. Own read of the sheet: 01 (orange oil over white
+  ink, warm black) and 10 (red oil over white ink on navy) are the strongest — coloured oil on
+  monochrome ink is the combo that works; 04 (black oil, rims only, white ink) is a curious
+  third. 02/05/08/11 (dip 1.0 on dark backgrounds) went to mud or near-black; 09 was a
+  coverage failure (ink_mode=water + complement lock off -> oil fills the frame); 06 read as
+  white paper with black dots (inverted ink lost under white oil). Pillow: installed to the
+  user's site-packages; ab.py/refsheet.py/explore.py prefer it, scratchpad copy is the fallback.

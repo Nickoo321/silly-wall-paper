@@ -293,6 +293,92 @@ cbuffer CB : register(b0) {
 SamplerState linearClamp : register(s0);
 Texture2D<float4> Dye : register(t0);
 
+#ifdef LIQUID_ACID
+// --------------------------------------------------------------------------
+// "Liquid Acid" look. Compiled as a SECOND PSO from this same source with
+// LIQUID_ACID defined; the fluid PSO is compiled without it and therefore
+// contains none of this code (bit-identical to the pre-feature shader).
+// Everything here is parameterised from LiquidAcidConfig (see fluid.h).
+// --------------------------------------------------------------------------
+cbuffer AcidCB : register(b1) {
+    float4 laOil[4];     // oil palette, rgb
+    float4 laInk[4];     // ink ramp stops (dark -> bright), rgb
+    float4 laP0;         // x blobCount  y cutoff      z clampMax   w aaScale
+    float4 laP1;         // x rimWidth   y rimInset    z rimDark    w refraction
+    float4 laP2;         // x meniscus   y meniscusW   z translucency w oilTexture
+    float4 laP3;         // x inkLevels  y inkSoft     z inkMix     w inkHueVary
+    float4 laP4;         // x inkGain    y inkBias     z seamStr    w seamScale
+    float4 laP5;         // x seamLo     y seamHi      z grainAmt   w grainScale
+    float4 laP6;         // x speckle    y speckScale  z time       w aspect
+    float4 laP7;         // x oilHdr     y rimHdr      z meniscusOff w inkShading
+    float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
+    float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
+    float4 laP10;        // x swarmClump y swarmDark   z -          w -
+    float4 laMen;        // meniscus halo colour, rgb
+};
+// xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
+// rgb of .b = flat fill colour
+struct AcidBlobGPU { float4 a; float4 b; };
+StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
+
+float AcidHash21(float2 p) {
+    p = frac(p * float2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return frac(p.x * p.y);
+}
+float AcidVNoise(float2 p) {
+    float2 i = floor(p), f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(AcidHash21(i),               AcidHash21(i + float2(1, 0)), u.x),
+                lerp(AcidHash21(i + float2(0, 1)), AcidHash21(i + float2(1, 1)), u.x), u.y);
+}
+float AcidFbm(float2 p) {
+    float v = 0.0, amp = 0.5;
+    for (int i = 0; i < 3; i++) { v += amp * AcidVNoise(p); p = p * 2.13 + 19.19; amp *= 0.5; }
+    return v;
+}
+// n flat bands with a soft shoulder at each step: the ink's "flat colour
+// bands" without the hard 8-bit staircase.
+float AcidBand(float x, float n, float soft) {
+    float f = floor(x * n), fr = frac(x * n);
+    return (f + smoothstep(0.5 - soft, 0.5 + soft, fr)) / n;
+}
+// Procedural bubble swarm. A jittered cellular layer of round droplets with a
+// wide (squared-hash) size range: hundreds of bubbles of every size for ~20
+// hashes per pixel, where the same thing in metaballs would cost hundreds of
+// loop iterations. Returns the signed distance to the nearest droplet in
+// p-space units (negative inside).
+float AcidSwarm(float2 p, float scale, float density, float clumpAmt,
+                float rmin, float rmax) {
+    float2 pc = p * scale;
+    float2 base = floor(pc);
+    float d = 1e9;
+    [unroll] for (int oy = -1; oy <= 1; oy++) {
+        [unroll] for (int ox = -1; ox <= 1; ox++) {
+            float2 c = base + float2(ox, oy);
+            // Clustering is decided PER CELL, from a low-frequency value noise
+            // of the cell index. It must not depend on the shading pixel: an
+            // earlier version modulated `density` by a per-pixel fbm, so the
+            // presence test could flip part-way across one droplet and slice a
+            // straight-edged wedge out of it (the dark chips in the oil).
+            float  dens = density * lerp(1.0,
+                          smoothstep(0.34, 0.62, AcidVNoise(c * 0.17)) * 1.8, clumpAmt);
+            float  h  = AcidHash21(c * 1.37 + 0.11);
+            // cube on the radius hash: many tiny droplets, a few large ones
+            float  hr = AcidHash21(c * 2.71 + 5.3);
+            // empty cells get a negative radius, so their distance never wins
+            float  r  = (h < dens) ? lerp(rmin, rmax, hr * hr * hr) : -2.0;
+            float2 j  = float2(AcidHash21(c + 3.71), AcidHash21(c + 9.13));
+            d = min(d, length(pc - (c + 0.18 + 0.64 * j)) - r);
+        }
+    }
+    return d / max(scale, 1e-3);
+}
+#endif
+
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 
 VSOut VSMain(uint id : SV_VertexID) {
@@ -331,21 +417,79 @@ float3 CssHueRotate(float3 c, float deg) {
 float3 CssContrast(float3 c, float k) { return c * k + 0.5 * (1.0 - k); }
 
 float4 PSMain(VSOut i) : SV_Target {
-    float3 C = Dye.SampleLevel(linearClamp, i.uv, 0).rgb;
+    float2 uv = i.uv;
+#ifdef LIQUID_ACID
+    // ---- oil metaball field (evaluated first: it refracts the ink sample) ----
+    const float aspect = laP6.w;
+    float2 pp = float2(uv.x * aspect, uv.y);
+    float  field = 0.0;
+    float2 grad  = float2(0.0, 0.0);
+    float  colW = 0.0;
+    float3 colSum = float3(0.0, 0.0, 0.0);
+    int nb = (int)laP0.x;
+    const float thresh = laP0.y;
+    [loop]
+    for (int bi = 0; bi < nb; bi++) {
+        AcidBlobGPU B = AcidBlobs[bi];
+        float2 q  = pp - float2(B.a.x * aspect, B.a.y);
+        float  d2 = dot(q, q);
+        float  sup = B.a.z * laP0.z;              // support radius
+        float  s2 = sup * sup;
+        if (d2 >= s2) continue;
+        // Wyvill/Blinn compact kernel (1 - t^2)^3, t = d / support. Bounded,
+        // C2, no singularity and no clamping — unlike the inverse-square
+        // metaball, whose broad field ~= 1 plateau made hole boundaries
+        // ragged and forced the gradient-clamp guard.
+        float  u  = 1.0 - d2 / s2;
+        float  u2 = u * u;
+        float  w  = u2 * u;
+        field += w * B.a.w;
+        grad  += (-6.0 * u2 / s2) * q * B.a.w;
+        // Flat fill from a SOFT-max over the blob weights. A hard argmax drew
+        // a crisp circle wherever the dominant blob handed over inside a
+        // merged mass; a plain influence-weighted mean is what turned the oil
+        // PoC milky. w^4 is the middle road: tails contribute nothing, the
+        // handover is a soft gradient a few pixels wide.
+        if (B.a.w > 0.0) {
+            float w2 = w * w, w4 = w2 * w2;
+            colSum += B.b.rgb * w4;
+            colW   += w4;
+        }
+    }
+    float3 oilBase = (colW > 1e-9) ? colSum / colW : laOil[0].rgb;
+    float  gl   = length(grad) + 1e-6;
+    float  sdf  = clamp((field - thresh) / gl, -0.25, 0.25);  // >0 inside the oil
+    float  aaF  = fwidth(field) * laP0.w + 1e-4;
+    float  cov  = smoothstep(thresh - aaF, thresh + aaF, field);
+    // Refraction: the ink is seen through thinning oil near the rim, so shift
+    // the ink lookup along the field gradient inside a narrow edge band.
+    float  eb = sdf / max(laP1.x * 7.0, 1e-4);
+    float  edgeB = exp(-eb * eb);
+    uv = saturate(uv + (grad / gl) * (laP1.w * edgeB) * float2(1.0 / aspect, 1.0));
+#endif
+    float3 C = Dye.SampleLevel(linearClamp, uv, 0).rgb;
     // Raw dye intensity, before shading/filters/clamps: drives the HDR
     // highlight expansion below so it can see how hot the dye really is
     // (the clamped, filtered colour can't exceed 1.0 any more).
     float m = max(C.r, max(C.g, C.b));
     if (shading > 0.5) {
-        float3 L = Dye.SampleLevel(linearClamp, i.uv - float2(texelSize.x, 0), 0).rgb;
-        float3 R = Dye.SampleLevel(linearClamp, i.uv + float2(texelSize.x, 0), 0).rgb;
-        float3 T = Dye.SampleLevel(linearClamp, i.uv - float2(0, texelSize.y), 0).rgb;
-        float3 B = Dye.SampleLevel(linearClamp, i.uv + float2(0, texelSize.y), 0).rgb;
+        float3 L = Dye.SampleLevel(linearClamp, uv - float2(texelSize.x, 0), 0).rgb;
+        float3 R = Dye.SampleLevel(linearClamp, uv + float2(texelSize.x, 0), 0).rgb;
+        float3 T = Dye.SampleLevel(linearClamp, uv - float2(0, texelSize.y), 0).rgb;
+        float3 B = Dye.SampleLevel(linearClamp, uv + float2(0, texelSize.y), 0).rgb;
         float dx = length(R) - length(L);
         float dy = length(B) - length(T);
         float3 n = normalize(float3(dx, dy, length(texelSize)));
         float diffuse = clamp(dot(n, float3(0, 0, 1)) + 0.7, 0.7, 1.0);
+#ifdef LIQUID_ACID
+        // The reference ink bands are FLAT. The fluid look's pseudo-3D emboss
+        // puts a glossy bevel on every dye front, which reads as melted
+        // plastic once the bands are posterised — attenuate it here instead of
+        // making the user turn `shading` off (it belongs to the fluid look).
+        C *= lerp(1.0, diffuse, saturate(laP7.w));
+#else
         C *= diffuse;
+#endif
     }
     // The reference composited the dye into an 8-bit canvas before any CSS
     // filter touched it, so dye above 1.0 (cap 1.35, bursts 1.5) was flattened
@@ -384,6 +528,164 @@ float4 PSMain(VSOut i) : SV_Target {
         float lift = shadow.x * (1.0 - smoothstep(0.0, max(shadow.y, 0.001), lum));
         C *= (lum + lift) / max(lum, 1e-4);
     }
+
+#ifdef LIQUID_ACID
+    // =====================================================================
+    // Liquid Acid: restyle the parity colour C as INK, then composite OIL.
+    // =====================================================================
+    // ---- INK: flat colour bands, dark seams, duotone ramp ----------------
+    float inkLum = max(C.r, max(C.g, C.b));
+    float bandIn = saturate(inkLum * laP4.x + laP4.y);
+    float band   = AcidBand(bandIn, max(laP3.x, 1.0), clamp(laP3.y, 0.001, 0.5));
+    // Keep the BOTTOM of the range continuous: posterising the fluid's low-dye
+    // regions down to level 0 turns every faint wisp into a hard-edged black
+    // cut-out. Below the first band edge, fade back to the smooth value.
+    band = lerp(bandIn, band, smoothstep(0.0, 1.5 / max(laP3.x, 1.0), bandIn));
+    // chroma-preserving quantise of the sim's own colour
+    float3 inkC = C * (band / max(inkLum, 1e-4));
+    // 4-stop ramp indexed by the banded luminance
+    float  rs = saturate(band) * 3.0;
+    int    ri = (int)floor(rs);
+    float3 rampC = lerp(laInk[min(ri, 3)].rgb, laInk[min(ri + 1, 3)].rgb, rs - ri);
+    // Regional hue variation: rotate the ramp by the DYE's own hue so the ink
+    // still drifts (purple <-> magenta, red <-> orange) instead of reading as
+    // one flat duotone. 0 = pure duotone.
+    if (laP3.w > 0.01) {
+        float2 cc = float2(C.r - 0.5 * (C.g + C.b), 0.8660254 * (C.g - C.b));
+        // atan2(0,0) is NaN, and dye-free pixels are exactly (0,0). The NaN
+        // propagates through lerp() and blacks the pixel out even where the
+        // OIL covers it - that is what painted hard, fluid-shaped black smears
+        // across the oil discs. Guard on the chroma magnitude.
+        if (dot(cc, cc) > 1e-10)
+            rampC = CssHueRotate(rampC, atan2(cc.y, cc.x) * laP3.w * 0.31831);
+    }
+    inkC = lerp(inkC, rampC, saturate(laP3.z));
+    // dark seams where |grad dye| is steep (the marbled acrylic-pour edging)
+    {
+        float2 st = texelSize * laP4.w;
+        float gx = length(Dye.SampleLevel(linearClamp, uv + float2(st.x, 0), 0).rgb)
+                 - length(Dye.SampleLevel(linearClamp, uv - float2(st.x, 0), 0).rgb);
+        float gy = length(Dye.SampleLevel(linearClamp, uv + float2(0, st.y), 0).rgb)
+                 - length(Dye.SampleLevel(linearClamp, uv - float2(0, st.y), 0).rgb);
+        float gm = sqrt(gx * gx + gy * gy);
+        // Only the steepest fronts get a seam, AND only where the tap actually
+        // crosses more than one colour band. Without that band-index test a
+        // seam lands between two ADJACENT levels of the same hue, which draws a
+        // dark ring around every band and makes each one read as a lit ridge
+        // (light-dark-light) — a glossy relief instead of the references' flat
+        // bands. gm * inkGain * inkLevels is the number of bands the tap spans.
+        float gBands = gm * laP4.x * max(laP3.x, 1.0);
+        inkC *= 1.0 - laP4.z * smoothstep(laP5.x, max(laP5.y, laP5.x + 1e-3), gm)
+                             * smoothstep(1.1, 2.1, gBands);
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- OIL: flat fill, thin dark rim just inside the isoline ----------
+    float3 oilC = oilBase;
+    oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(laP6.z * 0.010,
+                                                              -laP6.z * 0.007)),
+                 saturate(laP2.w));
+    // Thin film: the ink underneath modulates the oil, but only BROADLY. The
+    // raw per-pixel band printed the dye's texel structure onto the oil as
+    // short horizontal dashes, so drive it from a wide, heavily smoothed
+    // luminance tap instead of the pixel's own band.
+    if (laP2.z > 0.002) {
+        float2 bt = texelSize * 9.0;
+        float lw = length(Dye.SampleLevel(linearClamp, uv + bt, 0).rgb)
+                 + length(Dye.SampleLevel(linearClamp, uv - bt, 0).rgb)
+                 + length(Dye.SampleLevel(linearClamp, uv + float2(bt.x, -bt.y), 0).rgb)
+                 + length(Dye.SampleLevel(linearClamp, uv - float2(bt.x, -bt.y), 0).rgb);
+        oilC *= lerp(1.0, 0.88 + 0.30 * saturate(lw * 0.45 * laP4.x), saturate(laP2.z));
+    }
+    // dark rim: a Gaussian band centred just INSIDE the boundary, forced to
+    // zero deep inside a merged mass so no concentric rings appear there.
+    float rimX = (sdf - laP1.y) / max(laP1.x, 1e-5);
+    float rimB = exp(-rimX * rimX)
+               * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field));
+    oilC *= 1.0 - saturate(laP1.z) * rimB;
+
+    float3 col = lerp(inkC, oilC, cov);
+
+    // ---- bubble swarms ---------------------------------------------------
+    // Two procedural cellular layers, each masked to one side of the oil
+    // surface: dark water droplets trapped INSIDE the oil (ref 2, ref 3) and
+    // oil droplets floating on the open ink (ref 3). Both creep and warp so
+    // they are not glued to the screen.
+    {
+        float st = laP6.z;
+        float2 warp = float2(sin(pp.y * 4.1 + st * 0.11), cos(pp.x * 3.7 - st * 0.09));
+        // DENSITY vs OPACITY: "denser here, sparser there" belongs in the
+        // swarm's CELL DENSITY (and therefore inside AcidSwarm, decided per
+        // cell), never in the composite alpha — fading the alpha tints every
+        // droplet with the layer under it, which is why holes once came out
+        // dark orange instead of ink-coloured. It must not be a per-PIXEL term
+        // either, or the presence test flips part-way across a droplet and
+        // slices a wedge out of it.
+        // AA: fwidth() of a cellular min() jumps wherever the nearest cell
+        // changes, which smeared droplets into short streaks along the cell
+        // seams. p-space y spans 0..1 over the frame height, so one pixel is
+        // texelSize.y — use that fixed width instead.
+        float aaS = texelSize.y * 1.2;
+        if (laP8.x > 0.002) {
+            float2 sp = pp + warp * 0.030 + st * float2(0.0040, -0.0030);
+            // two octaves 2.7x apart so the sizes run from ~1 px to ~2% of the
+            // frame height; the fine one stays sparse or the oil reads as dust
+            float  sd = min(AcidSwarm(sp, laP9.x, laP8.z, laP10.x, laP9.z, laP9.w),
+                            AcidSwarm(sp + 7.31, laP9.x * 2.7, laP8.z * 0.12, laP10.x,
+                                      laP9.z, laP9.w));
+            float  scov = 1.0 - smoothstep(-aaS, aaS, sd);
+            float  sx = sd / (aaS * 2.4);
+            float  srim = exp(-sx * sx);
+            float  mask = smoothstep(0.004, 0.030, sdf) * laP8.x;   // inside the oil only
+            // a trapped water droplet shows the INK through the oil film
+            col = lerp(col, inkC * (1.0 - laP10.y), scov * mask);
+            col *= 1.0 - laP8.w * srim * mask;
+        }
+        if (laP8.y > 0.002) {
+            float2 sp = pp * 1.31 - warp * 0.024 + st * float2(-0.0031, 0.0042) + 41.7;
+            float  sd = min(AcidSwarm(sp, laP9.y, laP8.z, laP10.x, laP9.z, laP9.w),
+                            AcidSwarm(sp + 3.17, laP9.y * 2.7, laP8.z * 0.12, laP10.x,
+                                      laP9.z, laP9.w));
+            float  scov = 1.0 - smoothstep(-aaS, aaS, sd);
+            float  sx = sd / (aaS * 2.4);
+            float  srim = exp(-sx * sx);
+            float  mask = smoothstep(0.004, 0.030, -sdf) * laP8.y;  // open ink only
+            col = lerp(col, laOil[3].rgb, scov * mask);
+            col *= 1.0 - laP8.w * srim * mask;
+        }
+    }
+
+    // ---- meniscus: thin BRIGHT ink-coloured halo just outside the rim ----
+    // In the references this is the brightest thing in the frame (cyan on
+    // ref 1) and it is what separates the oil from the ink. Painted with the
+    // ramp's bright stop so it reads even over black ink.
+    if (laP2.x > 0.002) {
+        float hx = (sdf + laP7.z) / max(laP2.y, 1e-5);
+        float halo = exp(-hx * hx);
+        col = lerp(col, laMen.rgb, saturate(halo * laP2.x));
+    }
+
+    // ---- interface speckle: sparse cellular dots hugging the boundary ----
+    if (laP6.x > 0.001) {
+        float2 cell = floor(pp * laP6.y);
+        float  rnd  = AcidHash21(cell);
+        float2 jit  = float2(AcidHash21(cell + 7.13), AcidHash21(cell + 13.71));
+        float  dd   = length(frac(pp * laP6.y) - (0.25 + 0.5 * jit));
+        float  dot1 = step(dd, 0.08 + 0.26 * rnd) * step(0.88, rnd);
+        float  sMask = saturate(smoothstep(-0.020, 0.0, sdf) * (1.0 - cov) * 1.2
+                              + (1.0 - smoothstep(laP1.x * 2.0, laP1.x * 7.0, sdf)) * cov * 0.30);
+        col = lerp(col, col * 0.18, dot1 * sMask * laP6.x);
+    }
+    // ---- coarse ANIMATED film grain over everything ----------------------
+    col += (AcidHash21(floor(i.pos.xy / max(laP5.w, 1.0)) + frac(laP6.z) * 913.7) - 0.5)
+         * laP5.z;
+    C = saturate(col);
+    // HDR: the oil is a flat fill, so give it its own highlight level rather
+    // than inheriting the ink's. Keep the hot part small (ABL): the rim band.
+    if (laP7.x > 0.001) m = lerp(m, laP7.x, cov);
+    if (laP7.y > 0.001) m = max(m, laP7.y * rimB * cov);
+#endif
 
     float3 lin = SRGBToLinear(saturate(C));
     // Interpret the dye in a wider gamut and convert to the swap chain's 709

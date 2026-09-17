@@ -197,6 +197,105 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.curveHeight         = getF(L"color", L"curve_height", cfg.curveHeight);
     cfg.shadowFloor         = getF(L"color", L"shadow_floor", cfg.shadowFloor);
     cfg.shadowKnee          = getF(L"color", L"shadow_knee", cfg.shadowKnee);
+    // ---- render look selector + "Liquid Acid" parameters -------------------
+    // [look] style = fluid | liquid_acid   (default fluid — the normal look).
+    // The settings-window checkbox writes the equivalent int key
+    // [look] liquid_acid = 0|1; the string form wins when both are present.
+    {
+        wchar_t style[32] = {};
+        GetPrivateProfileStringW(L"look", L"style", L"", style, 32, ini);
+        if (style[0]) cfg.acid.enabled = (_wcsicmp(style, L"liquid_acid") == 0);
+        cfg.acid.enabled = getB(L"look", L"liquid_acid", cfg.acid.enabled);
+    }
+    {
+        LiquidAcidConfig& a = cfg.acid;
+        const wchar_t* S = L"liquid_acid";
+        a.blobCount    = getI(S, L"blob_count", a.blobCount);
+        a.discFrac     = getF(S, L"disc_frac", a.discFrac);
+        a.webFrac      = getF(S, L"web_frac", a.webFrac);
+        a.bubbleFrac   = getF(S, L"bubble_frac", a.bubbleFrac);
+        a.discMin      = getF(S, L"disc_min", a.discMin);
+        a.discMax      = getF(S, L"disc_max", a.discMax);
+        a.webMin       = getF(S, L"web_min", a.webMin);
+        a.webMax       = getF(S, L"web_max", a.webMax);
+        a.bubbleMin    = getF(S, L"bubble_min", a.bubbleMin);
+        a.bubbleMax    = getF(S, L"bubble_max", a.bubbleMax);
+        a.holeMin      = getF(S, L"hole_min", a.holeMin);
+        a.holeMax      = getF(S, L"hole_max", a.holeMax);
+        a.sizeBias     = getF(S, L"size_bias", a.sizeBias);
+        a.bigBias      = getF(S, L"big_bias", a.bigBias);
+        a.holeWeight   = getF(S, L"hole_weight", a.holeWeight);
+        a.threshold    = getF(S, L"threshold", a.threshold);
+        a.supportScale = getF(S, L"support_scale", a.supportScale);
+        a.aaScale      = getF(S, L"aa_scale", a.aaScale);
+        a.flowGain     = getF(S, L"flow_gain", a.flowGain);
+        a.curlDrift    = getF(S, L"curl_drift", a.curlDrift);
+        a.repulsion    = getF(S, L"repulsion", a.repulsion);
+        a.buoyancy     = getF(S, L"buoyancy", a.buoyancy);
+        a.damping      = getF(S, L"damping", a.damping);
+        a.breathAmt    = getF(S, L"breath", a.breathAmt);
+        a.wrapMargin   = getF(S, L"wrap_margin", a.wrapMargin);
+        a.rimWidth     = getF(S, L"rim_width", a.rimWidth);
+        a.rimInset     = getF(S, L"rim_inset", a.rimInset);
+        a.rimDark      = getF(S, L"rim_dark", a.rimDark);
+        a.meniscus     = getF(S, L"meniscus", a.meniscus);
+        a.meniscusW    = getF(S, L"meniscus_width", a.meniscusW);
+        a.meniscusOff  = getF(S, L"meniscus_offset", a.meniscusOff);
+        a.refraction   = getF(S, L"refraction", a.refraction);
+        a.translucency = getF(S, L"translucency", a.translucency);
+        a.oilTexture   = getF(S, L"oil_texture", a.oilTexture);
+        a.inkShading   = getF(S, L"ink_shading", a.inkShading);
+        a.oilHdr       = getF(S, L"oil_hdr", a.oilHdr);
+        a.rimHdr       = getF(S, L"rim_hdr", a.rimHdr);
+        a.inkLevels    = getF(S, L"ink_levels", a.inkLevels);
+        a.inkSoft      = getF(S, L"ink_soft", a.inkSoft);
+        a.inkMix       = getF(S, L"ink_mix", a.inkMix);
+        a.inkHueVary   = getF(S, L"ink_hue_vary", a.inkHueVary);
+        a.inkGain      = getF(S, L"ink_gain", a.inkGain);
+        a.inkBias      = getF(S, L"ink_bias", a.inkBias);
+        a.seamStrength = getF(S, L"seam_strength", a.seamStrength);
+        a.seamLo       = getF(S, L"seam_lo", a.seamLo);
+        a.seamHi       = getF(S, L"seam_hi", a.seamHi);
+        a.seamScale    = getF(S, L"seam_scale", a.seamScale);
+        a.grainAmt     = getF(S, L"grain", a.grainAmt);
+        a.grainScale   = getF(S, L"grain_scale", a.grainScale);
+        a.speckle      = getF(S, L"speckle", a.speckle);
+        a.speckScale   = getF(S, L"speckle_scale", a.speckScale);
+        a.swarmHoles   = getF(S, L"swarm_holes", a.swarmHoles);
+        a.swarmDrops   = getF(S, L"swarm_drops", a.swarmDrops);
+        a.swarmDensity = getF(S, L"swarm_density", a.swarmDensity);
+        a.swarmScaleA  = getF(S, L"swarm_scale_holes", a.swarmScaleA);
+        a.swarmScaleB  = getF(S, L"swarm_scale_drops", a.swarmScaleB);
+        a.swarmRMin    = getF(S, L"swarm_r_min", a.swarmRMin);
+        a.swarmRMax    = getF(S, L"swarm_r_max", a.swarmRMax);
+        a.swarmRimDark = getF(S, L"swarm_rim_dark", a.swarmRimDark);
+        a.swarmDrift   = getF(S, L"swarm_drift", a.swarmDrift);
+        a.swarmClump   = getF(S, L"swarm_clump", a.swarmClump);
+        a.swarmDark    = getF(S, L"swarm_dark", a.swarmDark);
+        {   // meniscus halo colour
+            wchar_t buf[64] = {}; float r, g, b;
+            GetPrivateProfileStringW(S, L"meniscus_color", L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                a.meniscusCol[0] = r; a.meniscusCol[1] = g; a.meniscusCol[2] = b;
+            }
+        }
+        // oil_color_1..4 and ink_stop_1..4, "r g b" floats like splat_color_N
+        for (int ci = 0; ci < 4; ci++) {
+            wchar_t key[32], buf[64] = {};
+            float r, g, b;
+            swprintf_s(key, L"oil_color_%d", ci + 1);
+            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                a.oilColors[ci * 3 + 0] = r; a.oilColors[ci * 3 + 1] = g; a.oilColors[ci * 3 + 2] = b;
+            }
+            buf[0] = 0;
+            swprintf_s(key, L"ink_stop_%d", ci + 1);
+            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                a.inkRamp[ci * 3 + 0] = r; a.inkRamp[ci * 3 + 1] = g; a.inkRamp[ci * 3 + 2] = b;
+            }
+        }
+    }
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], buf[64] = {};
         swprintf_s(key, L"splat_color_%d", ci + 1);
@@ -208,8 +307,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
             cfg.splatColors[ci * 3 + 2] = b;
         }
     }
-    printf("config loaded: density=%.3f decay_fast=%.2f vorticity=%.0f sim=%d dye=%d\n",
-           cfg.densityDissipation, cfg.decayFast, cfg.curl, cfg.simRes, cfg.dyeRes);
+    printf("config loaded: density=%.3f decay_fast=%.2f vorticity=%.0f sim=%d dye=%d look=%s\n",
+           cfg.densityDissipation, cfg.decayFast, cfg.curl, cfg.simRes, cfg.dyeRes,
+           cfg.acid.enabled ? "liquid_acid" : "fluid");
 }
 
 static void LoadFullConfig(FluidConfig& cfg) { LoadConfigFromIni(g_configIniPath, cfg); }

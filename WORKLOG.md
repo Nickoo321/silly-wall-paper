@@ -550,3 +550,40 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   crisp 4096 dye + shading ring (WE's canvas scaling softened them), chroma
   shadow lift. Knobs: peak_nits 0, dye_diffusion 0.02-0.05, shadow_floor 0.
 - Next: oil as a render mode (OIL-REVIEW.md phases 0-1).
+
+## 2026-09-16 (late) — Liquid Acid look inside FluidWallpaper (in progress)
+
+- Oil end goal redefined by the user with three refs (reference/shots/photos/
+  liquid-acid-ref-*.jpg, "Liquid Acid" visual pack): macro oil on inked water.
+  Design in reference/shots/README.md. Lava-lamp metaballs (src_oil phase 0,
+  committed d483044 as donor code) are NOT it.
+- Opus agent is building it as a render style in the fluid app: `[look]
+  style=liquid_acid`, `[liquid_acid]` section; ink style on the fluid dye +
+  metaball oil layer (positive discs/webs + negative holes/bubbles) advected by
+  a 64x36 velocity readback (async, one frame late, same pattern as the coverage
+  governor). Builds in build2/ only; regression shot of style=fluid is
+  byte-identical to the pre-change build (regress-base vs regress-after).
+- First frame (build2/shots/a1.png) vs refs: ink layer is on the right track
+  (teal marbled filaments on near-black) but too speckly/posterised; oil layer
+  far too sparse (a few small discs, ~8% coverage vs ~70% in ref 1), rims dark
+  only (refs show a thin bright ink-coloured rim outside a dark line), almost no
+  bubble swarms. Feedback sent to the agent; iterating.
+- Iterations a1..a12 (build2/shots, 1280x720, same seed) driven by ref-vs-port sheets
+  (reference/configs/refsheet.py). Fixes in order: compact Wyvill metaball kernel;
+  big-disc/web seeding; atan2(0,0) NaN blacking out oil (the "black blotches");
+  clustered log-normal bubble swarms; holes composite as ink; flat oil fill; ink
+  ramp teal/orange; seam rings softened (the "bevel" was seams, not shading).
+- Palettes A/B/C at 1920x1080 x t=60/90/120 (build2/shots/sheet?-NNN.png,
+  liquid-acid-sheet.png, liquid-acid-evolution.png). Inis tracked as
+  reference/configs/liquid-acid-{a,b,c}.ini. Cost +1.04 ms/frame at 1440p (upper
+  bound, includes headless blocking readback). Fluid look byte-identical
+  (regress-base == regress-final, md5 8069de7b...).
+- Agent's own caveats: oil more geometric than ref 2's web; ink_mix 0.95 bypasses the
+  hue cycler / moods hue in this look (decide before shipping); swarms are screen-space
+  not advected; oil_hdr/rim_hdr default 0 (oil sits at SDR white); settings page,
+  mirror and mood overlays untested at runtime.
+- User on the palette sheet: "This is cool. Maybe make the colors slightly more
+  opposite in hue, more often." -> follow-up: ink hue locked to the oil complement
+  (+/- span) and a slow shared hue sweep so the pair stays opposite while cycling.
+- OLED dimmed to 30/100 via DDC/CI at the user's request (tools/oled-brightness.ps1);
+  restore with `powershell -File tools\oled-brightness.ps1 100`.

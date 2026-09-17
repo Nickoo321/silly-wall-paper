@@ -6,6 +6,127 @@
 #include <cstdint>
 #include <vector>
 
+// ---------------------------------------------------------------------------
+// "Liquid Acid" render look (ini section [liquid_acid], enabled by
+// [look] style=liquid_acid).
+//
+// Macro footage of oil floating on inked water, per reference/shots/photos/
+// liquid-acid-ref-*.jpg. Two layers:
+//   INK  — the fluid sim's dye, re-styled: luminance posterised into soft flat
+//          bands, remapped through a 4-stop duotone ramp, dark seams painted
+//          where the dye gradient is steep. The marbling/filaments are the
+//          sim's, unchanged; only the colour mapping is restyled.
+//   OIL  — a CPU metaball field (discs, webs, bubbles, plus NEGATIVE blobs that
+//          eat round holes/bubbles out of the oil) advected by the fluid's own
+//          velocity field, rendered as flat saturated fills with a thin dark
+//          rim just inside the field==1 isoline.
+// Every constant below is a named field so the look is tunable from the ini
+// and the settings window. All of it is inert when `enabled` is false — the
+// display shader is then compiled without the LIQUID_ACID macro at all, so the
+// normal fluid look is bit-identical.
+// ---------------------------------------------------------------------------
+struct LiquidAcidConfig {
+    bool  enabled = false;          // [look] style = fluid | liquid_acid
+
+    // --- oil population (counts are fractions of blobCount) ---
+    // The references are mostly OIL with ink showing through as channels, so
+    // the discs and webs are huge (a third of the frame tall) and the small
+    // stuff is handled by the procedural swarm layer below, not by blobs.
+    int   blobCount   = 96;         // blobs stepped on the CPU and looped per pixel (max 128)
+    float discFrac    = 0.22f;      // huge flat discs  (ref 1)
+    float webFrac     = 0.42f;      // big blobs seeded in chains -> oil sheets/webs (ref 2)
+    float bubbleFrac  = 0.22f;      // free-floating oil droplets
+                                    // remainder = negative "hole" blobs
+    float discMin     = 0.250f, discMax   = 0.460f;   // radius, uv-y units
+    float webMin      = 0.110f, webMax    = 0.260f;
+    float bubbleMin   = 0.015f, bubbleMax = 0.075f;
+    float holeMin     = 0.030f, holeMax   = 0.130f;
+    float sizeBias    = 2.0f;       // >1 skews bubble/hole radii toward the small end
+    float bigBias     = 0.55f;      // <1 skews disc/web radii toward the LARGE end
+    float holeWeight  = 0.75f;      // negative-blob field weight (how hard holes bite)
+
+    // --- metaball field (compact Wyvill kernel (1-t^2)^3) ---
+    float threshold   = 0.50f;      // field level of the oil surface (the isoline)
+    float supportScale= 2.20f;      // blob support radius / visible radius. With
+                                    // threshold 0.5 the visible radius is ~= baseR;
+                                    // bigger = stickier, blobs bridge further apart
+    float aaScale     = 1.3f;       // fwidth multiplier for the coverage smoothstep
+
+    // --- oil motion ---
+    float flowGain    = 1.15f;      // fluid velocity -> blob advection
+    float curlDrift   = 0.0016f;    // analytic divergence-free drift on top
+    float repulsion   = 0.55f;      // soft separation between same-sign blobs
+    float buoyancy    = 0.0020f;    // radius-proportional rise (uv/s at r=0.12)
+    float damping     = 2.2f;       // velocity relaxation rate (1/s), fps-normalised
+    float breathAmt   = 0.10f;      // radius breathing amplitude
+    float wrapMargin  = 0.20f;      // uv margin before a blob wraps to the far side
+
+    // --- oil shading ---
+    float rimWidth    = 0.0013f;    // dark rim half-width, sdf units (~2 px at 1080p)
+    float rimInset    = 0.0013f;    // rim band centre, INSIDE the isoline
+    float rimDark     = 0.80f;      // 0..1 darkening at the rim core
+    // meniscus: the THIN BRIGHT ink-coloured halo just outside the dark rim
+    // (cyan on ref 1, pale violet on ref 2) — the ink refracted by the edge of
+    // the oil lens. Painted with the ink ramp's bright stop so it reads even
+    // where the ink behind is black.
+    float meniscus    = 0.85f;      // 0..1 strength
+    float meniscusW   = 0.0020f;    // half-width, sdf units
+    float meniscusOff = 0.0022f;    // band centre, OUTSIDE the isoline
+    float meniscusCol[3] = { 0.353f, 0.918f, 0.894f };   // bright cyan (ref 1)
+    float refraction  = 0.050f;     // ink uv offset along the field gradient near rims
+    float translucency= 0.16f;      // how much the ink under the oil modulates it
+    float oilTexture  = 0.07f;      // faint in-blob mottle (interiors stay flat)
+    float inkShading  = 0.00f;      // how much of the fluid look's pseudo-3D emboss
+                                    // survives on the ink (refs are flat; 1 = normal)
+    float oilHdr      = 0.0f;       // >0: drive HDR highlight gain for oil pixels
+    float rimHdr      = 0.0f;       // >0: extra HDR level on the rim band only
+    // oil palette: up to 4 colours, dominant-blob pick (no colour-bleed averaging)
+    float oilColors[12] = { 0.902f, 0.278f, 0.157f,     // vermillion disc
+                            0.976f, 0.400f, 0.078f,     // hot orange web
+                            0.859f, 0.204f, 0.098f,     // deep red-orange
+                            0.988f, 0.541f, 0.114f };   // amber bubble
+
+    // --- ink (the fluid, re-styled) ---
+    float inkLevels   = 5.0f;       // posterise bands (few + soft = broad flat plateaus)
+    float inkSoft     = 0.42f;      // band-edge softness (0 = hard steps)
+    float inkMix      = 0.88f;      // 0 = keep the parity colour, 1 = full ramp
+    float inkHueVary  = 14.0f;      // degrees of ramp hue-rotate driven by the dye's own hue
+    float inkGain     = 2.30f;      // luminance -> ramp position
+    float inkBias     = 0.05f;
+    float seamStrength= 0.70f;      // dark seams along |grad dye|
+    float seamLo      = 0.06f, seamHi = 0.45f;
+    float seamScale   = 2.6f;       // gradient tap spacing, screen texels
+    // 4-stop ink ramp, dark -> bright. Ref 1's ink is teal AND orange, so the
+    // ramp crosses the complement: near-black teal -> teal -> burnt -> hot.
+    float inkRamp[12] = { 0.006f, 0.034f, 0.038f,       // near-black teal
+                          0.043f, 0.353f, 0.376f,       // teal
+                          0.478f, 0.173f, 0.020f,       // burnt orange
+                          0.969f, 0.510f, 0.055f };     // hot orange
+
+    // --- bubble swarms (procedural, NOT metaballs) ---------------------
+    // The references carry hundreds of round droplets with a wide size range:
+    // dark water droplets trapped INSIDE the oil, and oil droplets sitting on
+    // the open ink. A jittered cellular layer gives all of them for ~20 hashes
+    // per pixel; a hundred more metaballs would cost far more.
+    float swarmHoles  = 0.90f;      // strength of the hole swarm inside the oil
+    float swarmDrops  = 0.55f;      // strength of the oil-droplet swarm on the ink
+    float swarmDensity= 0.55f;      // fraction of cells that carry a droplet
+    float swarmScaleA = 26.0f;      // cells per p-unit, hole swarm (bigger = smaller holes)
+    float swarmScaleB = 34.0f;      // cells per p-unit, droplet swarm
+    float swarmRMin   = 0.045f;     // droplet radius in CELL units (wide range = every size)
+    float swarmRMax   = 0.430f;
+    float swarmRimDark= 0.55f;      // thin dark edge on every droplet
+    float swarmDrift  = 1.0f;       // how fast the swarm layers creep / warp
+    float swarmClump  = 0.70f;      // 0 = even blanket, 1 = droplets only in patches
+    float swarmDark   = 0.80f;      // how dark a trapped water droplet reads
+
+    // --- grain / speckle ---
+    float grainAmt    = 0.030f;     // coarse animated film grain
+    float grainScale  = 3.0f;       // px per grain cell (>1 = coarse)
+    float speckle     = 0.12f;      // cellular dots concentrated at interfaces
+    float speckScale  = 240.0f;     // cells per uv unit
+};
+
 // Defaults mirror reference/project.json (the shipped Wallpaper Engine values),
 // falling back to reference/script.js config for values project.json doesn't set.
 struct FluidConfig {
@@ -103,6 +224,8 @@ struct FluidConfig {
     bool  gradientMode = false;     // render the M1 HDR test gradient instead
     int   calibratePage = 0;        // >0: render quiz pattern page N (--calibrate N)
     bool  stats = false;            // periodic dye-field readback stats to stdout
+    // "Liquid Acid" render look — additive; inert unless acid.enabled
+    LiquidAcidConfig acid;
 };
 
 // Per-frame input from the app shell (global cursor, desktop focus).
@@ -218,6 +341,19 @@ private:
     void UpdateCoverage();          // schedule/process the 48x27 governor readback
     void ProcessCoverage(const uint8_t* data, UINT pitch);
     void HandleInput(const FrameInput& in);
+    // --- Liquid Acid look ---
+    void CreateAcidBuffers();       // blob SRV + param CBV upload rings (always)
+    void SeedAcidBlobs();           // deterministic under the shot seed
+    void StepAcidBlobs(float dt);   // CPU sim: fluid advection + curl + repulsion
+    void UpdateVelocityReadback();  // 64x36 velocity downsample -> CPU (1 frame late)
+    void UploadAcidConstants();     // fills this frame's blob + param upload buffers
+    void BindAcid();                // root SRV/CBV for the display draw
+    // Which display PSO this frame uses. Identical to m_psoDisplay unless the
+    // Liquid Acid look is on AND its variant compiled.
+    ID3D12PipelineState* DisplayPso() const {
+        return (m_cfg.acid.enabled && m_psoLiquidAcid) ? m_psoLiquidAcid.Get()
+                                                       : m_psoDisplay.Get();
+    }
 
     FluidConfig m_cfg;
     int m_width = 0, m_height = 0;
@@ -317,6 +453,36 @@ private:
     float m_hueAngle = 0;
     bool  m_hsCommanded = false;       // external (conductor) owns the angle
     float m_hsGlideOverride = 0.0f;    // 0 = use cfg.hsGlide
+
+    // --- Liquid Acid look (all inert unless m_cfg.acid.enabled) ---
+    static const int kAcidMaxBlobs = 128;
+    static const int kVelW = 64, kVelH = 36;
+    struct AcidBlob {
+        float x, y;          // centre, uv (y down)
+        float vx, vy;        // uv / s
+        float baseR;         // uv (y units)
+        float phase;         // breathing phase
+        float breathRate;    // rad / s
+        float wgt;           // +1 (oil) or -holeWeight (hole / bubble of water)
+        float col[3];        // flat fill colour (oil palette pick)
+        float s1, s2;        // curl-drift phase offsets
+        int   kind;          // 0 disc, 1 web, 2 bubble, 3 hole
+    };
+    std::vector<AcidBlob> m_acidBlobs;
+    bool   m_acidSeeded = false;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_acidBlobUpload[kFrames];
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_acidParamUpload[kFrames];
+    void*  m_acidBlobData[kFrames] = {};
+    void*  m_acidParamData[kFrames] = {};
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoLiquidAcid;
+    // low-res velocity readback (same async pattern as the coverage governor)
+    Tex    m_velLow;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_velReadback;
+    UINT   m_velPitch = 0;
+    UINT64 m_velFence = 0;
+    float  m_lastVelTime = -10.0f;
+    bool   m_velPending = false;
+    std::vector<float> m_velCpu;    // kVelW*kVelH*2, sim texels / s
 
     // HDR analyzer
     bool   m_anaEnabled = false;

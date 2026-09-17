@@ -62,9 +62,10 @@ static RGB CycledColorAt(float hue) {
     return c;
 }
 
-static ComPtr<ID3DBlob> Compile(const char* src, const char* entry, const char* target) {
+static ComPtr<ID3DBlob> Compile(const char* src, const char* entry, const char* target,
+                                const D3D_SHADER_MACRO* defines = nullptr) {
     ComPtr<ID3DBlob> blob, err;
-    if (FAILED(D3DCompile(src, strlen(src), entry, nullptr, nullptr, entry, target, 0, 0, &blob, &err))) {
+    if (FAILED(D3DCompile(src, strlen(src), entry, defines, nullptr, entry, target, 0, 0, &blob, &err))) {
         fprintf(stderr, "shader '%s' compile error:\n%s\n", entry,
                 err ? (char*)err->GetBufferPointer() : "?");
         ExitProcess(1);
@@ -248,15 +249,24 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
                                          IID_PPV_ARGS(&m_computeRS)));
     }
     // Graphics: b0 constants, t0 table, s0 static sampler.
+    // Params 2/3 are the Liquid Acid look's blob buffer (t1) and parameter
+    // block (b1) as ROOT descriptors — no descriptor-heap slots needed. The
+    // fluid display shader references neither, so they cost it nothing.
     {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
-        D3D12_ROOT_PARAMETER params[2] = {};
+        D3D12_ROOT_PARAMETER params[4] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, 32 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         params[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
         params[1].DescriptorTable = { 1, &rSrv0 };
         params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[2].Descriptor = { 1, 0 };            // b1
+        params[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[3].Descriptor = { 1, 0 };            // t1
+        params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -264,7 +274,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 2;
+        rsd.NumParameters = 4;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -300,9 +310,10 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     makeCS("CSDiffuseDye", m_psoDiffuseDye);
 
     // --- graphics PSOs (display + gradient) ---
-    auto makeGfx = [&](const char* src, ComPtr<ID3D12PipelineState>& pso) {
-        ComPtr<ID3DBlob> vs = Compile(src, "VSMain", "vs_5_0");
-        ComPtr<ID3DBlob> ps = Compile(src, "PSMain", "ps_5_0");
+    auto makeGfx = [&](const char* src, ComPtr<ID3D12PipelineState>& pso,
+                       const D3D_SHADER_MACRO* defines = nullptr) {
+        ComPtr<ID3DBlob> vs = Compile(src, "VSMain", "vs_5_0", defines);
+        ComPtr<ID3DBlob> ps = Compile(src, "PSMain", "ps_5_0", defines);
         D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
         pd.pRootSignature = m_graphicsRS.Get();
         pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
@@ -319,6 +330,14 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     };
     makeGfx(kDisplaySrc, m_psoDisplay);
     makeGfx(kGradientSrc, m_psoGradient);
+    // Liquid Acid: the SAME display source compiled with LIQUID_ACID defined.
+    // Built only when the look is on, so the normal path pays no compile cost
+    // and, more importantly, its own shader has none of this code in it.
+    if (m_cfg.acid.enabled) {
+        const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
+        makeGfx(kDisplaySrc, m_psoLiquidAcid, defs);
+    }
+    CreateAcidBuffers();
 
     if (m_headless) CreateOffscreenTarget();
 }
@@ -420,6 +439,27 @@ void FluidRenderer::CreateSimResources() {
     m_divergence = CreateTex(m_simW, m_simH, DXGI_FORMAT_R16_FLOAT, slot++);
     m_curl = CreateTex(m_simW, m_simH, DXGI_FORMAT_R16_FLOAT, slot++);
     m_coverage = CreateTex(kCovW, kCovH, DXGI_FORMAT_R16G16B16A16_FLOAT, slot++);
+    // Liquid Acid: 64x36 velocity downsample for CPU blob advection. Same
+    // async-readback pattern as the coverage governor; one frame of latency.
+    m_velLow = CreateTex(kVelW, kVelH, DXGI_FORMAT_R16G16B16A16_FLOAT, slot++);
+    m_velPitch = (kVelW * 8 + 255) & ~255u;
+    m_velCpu.assign((size_t)kVelW * kVelH * 2, 0.0f);
+    m_velPending = false;
+    {
+        D3D12_HEAP_PROPERTIES hp = {};
+        hp.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd = {};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = (UINT64)m_velPitch * kVelH;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                             IID_PPV_ARGS(&m_velReadback)));
+    }
 
     // coverage governor readback (48x27 RGBA16F, 256-aligned pitch)
     m_covPitch = (kCovW * 8 + 255) & ~255u;
@@ -676,11 +716,12 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->RSSetScissorRects(1, &sc);
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
-    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstants(consts);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    BindAcid();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -714,11 +755,12 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_cmd->RSSetScissorRects(1, &sc);
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
-    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstants(consts);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    BindAcid();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 }
@@ -878,11 +920,12 @@ void FluidRenderer::MaybeRenderAnalyzer() {
     m_cmd->RSSetScissorRects(1, &sc);
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
-    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstants(consts);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    BindAcid();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1003,11 +1046,12 @@ void FluidRenderer::RenderMirror() {
     m_cmd->RSSetScissorRects(1, &sc);
 
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
-    m_cmd->SetPipelineState(m_psoDisplay.Get());
+    m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
+    BindAcid();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1152,6 +1196,20 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         }
     }
 
+    // Liquid Acid oil layer: advect the blobs with the fluid we just stepped
+    // (one frame of readback latency), then hand them to the display pass.
+    if (m_cfg.acid.enabled) {
+        // Re-seed when the population size changes from the settings window;
+        // the per-kind fractions and radii are read at seed time, so moving
+        // the count slider is also how you apply those live.
+        int want = m_cfg.acid.blobCount;
+        want = want < 1 ? 1 : (want > kAcidMaxBlobs ? kAcidMaxBlobs : want);
+        if (!m_acidSeeded || (int)m_acidBlobs.size() != want) SeedAcidBlobs();
+        UpdateVelocityReadback();
+        StepAcidBlobs(dt);
+        UploadAcidConstants();
+    }
+
     if (m_headless) RenderDisplayOffscreen();
     else            RenderDisplay();
     if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
@@ -1257,6 +1315,18 @@ void FluidRenderer::Shutdown() {
     m_covReadback.Reset();
     m_covPending = false;
 
+    // Liquid Acid: blob/param upload rings + the velocity readback
+    for (UINT i = 0; i < kFrames; i++) {
+        if (m_acidBlobUpload[i])  { m_acidBlobUpload[i]->Unmap(0, nullptr);  m_acidBlobUpload[i].Reset(); }
+        if (m_acidParamUpload[i]) { m_acidParamUpload[i]->Unmap(0, nullptr); m_acidParamUpload[i].Reset(); }
+        m_acidBlobData[i] = nullptr;
+        m_acidParamData[i] = nullptr;
+    }
+    m_velReadback.Reset();
+    m_velPending = false;
+    m_acidBlobs.clear();
+    m_acidSeeded = false;
+
     // sim textures
     auto freeTex = [](Tex& t) {
         t.res.Reset();
@@ -1269,6 +1339,7 @@ void FluidRenderer::Shutdown() {
     freeTex(m_pressure.a);  freeTex(m_pressure.b);
     freeTex(m_divergence);  freeTex(m_curl);
     freeTex(m_coverage);
+    freeTex(m_velLow);
 
     // root signatures + PSOs (shader blobs are recompiled from embedded source
     // in CreateDevice — nothing static is cached, so re-init is idempotent)
@@ -1279,6 +1350,7 @@ void FluidRenderer::Shutdown() {
     m_psoSplatVel.Reset(); m_psoSplatDye.Reset();
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
     m_psoDisplay.Reset(); m_psoGradient.Reset();
+    m_psoLiquidAcid.Reset();
     m_computeRS.Reset();
     m_graphicsRS.Reset();
 
@@ -1400,6 +1472,7 @@ void FluidRenderer::SetResolutions(int simRes, int dyeRes) {
     WaitForGpuIdle();
     m_covPending = false;
     m_readbackPending = false;
+    m_velPending = false;
     CreateSimResources();     // recreates textures/readbacks, reinits wanderers
     m_firstFrame = true;      // clear + startup splat burst next frame
     printf("resolutions changed: sim %dx%d, dye %dx%d\n", m_simW, m_simH, m_dyeW, m_dyeH);
@@ -1617,6 +1690,380 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
     if (in.mouseMoved && m_cfg.showMouse)
         Splat(in.mouseX, in.mouseY, in.mouseDx, in.mouseDy,
               c[0] * es, c[1] * es, c[2] * es);
+}
+
+// ===========================================================================
+// "Liquid Acid" look — oil metaballs on inked water.
+//
+// The oil is a CPU blob population (positive blobs = oil, NEGATIVE blobs =
+// round holes/water bubbles eaten out of it) advected by the fluid's own
+// velocity field, uploaded once per frame as a structured buffer the display
+// shader loops over. See LiquidAcidConfig in fluid.h and the LIQUID_ACID
+// section of kDisplaySrc.
+// ===========================================================================
+
+// GPU mirrors — must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
+struct AcidBlobGPU { float a[4]; float b[4]; };
+struct AcidParamsGPU {
+    float oil[4][4];
+    float ink[4][4];
+    float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
+    float p10[4], men[4];
+};
+static_assert(sizeof(AcidParamsGPU) == 320, "AcidCB layout");
+
+// Private deterministic RNG: the blob population must replay exactly under a
+// --shot seed, and must not perturb the fluid's own rand() sequence (which
+// would break parity with the normal look).
+namespace {
+struct AcidRng {
+    uint32_t s;
+    explicit AcidRng(uint32_t seed) : s(seed ? seed : 0x9E3779B9u) {}
+    uint32_t next() { s ^= s << 13; s ^= s >> 17; s ^= s << 5; return s; }
+    float f() { return (next() >> 8) * (1.0f / 16777216.0f); }         // [0,1)
+    float f(float lo, float hi) { return lo + (hi - lo) * f(); }
+};
+}
+
+void FluidRenderer::CreateAcidBuffers() {
+    // Tiny (4 KB + 256 B per frame): created unconditionally so the display
+    // draw can always bind root params 2/3 whichever PSO is selected.
+    for (UINT i = 0; i < kFrames; i++) {
+        D3D12_HEAP_PROPERTIES hp = {};
+        hp.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC rd = {};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+        rd.Width = sizeof(AcidBlobGPU) * kAcidMaxBlobs;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&m_acidBlobUpload[i])));
+        rd.Width = (sizeof(AcidParamsGPU) + 255) & ~255u;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&m_acidParamUpload[i])));
+        D3D12_RANGE none = { 0, 0 };
+        HR(m_acidBlobUpload[i]->Map(0, &none, &m_acidBlobData[i]));
+        HR(m_acidParamUpload[i]->Map(0, &none, &m_acidParamData[i]));
+        memset(m_acidBlobData[i], 0, sizeof(AcidBlobGPU) * kAcidMaxBlobs);
+        memset(m_acidParamData[i], 0, sizeof(AcidParamsGPU));
+    }
+}
+
+// Seed the oil population. Four kinds, matching the references:
+//   disc   — big flat saturated discs      (liquid-acid-ref-1)
+//   web    — medium blobs seeded in CHAINS so they merge into veined webs
+//            with circular openings        (liquid-acid-ref-2)
+//   bubble — small round blobs, power-law sizes, some clustered
+//            (liquid-acid-ref-3)
+//   hole   — NEGATIVE weight, seeded inside a disc/web parent so it eats a
+//            round hole out of the oil. Harmless when it drifts into open
+//            ink: a negative field just stays below the isoline.
+void FluidRenderer::SeedAcidBlobs() {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const int n = m_cfg.acid.blobCount < 1 ? 1 :
+                  (m_cfg.acid.blobCount > kAcidMaxBlobs ? kAcidMaxBlobs : m_cfg.acid.blobCount);
+    AcidRng rng(g_randSeed ? (g_randSeed * 2654435761u) ^ 0xAC1Du : GetTickCount());
+    const float TWO_PI = 6.2831853f;
+
+    int nDisc   = (int)(n * a.discFrac   + 0.5f);
+    int nWeb    = (int)(n * a.webFrac    + 0.5f);
+    int nBubble = (int)(n * a.bubbleFrac + 0.5f);
+    if (nDisc + nWeb + nBubble > n - 1) nBubble = n - 1 - nDisc - nWeb;
+    if (nBubble < 0) nBubble = 0;
+    int nHole = n - nDisc - nWeb - nBubble;
+
+    m_acidBlobs.assign((size_t)n, AcidBlob{});
+    // power-law-ish size draw: pow(U, bias) with bias > 1 crowds the small end,
+    // which is what gives "bubbles of every size" instead of one modal radius
+    // pow(U, bias): bias > 1 crowds the small end (bubbles/holes, "every
+    // size"), bias < 1 crowds the LARGE end (discs and webs, which the
+    // references show filling most of the frame).
+    auto drawR = [&](float lo, float hi, float bias) {
+        return lo + (hi - lo) * powf(rng.f(), fmaxf(bias, 0.05f));
+    };
+    auto setCol = [&](AcidBlob& b, int idx) {
+        b.col[0] = a.oilColors[idx * 3 + 0];
+        b.col[1] = a.oilColors[idx * 3 + 1];
+        b.col[2] = a.oilColors[idx * 3 + 2];
+    };
+    auto place = [&](AcidBlob& b, float x, float y) {
+        b.x = x; b.y = y; b.vx = b.vy = 0.0f;
+        b.phase = rng.f(0.0f, TWO_PI);
+        b.breathRate = rng.f(0.08f, 0.32f);
+        b.s1 = rng.f(0.0f, TWO_PI);
+        b.s2 = rng.f(0.0f, TWO_PI);
+    };
+
+    int idx = 0;
+    for (int k = 0; k < nDisc && idx < n; k++, idx++) {
+        AcidBlob& b = m_acidBlobs[idx];
+        b.kind = 0; b.wgt = 1.0f;
+        b.baseR = drawR(a.discMin, a.discMax, a.bigBias);
+        setCol(b, (k % 3 == 0) ? 2 : 0);
+        place(b, rng.f(0.03f, 0.97f), rng.f(0.03f, 0.97f));
+    }
+    // webs: a random walk of touching blobs makes connected veins with
+    // circular openings between them, not a field of separate dots
+    float cx = rng.f(0.15f, 0.85f), cy = rng.f(0.15f, 0.85f), prevR = 0.06f;
+    for (int k = 0; k < nWeb && idx < n; k++, idx++) {
+        AcidBlob& b = m_acidBlobs[idx];
+        b.kind = 1; b.wgt = 1.0f;
+        b.baseR = drawR(a.webMin, a.webMax, a.bigBias);
+        setCol(b, (k % 4 == 0) ? 0 : 1);
+        if (k % 9 == 0) { cx = rng.f(0.10f, 0.90f); cy = rng.f(0.10f, 0.90f); }
+        else {
+            float ang = rng.f(0.0f, TWO_PI);
+            float step = (prevR + b.baseR) * rng.f(0.75f, 1.25f);
+            cx += cosf(ang) * step;
+            cy += sinf(ang) * step;
+            cx = fminf(fmaxf(cx, -0.05f), 1.05f);
+            cy = fminf(fmaxf(cy, -0.05f), 1.05f);
+        }
+        prevR = b.baseR;
+        place(b, cx, cy);
+    }
+    for (int k = 0; k < nBubble && idx < n; k++, idx++) {
+        AcidBlob& b = m_acidBlobs[idx];
+        b.kind = 2; b.wgt = 1.0f;
+        b.baseR = drawR(a.bubbleMin, a.bubbleMax, a.sizeBias);
+        setCol(b, (k % 3 == 0) ? 1 : 3);
+        if (k > 0 && rng.f() < 0.45f) {          // cluster on an earlier bubble
+            const AcidBlob& par = m_acidBlobs[idx - 1 - (int)(rng.f() * 3.0f) % 3];
+            float ang = rng.f(0.0f, TWO_PI);
+            float d = (par.baseR + b.baseR) * rng.f(1.15f, 4.0f);
+            place(b, par.x + cosf(ang) * d, par.y + sinf(ang) * d);
+        } else {
+            place(b, rng.f(0.02f, 0.98f), rng.f(0.02f, 0.98f));
+        }
+    }
+    const int positives = nDisc + nWeb;
+    for (int k = 0; k < nHole && idx < n; k++, idx++) {
+        AcidBlob& b = m_acidBlobs[idx];
+        b.kind = 3; b.wgt = -fmaxf(a.holeWeight, 0.05f);
+        b.baseR = drawR(a.holeMin, a.holeMax, a.sizeBias);
+        setCol(b, 0);                            // unused: holes never fill
+        if (positives > 0) {
+            const AcidBlob& par = m_acidBlobs[(int)(rng.f() * positives) % positives];
+            // Sub-scale to the parent, or the hole swallows the blob it sits
+            // in and the boundary between them turns to gravel.
+            b.baseR = fminf(b.baseR, par.baseR * rng.f(0.20f, 0.55f));
+            float ang = rng.f(0.0f, TWO_PI);
+            float d = (par.baseR - b.baseR) * rng.f(0.0f, 0.80f);
+            place(b, par.x + cosf(ang) * d, par.y + sinf(ang) * d);
+        } else {
+            place(b, rng.f(0.05f, 0.95f), rng.f(0.05f, 0.95f));
+        }
+    }
+    m_acidSeeded = true;
+}
+
+// 64x36 velocity downsample -> CPU, one frame late (same trick as
+// UpdateCoverage). Headless blocks on the fence so a --shot replays exactly.
+void FluidRenderer::UpdateVelocityReadback() {
+    if (!m_velLow.res || !m_velReadback) return;
+    // 30 Hz is plenty for advecting blobs and keeps the headless path (which
+    // blocks on the fence for determinism) from serialising every frame.
+    const float kVelPeriod = 1.0f / 30.0f;
+    if (m_headless && m_velPending && m_time - m_lastVelTime >= kVelPeriod &&
+        m_fence->GetCompletedValue() < m_velFence) {
+        HR(m_fence->SetEventOnCompletion(m_velFence, m_fenceEvent));
+        WaitForSingleObject(m_fenceEvent, INFINITE);
+    }
+    if (m_velPending && m_fence->GetCompletedValue() >= m_velFence &&
+        (!m_headless || m_time - m_lastVelTime >= kVelPeriod)) {
+        uint8_t* data = nullptr;
+        D3D12_RANGE range = { 0, (SIZE_T)m_velPitch * kVelH };
+        if (SUCCEEDED(m_velReadback->Map(0, &range, (void**)&data))) {
+            for (int y = 0; y < kVelH; y++) {
+                const uint16_t* row = (const uint16_t*)(data + (SIZE_T)y * m_velPitch);
+                for (int x = 0; x < kVelW; x++) {
+                    m_velCpu[((size_t)y * kVelW + x) * 2 + 0] = HalfToFloat(row[x * 4 + 0]);
+                    m_velCpu[((size_t)y * kVelW + x) * 2 + 1] = HalfToFloat(row[x * 4 + 1]);
+                }
+            }
+            D3D12_RANGE none = { 0, 0 };
+            m_velReadback->Unmap(0, &none);
+        }
+        m_velPending = false;
+    }
+    if (m_velPending || m_time - m_lastVelTime < kVelPeriod) return;
+    m_lastVelTime = m_time;
+
+    SimCB cb = {};
+    m_cmd->SetComputeRootSignature(m_computeRS.Get());
+    Transition(*m_velocity.read, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    Transition(m_velLow, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    m_cmd->SetPipelineState(m_psoDownsample.Get());
+    cb.dimsW = kVelW; cb.dimsH = kVelH;
+    m_cmd->SetComputeRoot32BitConstants(0, sizeof(SimCB) / 4, &cb, 0);
+    m_cmd->SetComputeRootDescriptorTable(1, m_velocity.read->srv);
+    m_cmd->SetComputeRootDescriptorTable(2, m_velocity.read->srv);
+    m_cmd->SetComputeRootDescriptorTable(3, m_velLow.uav);
+    m_cmd->SetComputeRootDescriptorTable(4, m_velLow.uav);
+    m_cmd->SetComputeRootDescriptorTable(5, m_velLow.uav);
+    m_cmd->SetComputeRootDescriptorTable(6, m_velocity.read->srv);
+    m_cmd->Dispatch(Groups(kVelW), Groups(kVelH), 1);
+
+    Transition(m_velLow, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {}, dst = {};
+    src.pResource = m_velLow.res.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.pResource = m_velReadback.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint.Footprint.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    dst.PlacedFootprint.Footprint.Width = kVelW;
+    dst.PlacedFootprint.Footprint.Height = kVelH;
+    dst.PlacedFootprint.Footprint.Depth = 1;
+    dst.PlacedFootprint.Footprint.RowPitch = m_velPitch;
+    m_cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    m_velFence = m_nextFence;      // EndFrameAndPresent signals this value
+    m_velPending = true;
+}
+
+void FluidRenderer::StepAcidBlobs(float dt) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const int n = (int)m_acidBlobs.size();
+    if (n == 0) return;
+    const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    const float simTexX = 1.0f / fmaxf((float)m_simW, 1.0f);   // sim texels/s -> uv/s
+    const float simTexY = 1.0f / fmaxf((float)m_simH, 1.0f);
+    const float t = m_time;
+
+    // bilinear sample of the low-res velocity grid, in uv/s
+    auto sampleVel = [&](float x, float y, float& ox, float& oy) {
+        float fx = x * kVelW - 0.5f, fy = y * kVelH - 0.5f;
+        int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+        float tx = fx - x0, ty = fy - y0;
+        auto at = [&](int xi, int yi, int c) {
+            xi = xi < 0 ? 0 : (xi >= kVelW ? kVelW - 1 : xi);
+            yi = yi < 0 ? 0 : (yi >= kVelH ? kVelH - 1 : yi);
+            return m_velCpu[((size_t)yi * kVelW + xi) * 2 + c];
+        };
+        ox = (at(x0, y0, 0) * (1 - tx) + at(x0 + 1, y0, 0) * tx) * (1 - ty)
+           + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
+        oy = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
+           + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
+        ox *= simTexX; oy *= simTexY;
+    };
+
+    for (int i = 0; i < n; i++) {
+        AcidBlob& b = m_acidBlobs[i];
+        float vu = 0, vv = 0;
+        sampleVel(b.x, b.y, vu, vv);
+        float tx = vu * a.flowGain;
+        float ty = vv * a.flowGain;
+
+        // Mild analytic curl drift so the oil still creeps where the fluid is
+        // quiet (divergence-free: blobs swirl instead of piling up).
+        float a1 = 3.1f * b.x + 0.23f * t + b.s1;
+        float a2 = 2.7f * b.y + 0.19f * t;
+        float a3 = 5.3f * b.x - 0.11f * t;
+        float a4 = 4.1f * b.y + 0.29f * t + b.s2;
+        float dpsidx = 3.1f * cosf(a1) * cosf(a2) + 0.7f * 5.3f * cosf(a3) * cosf(a4);
+        float dpsidy = -2.7f * sinf(a1) * sinf(a2) - 0.7f * 4.1f * sinf(a3) * sinf(a4);
+        tx += dpsidy * a.curlDrift;
+        ty += -dpsidx * a.curlDrift;
+
+        // buoyancy (uv y is down, so "up" is negative); holes sink
+        ty += (b.wgt > 0.0f ? -1.0f : 1.0f) * a.buoyancy * (b.baseR / 0.12f);
+
+        // Soft repulsion between SAME-SIGN blobs: keeps discs and bubbles from
+        // collapsing into one continent (the oil PoC's size-sorting failure),
+        // while holes stay free to sit inside oil.
+        if (a.repulsion > 0.0001f) {
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                const AcidBlob& o = m_acidBlobs[j];
+                if ((o.wgt > 0.0f) != (b.wgt > 0.0f)) continue;
+                float dx = (b.x - o.x) * aspect, dy = b.y - o.y;
+                float d2 = dx * dx + dy * dy;
+                float rr = (b.baseR + o.baseR) * 0.95f;
+                if (d2 > rr * rr || d2 < 1e-8f) continue;
+                float d = sqrtf(d2);
+                float push = a.repulsion * (1.0f - d / rr) * 0.02f;
+                tx += (dx / d) * push / aspect;
+                ty += (dy / d) * push;
+            }
+        }
+
+        float k = 1.0f - expf(-fmaxf(a.damping, 0.05f) * dt);   // fps-normalised
+        b.vx += (tx - b.vx) * k;
+        b.vy += (ty - b.vy) * k;
+        b.x += b.vx * dt;
+        b.y += b.vy * dt;
+
+        // wrap (population stays constant; no respawn churn)
+        const float m = fmaxf(a.wrapMargin, 0.02f);
+        if (b.x < -m)        b.x += 1.0f + 2.0f * m;
+        if (b.x > 1.0f + m)  b.x -= 1.0f + 2.0f * m;
+        if (b.y < -m)        b.y += 1.0f + 2.0f * m;
+        if (b.y > 1.0f + m)  b.y -= 1.0f + 2.0f * m;
+
+        b.phase += b.breathRate * dt;
+    }
+}
+
+void FluidRenderer::UploadAcidConstants() {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const UINT fi = m_frameIndex;
+    if (!m_acidBlobData[fi] || !m_acidParamData[fi]) return;
+
+    AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
+    const int n = (int)m_acidBlobs.size();
+    for (int i = 0; i < n && i < kAcidMaxBlobs; i++) {
+        const AcidBlob& b = m_acidBlobs[i];
+        dst[i].a[0] = b.x;
+        dst[i].a[1] = b.y;
+        dst[i].a[2] = b.baseR * (1.0f + a.breathAmt * sinf(b.phase));
+        dst[i].a[3] = b.wgt;
+        dst[i].b[0] = b.col[0];
+        dst[i].b[1] = b.col[1];
+        dst[i].b[2] = b.col[2];
+        dst[i].b[3] = 0.0f;
+    }
+
+    AcidParamsGPU p = {};
+    for (int i = 0; i < 4; i++) {
+        p.oil[i][0] = a.oilColors[i * 3 + 0];
+        p.oil[i][1] = a.oilColors[i * 3 + 1];
+        p.oil[i][2] = a.oilColors[i * 3 + 2];
+        p.ink[i][0] = a.inkRamp[i * 3 + 0];
+        p.ink[i][1] = a.inkRamp[i * 3 + 1];
+        p.ink[i][2] = a.inkRamp[i * 3 + 2];
+    }
+    const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    float p0[4] = { (float)(n < kAcidMaxBlobs ? n : kAcidMaxBlobs),
+                    a.threshold, a.supportScale, a.aaScale };
+    float p1[4] = { a.rimWidth, a.rimInset, a.rimDark, a.refraction };
+    float p2[4] = { a.meniscus, a.meniscusW, a.translucency, a.oilTexture };
+    float p3[4] = { a.inkLevels, a.inkSoft, a.inkMix, a.inkHueVary };
+    float p4[4] = { a.inkGain, a.inkBias, a.seamStrength, a.seamScale };
+    float p5[4] = { a.seamLo, a.seamHi, a.grainAmt, a.grainScale };
+    float p6[4] = { a.speckle, a.speckScale, m_time, aspect };
+    float p7[4] = { a.oilHdr, a.rimHdr, a.meniscusOff, a.inkShading };
+    float p8[4] = { a.swarmHoles, a.swarmDrops, a.swarmDensity, a.swarmRimDark };
+    float p9[4] = { a.swarmScaleA, a.swarmScaleB, a.swarmRMin, a.swarmRMax };
+    memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
+    memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
+    float p10[4] = { a.swarmClump, a.swarmDark, 0.0f, 0.0f };
+    float men[4] = { a.meniscusCol[0], a.meniscusCol[1], a.meniscusCol[2], 0.0f };
+    memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
+    memcpy(p.p10, p10, 16); memcpy(p.men, men, 16);
+    memcpy(m_acidParamData[fi], &p, sizeof(p));
+}
+
+void FluidRenderer::BindAcid() {
+    const UINT fi = m_frameIndex;
+    if (m_acidParamUpload[fi])
+        m_cmd->SetGraphicsRootConstantBufferView(2, m_acidParamUpload[fi]->GetGPUVirtualAddress());
+    if (m_acidBlobUpload[fi])
+        m_cmd->SetGraphicsRootShaderResourceView(3, m_acidBlobUpload[fi]->GetGPUVirtualAddress());
 }
 
 void FluidRenderer::UpdateCoverage() {

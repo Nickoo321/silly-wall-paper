@@ -36,6 +36,7 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
 ## The user's picks so far
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
 - Rim: the softer variation.
+- Oil film: transparency 0.5 with chroma held to the opaque level ("the 50% chroma held is the best"; ~x1.2 post chroma) -> to be baked in as `post_chroma`/`post_lift` keys by the lava-lamp executor.
 - Ink: `ink-auto-bursts` (WE bursts driving ink, water clears) and the crowded paint pour
   (`ink-pour`), then the duotone versions of both: `ink-duo-pour-teal-vermillion`,
   `ink-duo-pour-yellow-magenta`, `ink-duo-bursts-yellow-magenta`.

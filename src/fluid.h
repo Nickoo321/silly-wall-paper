@@ -132,6 +132,21 @@ struct LiquidAcidConfig {
                                     // the ink outside it, never a line  oil_glow
     float refractionWidth = 0.0f;   // rim_width multiplier for the refraction
                                     // band; 0 = the shipped 7      refraction_width
+    // --- "transparent coloured oil" block. The oil stops being a fill and
+    // becomes an ABSORBING FILM over the refracted ink, so the marbling reads
+    // through it. Again: 0 = the shipped look, exactly. ------------------
+    float oilTransparency = 0.0f;   // 0 = opaque fill, 1 = pure Beer-Lambert
+                                    // film over the ink       oil_transparency
+    float oilAbsorb       = 2.6f;   // absorption coefficient k in
+                                    // T = exp(-k*thickness*(1-oilHue)). Higher
+                                    // = a deeper, more saturated film  oil_absorb
+    float oilFilmBump     = 0.35f;  // slow fbm on the thickness, so the film
+                                    // has islands of thick and thin  oil_film_bump
+    float oilRefractBody  = 0.0f;   // uv units: refraction across the WHOLE
+                                    // film body (gradient of field + fbm), not
+                                    // just the edge band        oil_refract_body
+    float oilInkBlur      = 0.0f;   // the ink under the film is slightly out
+                                    // of focus, by thickness      oil_ink_blur
     // oil palette: up to 4 colours, dominant-blob pick (no colour-bleed averaging)
     float oilColors[12] = { 0.902f, 0.278f, 0.157f,     // vermillion disc
                             0.976f, 0.400f, 0.078f,     // hot orange web

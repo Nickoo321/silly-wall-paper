@@ -339,6 +339,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.meniscusFromInk = getF(S, L"meniscus_from_ink", a.meniscusFromInk);
         a.oilGlow      = getF(S, L"oil_glow", a.oilGlow);
         a.refractionWidth = getF(S, L"refraction_width", a.refractionWidth);
+        a.oilTransparency = getF(S, L"oil_transparency", a.oilTransparency);
+        a.oilAbsorb    = getF(S, L"oil_absorb", a.oilAbsorb);
+        a.oilFilmBump  = getF(S, L"oil_film_bump", a.oilFilmBump);
+        a.oilRefractBody = getF(S, L"oil_refract_body", a.oilRefractBody);
+        a.oilInkBlur   = getF(S, L"oil_ink_blur", a.oilInkBlur);
         a.inkLevels    = getF(S, L"ink_levels", a.inkLevels);
         a.inkSoft      = getF(S, L"ink_soft", a.inkSoft);
         a.inkMix       = getF(S, L"ink_mix", a.inkMix);
@@ -1327,6 +1332,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"meniscus_from_ink", a.meniscusFromInk, 3);
         putF(S, L"oil_glow", a.oilGlow, 3);
         putF(S, L"refraction_width", a.refractionWidth, 2);
+        putF(S, L"oil_transparency", a.oilTransparency, 3);
+        putF(S, L"oil_absorb", a.oilAbsorb, 2);
+        putF(S, L"oil_film_bump", a.oilFilmBump, 3);
+        putF(S, L"oil_refract_body", a.oilRefractBody, 4);
+        putF(S, L"oil_ink_blur", a.oilInkBlur, 3);
         putF(S, L"ink_levels", a.inkLevels, 1);
         putF(S, L"ink_soft", a.inkSoft, 3);
         putF(S, L"ink_mix", a.inkMix, 3);

@@ -361,6 +361,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP12;        // x rimVary    y rimInkFollow z rimOrder  w grainShadowW
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
+    float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
+    float4 laP16;        // x oilInkBlur y - z - w -
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -678,7 +680,10 @@ float4 PSMain(VSOut i) : SV_Target {
     float  lensR = clamp(0.78 / max(gl, 1e-3), 0.02, 0.35);
     float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
     float  thk   = 1.0;                       // 1 = full-thickness oil
-    if (laP13.x > 0.0005) thk = smoothstep(0.0, edgeW, sdf);
+    // oil_transparency needs the same thickness proxy even when the soft
+    // thin edge itself is off: a transparent film MUST be clearest where it
+    // is thinnest, or it reads as a sheet of tinted glass cut with scissors.
+    if (laP13.x > 0.0005 || laP15.x > 0.0005) thk = smoothstep(0.0, edgeW, sdf);
     // Refraction: the ink is seen through thinning oil near the rim, so shift
     // the ink lookup along the field gradient inside an edge band. Its width
     // is rim_width * refraction_width (default the shipped 7), widened toward
@@ -688,9 +693,47 @@ float4 PSMain(VSOut i) : SV_Target {
     if (laP13.x > 0.0005) refrW = lerp(refrW, max(refrW, edgeW), saturate(laP13.x));
     float  eb = sdf / refrW;
     float  edgeB = exp(-eb * eb);
-    uv = saturate(uv + (grad / gl) * (laP1.w * edgeB) * float2(1.0 / aspect, 1.0));
+    float2 rOff = (grad / gl) * (laP1.w * edgeB);
+    // ---- body refraction (oil_refract_body) ------------------------------
+    // The edge band above bends the ink only in a hairline around each disc.
+    // A real film of oil has thickness EVERYWHERE, so what you see through
+    // its middle is displaced too — and unevenly, because the surface is not
+    // flat. Offset along the gradient of (field + a slow fbm bump): the field
+    // part leans the whole disc's contents one way, the fbm part is what makes
+    // the marbling wobble as it passes under. Capped to a unit vector, so the
+    // key is the offset in uv units and can never run away.
+    if (laP15.w > 0.0005) {
+        float2 bq = pp * 3.1 + float2(laP6.z * 0.006, -laP6.z * 0.0045);
+        const float bh = 0.05;
+        float  b0 = AcidFbm(bq);
+        float2 bg = float2(AcidFbm(bq + float2(bh, 0.0)) - b0,
+                           AcidFbm(bq + float2(0.0, bh)) - b0) / bh;
+        float2 nd = (grad / gl) * 0.35 + bg * 0.85;
+        nd /= max(1.0, length(nd));
+        rOff += nd * (laP15.w * cov);
+    }
+    uv = saturate(uv + rOff * float2(1.0 / aspect, 1.0));
 #endif
     float3 C = Dye.SampleLevel(linearClamp, uv, 0).rgb;
+#ifdef LIQUID_ACID
+    // ---- oil_ink_blur ----------------------------------------------------
+    // The ink under a film of oil is slightly out of focus (refs 3/4/7): the
+    // marbling reads through, but softened, and more so where the oil is
+    // thick. Four diagonal dye taps, weighted by thickness * coverage, taken
+    // BEFORE the ink pipeline so the bands, seams and water absorption all
+    // inherit the defocus instead of being blurred after the fact.
+    if (laP16.x > 0.0005) {
+        float bw = saturate(laP16.x) * thk * cov;
+        if (bw > 0.002) {
+            float2 bo = texelSize * (2.0 + 11.0 * saturate(laP16.x));
+            float3 b4 = 0.25 * (Dye.SampleLevel(linearClamp, uv + bo, 0).rgb
+                              + Dye.SampleLevel(linearClamp, uv - bo, 0).rgb
+                              + Dye.SampleLevel(linearClamp, uv + float2(bo.x, -bo.y), 0).rgb
+                              + Dye.SampleLevel(linearClamp, uv - float2(bo.x, -bo.y), 0).rgb);
+            C = lerp(C, b4, bw);
+        }
+    }
+#endif
     // Raw dye intensity, before shading/filters/clamps: drives the HDR
     // highlight expansion below so it can see how hot the dye really is
     // (the clamped, filtered colour can't exceed 1.0 any more).
@@ -870,6 +913,43 @@ R"hlsl(
         float  tt   = 1.0 - thk;
         oilThinC = prod;
         oilC = lerp(oilC, prod, saturate(tt * tt * laP13.x));
+    }
+    // ---- TRANSPARENT COLOURED FILM (oil_transparency) --------------------
+    // Until now the oil was a fill: whatever the ink did under a disc, the
+    // disc hid it. A real coloured oil is an ABSORBING film, so the ink's
+    // marbling reads through it, tinted. Beer-Lambert per channel:
+    //   T = exp(-absorb * thickness * (1 - oilHueNormalised))
+    // An orange film has oilN ~= (1, 0.31, 0.18), so 1-oilN ~= (0, .69, .82):
+    // red passes untouched, blue is eaten. A near-black oil normalises to ~0
+    // and absorbs every channel -- which is right, it is a neutral-density
+    // film, and that is why the approved black-oil family survives this key.
+    //
+    // The dish is BACKLIT, so the light reaching the eye has come THROUGH the
+    // ink: over black ink nothing is transmitted and the disc would go black.
+    // The scatter term oilC * (1 - T_avg) is the light scattered inside the
+    // film itself -- it is what keeps thick oil reading as its own colour over
+    // dead-black ink, and it vanishes at the rim where T -> 1.
+    //
+    // Thickness = the same proxy the edge work uses (thk: 0 at the rim, 1 deep
+    // inside), times a slow fbm so the film has ISLANDS of thick and thin
+    // instead of being one even pane of glass. thk -> 0 at the edge means the
+    // thin edge is automatically the clearest part of the film, which is
+    // exactly what oil_thin_edge was approximating by hand.
+    float filmOp = 1.0;    // how much of this pixel is the OIL's own light
+    if (laP15.x > 0.0005) {
+        float k = saturate(laP15.x);
+        float fb = saturate(AcidFbm(pp * 2.2 + float2(laP6.z * 0.004,
+                                                      -laP6.z * 0.003)) * 1.143);
+        float thick = thk * lerp(1.0, 0.35 + 1.30 * fb, saturate(laP15.z));
+        float  mx   = max(oilC.r, max(oilC.g, oilC.b));
+        float3 oilN = (mx > 1e-4) ? saturate(oilC / mx) : float3(0.0, 0.0, 0.0);
+        float3 T    = exp(-max(laP15.y, 0.0) * max(thick, 0.0) * (1.0 - oilN));
+        float  Tav  = dot(T, float3(0.3333333, 0.3333333, 0.3333333));
+        // inkC is already the REFRACTED (and, with oil_ink_blur, defocused)
+        // ink at this pixel: the marbling under the film, seen through it.
+        float3 glassC = inkC * T + oilC * (1.0 - Tav);
+        oilC   = lerp(oilC, glassC, k);
+        filmOp = lerp(1.0, saturate(1.0 - Tav), k);
     }
     // ---- surface relief: specular (oil_specular) + thin-film iridescence --
     // Kept deliberately weak: the references show almost no specular, because
@@ -1145,7 +1225,10 @@ R"hlsl(
     C = saturate(col);
     // HDR: the oil is a flat fill, so give it its own highlight level rather
     // than inheriting the ink's. Keep the hot part small (ABL): the rim band.
-    if (laP7.x > 0.001) m = lerp(m, laP7.x, alpha);
+    // With oil_transparency the oil pixel is mostly TRANSMITTED ink, so it
+    // must keep the ink's own highlight level; only the scattered part of the
+    // film is driven to oil_hdr. filmOp is 1 when transparency is off.
+    if (laP7.x > 0.001) m = lerp(m, laP7.x, alpha * filmOp);
     if (laP7.y > 0.001) m = max(m, laP7.y * rimB * alpha);
     // a specular on a real oil surface is a highlight, not a paler fill
     if (laP7.x > 0.001 && specAmt > 0.0005)

@@ -836,3 +836,38 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   Shipped copies to compare: reference/configs/liquid-acid-a-real.ini, layering1-09-real.ini.
   `style=fluid` regression: we-look-live 60 s 2560x1440 md5
   **10E36EBF1A74EDFE609065D757300054** (-hdr 414B4321...), unchanged.
+- **Transparent coloured oil (Opus executor).** User: "I suppose transparent and colored oil is
+  the next step? Black oil seems figured out." Until now the oil was a FILL: whatever the ink did
+  under a disc, the disc hid it. Five more `[liquid_acid]` keys, all inert at their defaults:
+  `oil_transparency` (0 = the shipped fill) turns the oil into an ABSORBING FILM over the already
+  refracted ink -- Beer-Lambert per channel, `T = exp(-oil_absorb * thickness * (1 - oilHue))`
+  off the oil's own hue normalised to its brightest channel, so an orange film passes red and
+  eats blue, and a near-black oil normalises to ~0 and absorbs everything (a neutral-density
+  film: that is why the approved black-oil family survives the key). The dish is BACKLIT, so
+  over dead-black ink nothing is transmitted and a physically honest film would go black -- the
+  scatter term `oilC * (1 - T_avg)` is the light scattered inside the film itself and is what
+  keeps a thick disc reading as its own colour there; it vanishes at the rim where `T -> 1`.
+  Thickness is the SAME proxy the edge work uses (`thk = smoothstep(0, edgeW, sdf)`, edgeW a
+  fraction of the local lens radius `R ~= 0.78/|grad|`), so the thin edge is automatically the
+  clearest part of the film -- what `oil_thin_edge` was approximating by hand -- times
+  `oil_film_bump` (a slow fbm) so the film has islands of thick and thin instead of one even
+  pane of glass. `oil_refract_body` (uv units) displaces the ink lookup across the WHOLE body
+  along the gradient of (field + fbm), capped to a unit vector, so the marbling wobbles as it
+  passes under; the existing edge refraction is untouched. `oil_ink_blur` defocuses the ink under
+  the film with four diagonal dye taps weighted by `thk * cov`, taken BEFORE the ink pipeline so
+  the bands, seams and water absorption all inherit the defocus. HDR: `oil_hdr` is now weighted
+  by `filmOp = 1 - T_avg`, so a transparent pixel keeps the INK's own `m` and only the scattered
+  part is driven to the oil level. Holes (negative blobs) and trapped droplets are untouched --
+  both show pure ink, no film. `AcidCB` gained laP15/laP16 (384 -> 416 bytes).
+  A/B sheets (960x540, t=75, seed 1234, --hdr on): build2/shots/oil-trans/sheet-laa.png
+  (opaque / 0.50 / 0.85 / glass 0.60 with body refraction + defocus), sheet-water.png,
+  sheet-tile9.png, and crop2x-laa.png (2x on a disc edge + the drip neck). What they show:
+  on liquid-acid-a the flat vermillion becomes a mottled film whose thin islands go amber where
+  the ink ramp under it is warm; on ink_mode=water the pale ink plume runs straight THROUGH the
+  orange discs, tinted, while the oil over empty black water just deepens; tile9-08 survives --
+  the black holes stay pure black and the sheet gains depth, at a modest cost in overall level.
+  Shipped: reference/configs/liquid-acid-a-glass.ini, liquid-acid-water-glass.ini.
+  Regression: build2/shots/oil-trans/laa-t00-075.png is BIT-IDENTICAL to the previous commit's
+  build2/shots/oil/laa-real-075.png (md5 32e9b585...), i.e. the five keys at 0 are a no-op on
+  the acid path too. `style=fluid`: we-look-live 60 s 2560x1440 md5
+  **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged.

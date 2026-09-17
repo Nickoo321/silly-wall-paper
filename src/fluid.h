@@ -70,6 +70,30 @@ struct LiquidAcidConfig {
     float breathAmt   = 0.10f;      // radius breathing amplitude
     float wrapMargin  = 0.20f;      // uv margin before a blob wraps to the far side
 
+    // --- LAVA LAMP "rise" mode. Every key defaults to 0 = the shipped drift,
+    // so no existing ini moves by a pixel. ------------------------------
+    // A constant upward drift on top of everything else (uv y is DOWN, so it
+    // is SUBTRACTED from the target velocity). 0.015 uv/s = one screen height
+    // in ~65 s, which is the slow climb of a real lamp.          rise_speed
+    float riseSpeed   = 0.0f;
+    // A lazy per-blob sinusoidal x wobble on the way up, amplitude relative
+    // to the rise speed, phased by the blob's own s1/s2 so no two blobs sway
+    // together. 0 = dead-straight columns.                       rise_wobble
+    float riseWobble  = 0.0f;
+    // With rise_speed on, a blob that leaves the TOP is re-entered BELOW the
+    // bottom edge at a fresh x and a fresh radius from its own kind's range,
+    // instead of wrapping in place. Population is constant either way; this
+    // just stops the frame from looking like a loop.            rise_respawn
+    bool  riseRespawn = false;
+    // Rising blobs elongate along their velocity: an anisotropic kernel
+    // (q.y scaled by 1/(1+stretch) before the distance), strongest on the
+    // small fast ones, relaxing round as a blob slows.          rise_stretch
+    float riseStretch = 0.0f;
+    // A gentle vertical brightness gradient on the oil -- hotter near the
+    // bottom edge, cooling as a blob climbs, like the lamp's base underneath.
+    // Applied to the oil colour AND to its HDR lift.        rise_bottom_light
+    float riseBottomLight = 0.0f;
+
     // --- oil shading ---
     float rimWidth    = 0.0013f;    // dark rim half-width, sdf units (~2 px at 1080p)
     float rimInset    = 0.0013f;    // rim band centre, INSIDE the isoline
@@ -174,26 +198,51 @@ struct LiquidAcidConfig {
     // match the reference pack, where each loop is one vivid pair.
     // Seconds for a full trip through the list; 0 = off (use the fixed palette).
     float hueSweepPeriod = 0.0f;
-    static const int kSweepPairs = 5;
+    static const int kSweepPairs = 5;    // the shipped list length (= default)
+    static const int kSweepMax   = 12;   // how many entries an ini may carry
+    // How many entries of the list below are actually used. Default = the
+    // shipped 5, so every existing ini sweeps exactly as before.  sweep_count
+    int   sweepCount = kSweepPairs;
+    // Continuous rotation of the WHOLE oil palette's hue (HSV, saturation and
+    // value preserved), seconds per full turn; 0 = off. This is the "the hue
+    // of the entire screen shifts" option, and it is deliberately GLOBAL: no
+    // per-blob colour, so a disc never changes hue relative to its neighbour.
+    // With mono ink + meniscus_from_ink the ink stays grey and only the oil
+    // turns. Not every hue is equally vivid at one S/V (yellow goes olive) --
+    // that is the price of a continuous rotation, and why the curated sweep
+    // above exists as the alternative.                    hue_rotate_period
+    float hueRotatePeriod = 0.0f;
+    // HSV saturation multiplier on the effective oil palette (CPU-side, after
+    // the sweep and the rotation), so vividness is one panel knob whichever
+    // colour source is in use. 1 = the authored colours, untouched.
+    float oilSaturation = 1.0f;     //                        oil_saturation
     // Each pair is two vivid anchors: the oil colour and the ink's mid tone.
     // The rest of the palette (the other three oil shades, the ink's near-black
     // and its two oil-hue bands, the meniscus) is derived from them using the
     // saturation/value ratios of the authored palette above, so every swept
     // pair has the same internal structure as the hand-tuned one.
-    float sweepOil[kSweepPairs * 3] = {
+    float sweepOil[kSweepMax * 3] = {
         0.898f, 0.271f, 0.145f,   // vermillion
         0.930f, 0.120f, 0.160f,   // red
         0.880f, 0.120f, 0.620f,   // magenta
         0.970f, 0.780f, 0.100f,   // gold
         0.550f, 0.850f, 0.120f,   // lime
     };
-    float sweepInk[kSweepPairs * 3] = {
+    float sweepInk[kSweepMax * 3] = {
         0.086f, 0.478f, 0.494f,   // teal
         0.100f, 0.620f, 0.500f,   // cyan-green
         0.220f, 0.700f, 0.240f,   // green
         0.340f, 0.160f, 0.720f,   // violet
         0.480f, 0.120f, 0.660f,   // purple
     };
+    // An entry may ALSO carry its own four oil shades verbatim (the ini gives
+    // sweep_oil_N twelve floats instead of three). The derivation above is a
+    // good generic family, but the user's favourite palettes -- the tile9
+    // batch -- are hand-picked four-shade sets and must reach the screen
+    // exactly as they were rendered, not re-derived from one anchor. When no
+    // entry carries a full set the old anchor path runs untouched.
+    bool  sweepOilFullSet[kSweepMax] = {};
+    float sweepOilFull[kSweepMax * 12] = {};
     float inkGain     = 2.30f;      // luminance -> ramp position
     float inkBias     = 0.05f;
     float seamStrength= 0.70f;      // dark seams along |grad dye|
@@ -234,6 +283,16 @@ struct LiquidAcidConfig {
     // the ink hue instead of neutral black (the refs' toe is #180808 warm,
     // never a pure crush). 0 = the shipped neutral toe.            toe_tint
     float toeTint     = 0.0f;
+    // --- final composite trim. A transparent film lowers perceptual chroma
+    // by 10-20% and lightness by ~5-13% against the same look opaque (OKLab
+    // means over non-dark pixels). Rather than re-authoring every palette for
+    // the film, scale the FINAL acid colour: chroma about the pixel's own
+    // luma (hue and luma preserved) and a plain luma multiplier. The user's
+    // pick is oil_transparency 0.5 held back to the opaque level, which
+    // measured x1.19 / x1.18 -- hence the shipped 1.2 / 1.05 on the glass
+    // inis. 1 = untouched.                          post_chroma   post_lift
+    float postChroma  = 1.0f;
+    float postLift    = 1.0f;
     float speckle     = 0.12f;      // cellular dots concentrated at interfaces
     float speckScale  = 240.0f;     // cells per uv unit
 };
@@ -562,6 +621,11 @@ public:
     // Switching a look OFF needs nothing: the PSOs are just not selected, and
     // the fluid path never reads any of their state.
     void EnsureLookResources();
+    // Manual pause used to freeze the LAST FRAME on the panel. Present ONE
+    // black frame instead, so an OLED left paused goes dark (and stays dark:
+    // the shell then stops presenting entirely until the pause is lifted).
+    // No-op headless or while the swap chain is gone.
+    void PresentBlack();
     void Reattach(HWND hwnd);   // new swapchain after Explorer restart; sim state survives
     bool PresentBroken() const { return m_presentBroken; }   // window died mid-frame
     // second-monitor mirror
@@ -804,6 +868,10 @@ private:
     };
     std::vector<AcidBlob> m_acidBlobs;
     bool   m_acidSeeded = false;
+    // Private stream for rise_respawn draws. Seeded from the same seed as the
+    // population, stepped only by respawns, so a --shot replays exactly and
+    // the fluid's own rand() sequence is never touched.
+    uint32_t m_acidRespawnRng = 0x9E3779B9u;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_acidBlobUpload[kFrames];
     Microsoft::WRL::ComPtr<ID3D12Resource> m_acidParamUpload[kFrames];
     void*  m_acidBlobData[kFrames] = {};

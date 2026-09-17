@@ -91,4 +91,13 @@ stop the user's FluidWallpaper.exe or Wallpaper Engine.
 
 ## Pausing the live sim
 
-The only sanctioned way to touch the user's running FluidWallpaper.exe is a PAUSE via its tray window (WM_COMMAND CMD_PAUSE=1, a toggle): `toolsway-pause.ps1` does this when the user is away and resumes on input. Never stop, kill or relaunch the exe; never SC_MONITORPOWER.
+The only sanctioned way to touch the user's running FluidWallpaper.exe is a PAUSE via its
+tray window: `tools/away-pause.ps1` does this when the user is away and resumes on input.
+Never stop, kill or relaunch the exe; never SC_MONITORPOWER.
+WM_COMMAND ids: `CMD_PAUSE = 1` TOGGLES (what the tray menu item uses), and
+`CMD_PAUSE_ON = 8` / `CMD_PAUSE_OFF = 9` are explicit and non-toggling, so a script never
+has to track state (`away-pause.ps1 -Explicit`). An exe built before that commit ignores
+8/9 silently, so the live copy has to be rebuilt and relaunched by the user first.
+A MANUAL pause presents ONE black frame (`FluidRenderer::PresentBlack()`) and then stops
+presenting, so an OLED left paused goes dark instead of holding the last frame; a
+fullscreen-app pause deliberately does not (it would flash black when the game exits).

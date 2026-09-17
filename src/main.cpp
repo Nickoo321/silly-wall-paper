@@ -340,6 +340,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.damping      = getF(S, L"damping", a.damping);
         a.breathAmt    = getF(S, L"breath", a.breathAmt);
         a.wrapMargin   = getF(S, L"wrap_margin", a.wrapMargin);
+        a.riseSpeed    = getF(S, L"rise_speed", a.riseSpeed);
+        a.riseWobble   = getF(S, L"rise_wobble", a.riseWobble);
+        a.riseRespawn  = getB(S, L"rise_respawn", a.riseRespawn);
+        a.riseStretch  = getF(S, L"rise_stretch", a.riseStretch);
+        a.riseBottomLight = getF(S, L"rise_bottom_light", a.riseBottomLight);
         a.rimWidth     = getF(S, L"rim_width", a.rimWidth);
         a.rimInset     = getF(S, L"rim_inset", a.rimInset);
         a.rimDark      = getF(S, L"rim_dark", a.rimDark);
@@ -375,6 +380,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.inkComplementLock = getB(S, L"ink_complement_lock", a.inkComplementLock);
         a.inkComplementSpan = getF(S, L"ink_complement_span", a.inkComplementSpan);
         a.hueSweepPeriod    = getF(S, L"hue_sweep_period", a.hueSweepPeriod);
+        a.hueRotatePeriod   = getF(S, L"hue_rotate_period", a.hueRotatePeriod);
+        a.oilSaturation     = getF(S, L"oil_saturation", a.oilSaturation);
+        a.sweepCount        = getI(S, L"sweep_count", a.sweepCount);
+        if (a.sweepCount < 1) a.sweepCount = 1;
+        if (a.sweepCount > LiquidAcidConfig::kSweepMax)
+            a.sweepCount = LiquidAcidConfig::kSweepMax;
+        a.postChroma   = getF(S, L"post_chroma", a.postChroma);
+        a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
             wchar_t mode[32] = {};
             GetPrivateProfileStringW(S, L"ink_mode", L"", mode, 32, ini);
@@ -411,21 +424,35 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
                 a.meniscusCol[0] = r; a.meniscusCol[1] = g; a.meniscusCol[2] = b;
             }
         }
-        // sweep_pair_N_oil / sweep_pair_N_ink: the curated vivid pair list
-        for (int ci = 0; ci < LiquidAcidConfig::kSweepPairs; ci++) {
-            wchar_t key[40], buf[64] = {};
-            float r, g, b;
-            swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
-            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
-            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
-                a.sweepOil[ci * 3 + 0] = r; a.sweepOil[ci * 3 + 1] = g; a.sweepOil[ci * 3 + 2] = b;
+        // The curated vivid list. Two spellings per entry, both accepted:
+        //   sweep_pair_N_oil / sweep_pair_N_ink   (the shipped names)
+        //   sweep_oil_N      / sweep_ink_N        (the short form, N up to 12)
+        // An OIL value may be three floats (one anchor; the other three oil
+        // shades are derived from it as before) or TWELVE (the four shades
+        // verbatim -- how the tile9 palettes are carried without being
+        // re-derived and toned down).
+        for (int ci = 0; ci < LiquidAcidConfig::kSweepMax; ci++) {
+            wchar_t key[40], buf[160] = {};
+            float f[12];
+            auto readKey = [&](const wchar_t* fmt) {
+                swprintf_s(key, fmt, ci + 1);
+                buf[0] = 0;
+                GetPrivateProfileStringW(S, key, L"", buf, 160, ini);
+                return (int)wcslen(buf);
+            };
+            if (!readKey(L"sweep_pair_%d_oil")) readKey(L"sweep_oil_%d");
+            int n = swscanf_s(buf, L"%f %f %f %f %f %f %f %f %f %f %f %f",
+                              &f[0], &f[1], &f[2], &f[3], &f[4], &f[5],
+                              &f[6], &f[7], &f[8], &f[9], &f[10], &f[11]);
+            if (n >= 3) {
+                for (int k = 0; k < 3; k++) a.sweepOil[ci * 3 + k] = f[k];
+                a.sweepOilFullSet[ci] = (n >= 12);
+                if (n >= 12)
+                    for (int k = 0; k < 12; k++) a.sweepOilFull[ci * 12 + k] = f[k];
             }
-            buf[0] = 0;
-            swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
-            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
-            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
-                a.sweepInk[ci * 3 + 0] = r; a.sweepInk[ci * 3 + 1] = g; a.sweepInk[ci * 3 + 2] = b;
-            }
+            if (!readKey(L"sweep_pair_%d_ink")) readKey(L"sweep_ink_%d");
+            if (swscanf_s(buf, L"%f %f %f", &f[0], &f[1], &f[2]) == 3)
+                for (int k = 0; k < 3; k++) a.sweepInk[ci * 3 + k] = f[k];
         }
         // oil_color_1..4 and ink_stop_1..4, "r g b" floats like splat_color_N
         for (int ci = 0; ci < 4; ci++) {
@@ -697,6 +724,11 @@ static const UINT WM_TRAYICON = WM_APP + 1;
 enum TrayCmd : UINT {
     CMD_PAUSE = 1, CMD_FSPAUSE = 2, CMD_EXIT = 3, CMD_MAXPAUSE = 4, CMD_SETTINGS = 5,
     CMD_ANALYZER = 6, CMD_SCENES = 7,
+    // Explicit, NON-toggling pause commands for scripts (tools/away-pause.ps1):
+    // a toggle forces the caller to track state, and one missed message leaves
+    // the wallpaper running while the script thinks it is paused. CMD_PAUSE
+    // stays the toggle, because that is what the tray menu item wants.
+    CMD_PAUSE_ON = 8, CMD_PAUSE_OFF = 9,
     CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
     CMD_MOODS_TOGGLE = 33, CMD_MOODS_NEXT = 34, CMD_MOOD_BASE = 800,
     CMD_PRESET_BASE = 600,
@@ -901,6 +933,11 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case CMD_PAUSE:
             g_manualPause = !g_manualPause;
             printf("manual pause: %s\n", g_manualPause ? "on" : "off");
+            break;
+        case CMD_PAUSE_ON:
+        case CMD_PAUSE_OFF:
+            g_manualPause = (LOWORD(wp) == CMD_PAUSE_ON);
+            printf("manual pause: %s (explicit)\n", g_manualPause ? "on" : "off");
             break;
         case CMD_FSPAUSE:
             g_pauseOnFullscreen = !g_pauseOnFullscreen;
@@ -1346,6 +1383,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"damping", a.damping, 3);
         putF(S, L"breath", a.breathAmt, 3);
         putF(S, L"wrap_margin", a.wrapMargin, 3);
+        putF(S, L"rise_speed", a.riseSpeed, 4);
+        putF(S, L"rise_wobble", a.riseWobble, 3);
+        putI(S, L"rise_respawn", a.riseRespawn ? 1 : 0);
+        putF(S, L"rise_stretch", a.riseStretch, 3);
+        putF(S, L"rise_bottom_light", a.riseBottomLight, 3);
         putF(S, L"rim_width", a.rimWidth, 4);
         putF(S, L"rim_inset", a.rimInset, 4);
         putF(S, L"rim_dark", a.rimDark, 3);
@@ -1381,6 +1423,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putI(S, L"ink_complement_lock", a.inkComplementLock);
         putF(S, L"ink_complement_span", a.inkComplementSpan, 1);
         putF(S, L"hue_sweep_period", a.hueSweepPeriod, 1);
+        putF(S, L"hue_rotate_period", a.hueRotatePeriod, 1);
+        putF(S, L"oil_saturation", a.oilSaturation, 3);
+        putI(S, L"sweep_count", a.sweepCount);
+        putF(S, L"post_chroma", a.postChroma, 3);
+        putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);
         WritePrivateProfileStringW(S, L"ink_water", nullptr, path);   // delete the int form
         putF(S, L"ink_gain", a.inkGain, 3);
@@ -1407,12 +1454,35 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"swarm_clump", a.swarmClump, 3);
         putF(S, L"swarm_dark", a.swarmDark, 3);
         putRgb(S, L"meniscus_color", a.meniscusCol);
-        for (int ci = 0; ci < LiquidAcidConfig::kSweepPairs; ci++) {
-            wchar_t key[40];
-            swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
-            putRgb(S, key, &a.sweepOil[ci * 3]);
-            swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
-            putRgb(S, key, &a.sweepInk[ci * 3]);
+        // Canonical spelling on write is the short form; the legacy
+        // sweep_pair_N_* keys are deleted so a 12-float palette can never be
+        // shadowed by a stale 3-float anchor left behind in the same file.
+        {
+            int nw = a.sweepCount > LiquidAcidConfig::kSweepPairs
+                   ? a.sweepCount : LiquidAcidConfig::kSweepPairs;
+            if (nw > LiquidAcidConfig::kSweepMax) nw = LiquidAcidConfig::kSweepMax;
+            for (int ci = 0; ci < LiquidAcidConfig::kSweepMax; ci++) {
+                wchar_t key[40], b[160];
+                swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
+                WritePrivateProfileStringW(S, key, nullptr, path);
+                swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
+                WritePrivateProfileStringW(S, key, nullptr, path);
+                swprintf_s(key, L"sweep_oil_%d", ci + 1);
+                if (ci >= nw) { WritePrivateProfileStringW(S, key, nullptr, path); }
+                else if (a.sweepOilFullSet[ci]) {
+                    const float* f = &a.sweepOilFull[ci * 12];
+                    swprintf_s(b, L"%.4f %.4f %.4f %.4f %.4f %.4f "
+                                  L"%.4f %.4f %.4f %.4f %.4f %.4f",
+                               f[0], f[1], f[2], f[3], f[4], f[5],
+                               f[6], f[7], f[8], f[9], f[10], f[11]);
+                    WritePrivateProfileStringW(S, key, b, path);
+                } else {
+                    putRgb(S, key, &a.sweepOil[ci * 3]);
+                }
+                swprintf_s(key, L"sweep_ink_%d", ci + 1);
+                if (ci >= nw) WritePrivateProfileStringW(S, key, nullptr, path);
+                else          putRgb(S, key, &a.sweepInk[ci * 3]);
+            }
         }
         for (int ci = 0; ci < 4; ci++) {
             wchar_t key[32];
@@ -1981,6 +2051,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // Manual pause alone never suspends — its resume should stay instant.
     static const ULONGLONG kSuspendAfterMs = 20000;
     static ULONGLONG fsPausedSince = 0;   // 0 = not fs-paused right now
+    bool blackFramePending = true;        // one black frame per manual pause
     static bool g_suspended = false;      // renderer fully torn down
     static bool fsSuspended = false;      // suspension came from the fs trigger
     static FluidConfig savedCfg;          // live config snapshot for the resume
@@ -2176,10 +2247,24 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
 
         if (paused || g_suspended) {
+            // A MANUAL pause is the user walking away from the desk, so the
+            // panel should go dark instead of holding the last frame on an
+            // OLED for however long they are gone. Present exactly ONE black
+            // frame on the transition into the pause and then stop presenting
+            // as before: no repaint loop, no extra GPU work while paused.
+            // (A fullscreen-app pause deliberately does NOT do this -- that
+            // wallpaper is hidden behind the game anyway, and clearing it
+            // would flash black the moment the game exits.)
+            if (blackFramePending && !g_suspended && g_manualPause) {
+                blackFramePending = false;
+                renderer.PresentBlack();
+                printf("paused (manual): black frame presented\n");
+            }
             MsgWaitForMultipleObjects(0, nullptr, FALSE, 200, QS_ALLINPUT);
             QueryPerformanceCounter(&prev);   // don't integrate the paused gap
             continue;
         }
+        blackFramePending = true;   // armed again for the next manual pause
 
         QueryPerformanceCounter(&now);
         float dt = (float)((double)(now.QuadPart - prev.QuadPart) / (double)freq.QuadPart);

@@ -2,16 +2,23 @@
 #   powershell -File tools\away-pause.ps1 [-IdleMinutes 10] [-PauseNow] [-Once <on|off>]
 # How: the running FluidWallpaper.exe (whatever pid, normally the user's build\ copy) has a tray
 # window (class FluidWallpaperTray) whose WM_COMMAND id 1 (CMD_PAUSE) TOGGLES manual pause: the
-# render loop stops (GPU ~0), the last frame stays on screen. Nothing is stopped or relaunched.
+# render loop stops (GPU ~0). Since the rise-mode commit a MANUAL pause also presents ONE black
+# frame, so the panel goes dark instead of holding the last frame. Nothing is stopped or
+# relaunched.
 # The command is a toggle with no readback, so this script owns the state: it assumes the sim is
 # running when it starts (unless -PauseNow says pause immediately) and never sends two pauses in
 # a row. If the user toggles Pause from the tray by hand while this runs, the state desyncs —
 # stop the script (or use -Once) and toggle by hand.
-#   -Once on|off : send exactly one toggle and exit (on = pause, off = resume; no state tracking)
+#   -Once on|off : send exactly one command and exit (on = pause, off = resume)
+#   -Explicit    : use the NON-toggling ids CMD_PAUSE_ON=8 / CMD_PAUSE_OFF=9 instead of the
+#                  toggle, so this script never has to track state and a hand-toggle from the
+#                  tray cannot desync it. Those ids landed with the rise-mode commit: an exe
+#                  built BEFORE it ignores 8/9 silently, so leave this off until the live
+#                  build\ copy has been rebuilt and relaunched by the user.
 #   -IdleMinutes : idle (no keyboard/mouse) threshold before pausing (default 10)
 #   -PauseNow    : the user said they are away right now: pause immediately, then watch for input
 # Log: build2\shots\away-pause.log. Never uses SC_MONITORPOWER (that killed the port once).
-param([int]$IdleMinutes = 10, [switch]$PauseNow, [string]$Once = "")
+param([int]$IdleMinutes = 10, [switch]$PauseNow, [string]$Once = "", [switch]$Explicit)
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $log  = Join-Path $root "build2\shots\away-pause.log"
@@ -41,27 +48,32 @@ public static class AwayNative {
 }
 "@
 
-function Send-PauseToggle {
+# $want = $true to pause, $false to resume. With -Explicit that is one of the non-toggling
+# ids and $want is obeyed literally; without it, the single toggle id, and the caller is the
+# one keeping track of which side of the toggle we are on.
+function Send-Pause([bool]$want) {
   $h = [AwayNative]::FindTray()
   if ($h -eq [IntPtr]::Zero) { Log "no FluidWallpaperTray window found (sim not running?)"; return $false }
-  [AwayNative]::PostMessage($h, 0x0111, [IntPtr]1, [IntPtr]0) | Out-Null   # WM_COMMAND, CMD_PAUSE=1
+  $id = 1                                            # CMD_PAUSE (toggle)
+  if ($Explicit) { if ($want) { $id = 8 } else { $id = 9 } }   # CMD_PAUSE_ON / CMD_PAUSE_OFF
+  [AwayNative]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]0) | Out-Null   # WM_COMMAND
   return $true
 }
 
 if ($Once -ne "") {
-  if (Send-PauseToggle) { Log ("one-shot toggle sent (intent: {0})" -f $Once) }
+  if (Send-Pause ($Once -eq "on")) { Log ("one-shot sent (intent: {0}, explicit: {1})" -f $Once, [bool]$Explicit) }
   exit 0
 }
 
 $paused = $false
-if ($PauseNow) { if (Send-PauseToggle) { $paused = $true; Log "paused now (user is away)" } }
+if ($PauseNow) { if (Send-Pause $true) { $paused = $true; Log "paused now (user is away)" } }
 Log ("watching: idle threshold {0} min" -f $IdleMinutes)
 while ($true) {
   Start-Sleep -Seconds 5
   $idle = [AwayNative]::IdleSeconds()
   if (-not $paused -and $idle -ge $IdleMinutes * 60) {
-    if (Send-PauseToggle) { $paused = $true; Log ("paused: idle {0:N0} s" -f $idle) }
+    if (Send-Pause $true) { $paused = $true; Log ("paused: idle {0:N0} s" -f $idle) }
   } elseif ($paused -and $idle -lt 5) {
-    if (Send-PauseToggle) { $paused = $false; Log "resumed: input detected" }
+    if (Send-Pause $false) { $paused = $false; Log "resumed: input detected" }
   }
 }

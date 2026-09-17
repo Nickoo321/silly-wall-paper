@@ -463,10 +463,11 @@ cbuffer AcidCB : register(b1) {
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
     float4 laP16;        // x oilInkBlur y - z - w -
+    float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
-// rgb of .b = flat fill colour
+// rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
 struct AcidBlobGPU { float4 a; float4 b; };
 StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
 
@@ -744,7 +745,18 @@ float4 PSMain(VSOut i) : SV_Target {
     for (int bi = 0; bi < nb; bi++) {
         AcidBlobGPU B = AcidBlobs[bi];
         float2 q  = pp - float2(B.a.x * aspect, B.a.y);
-        float  d2 = dot(q, q);
+        // rise_stretch: an ANISOTROPIC kernel is the cheapest teardrop there
+        // is -- squash the distance along the blob's travel (here y, the rise
+        // axis) and the same round kernel draws an ellipse. e = 1 is exact
+        // arithmetic, so a blob with no stretch is bit-identical to before.
+        // Written as dot() on the SCALED vector, not as an expanded
+        // q.x*q.x + qy*qy: with no stretch e is exactly 1, q.y / 1 is exact,
+        // and dot() then emits the instruction the untouched loop emitted, so
+        // an existing acid ini renders bit-for-bit as it did. (Expanding it
+        // by hand moved the rounding and changed every acid frame.)
+        float  e  = 1.0 + B.b.w;
+        float2 qs = float2(q.x, q.y / e);
+        float  d2 = dot(qs, qs);
         float  sup = B.a.z * laP0.z;              // support radius
         float  s2 = sup * sup;
         if (d2 >= s2) continue;
@@ -756,7 +768,11 @@ float4 PSMain(VSOut i) : SV_Target {
         float  u2 = u * u;
         float  w  = u2 * u;
         field += w * B.a.w;
-        grad  += (-6.0 * u2 / s2) * q * B.a.w;
+        // d(d2)/dp for the scaled distance is 2*(q.x, q.y/e^2), so the
+        // gradient stays consistent with the ellipse and the sdf, the rim and
+        // the lens radius all follow the stretched shape instead of the
+        // circle it was drawn from. (e = 1 leaves this the original line.)
+        grad  += (-6.0 * u2 / s2) * float2(q.x, q.y / (e * e)) * B.a.w;
         // Flat fill from a SOFT-max over the blob weights. A hard argmax drew
         // a crisp circle wherever the dominant blob handed over inside a
         // merged mass; a plain influence-weighted mean is what turned the oil
@@ -908,7 +924,9 @@ float4 PSMain(VSOut i) : SV_Target {
         float lift = shadow.x * (1.0 - smoothstep(0.0, max(shadow.y, 0.001), lum));
         C *= (lum + lift) / max(lum, 1e-4);
     }
-
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
 #ifdef LIQUID_ACID
     // =====================================================================
     // Liquid Acid: restyle the parity colour C as INK, then composite OIL.
@@ -987,6 +1005,15 @@ float4 PSMain(VSOut i) : SV_Target {
 R"hlsl(
     // ---- OIL: flat fill, thin dark rim just inside the isoline ----------
     float3 oilC = oilBase;
+    // rise_bottom_light: a lava lamp is lit and heated from BELOW, so the wax
+    // near the base is hotter and brighter and cools on the way up. One
+    // vertical ramp on the oil (not on the ink: the glass is not lit, the wax
+    // is), applied here so it also feeds the film's own scattered light.
+    float lampG = 1.0;
+    if (laP17.x > 0.0005) {
+        lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(laP17.x));
+        oilC *= lampG;
+    }
     oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(laP6.z * 0.010,
                                                               -laP6.z * 0.007)),
                  saturate(laP2.w));
@@ -1312,6 +1339,19 @@ R"hlsl(
         float  toeL   = dot(col, float3(0.2126, 0.7152, 0.0722));
         col += inkHue * (0.12 * saturate(laP10.w) * (1.0 - smoothstep(0.0, 0.22, toeL)));
     }
+    // ---- final trim: post_chroma / post_lift -----------------------------
+    // A transparent film costs perceptual chroma (10-20%) and a little
+    // lightness against the same look opaque, measured in OKLab over the
+    // non-dark pixels. Both of those are corrected here rather than in every
+    // palette: chroma is scaled about the pixel's OWN luma, so hue and
+    // luminance survive and only the distance from grey grows; lift is a
+    // plain luma multiplier on top. 1 / 1 = untouched, and both are applied
+    // to the whole composite, so ink, halo and film move together.
+    if (abs(laP17.y - 1.0) > 0.001) {
+        float pl = dot(col, float3(0.2126, 0.7152, 0.0722));
+        col = max(pl.xxx + (col - pl.xxx) * laP17.y, 0.0);
+    }
+    if (abs(laP17.z - 1.0) > 0.001) col *= laP17.z;
     // ---- coarse ANIMATED film grain over everything ----------------------
     // grain_shadow_weight (laP12.w) biases the amplitude into the darks:
     // in every reference frame the ink is visibly noisy while the flat oil
@@ -1333,7 +1373,9 @@ R"hlsl(
     // With oil_transparency the oil pixel is mostly TRANSMITTED ink, so it
     // must keep the ink's own highlight level; only the scattered part of the
     // film is driven to oil_hdr. filmOp is 1 when transparency is off.
-    if (laP7.x > 0.001) m = lerp(m, laP7.x, alpha * filmOp);
+    // lampG carries rise_bottom_light into the HDR level too: the base of the
+    // lamp should be the hot part of the frame, not merely the pale part.
+    if (laP7.x > 0.001) m = lerp(m, laP7.x * lampG, alpha * filmOp);
     if (laP7.y > 0.001) m = max(m, laP7.y * rimB * alpha);
     // a specular on a real oil surface is a highlight, not a paler fill
     if (laP7.x > 0.001 && specAmt > 0.0005)

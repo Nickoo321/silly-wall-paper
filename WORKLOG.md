@@ -929,3 +929,92 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   Regression: `style=fluid` we-look-live 60 s 2560x1440 seed 1234 --hdr on md5
   **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged --
   re-checked after the kaleidoscope radius fix as well.
+
+- **LAVA LAMP "rise" mode + a 12-slot palette sweep + the film's chroma as a key
+  (Fable executor).** User, on the tile9 family ("it's 12 different colors. Can be a
+  system for changing colors once in a while. Maybe they spawn off screen and go up
+  slowly maybe?"), then: "Do you see the lava lamp aesthetic now?" Motion first, in
+  `StepAcidBlobs`: `rise_speed` (uv/s) is a constant upward term on the TARGET velocity,
+  so the damping relaxation still smooths it and the fluid can still shove a blob
+  sideways; holes are water, not oil, and climb at 0.7x, which is what makes a trapped
+  bubble creep ACROSS the disc it sits in instead of riding it like a painted dot.
+  `rise_wobble` adds two incommensurate sines on the blob's own s1/s2 curl phases, so no
+  two blobs sway together. `rise_respawn` re-enters a blob that has climbed clear of the
+  top BELOW the bottom edge at a fresh x and a fresh radius from its own kind's range --
+  a teleport, not a spawn, so the population and the field density never move. In respawn
+  mode the y wrap is off entirely (it would have bounced the re-entered blob straight back
+  to the top, which is the first thing it did) and the only guard left is a floor on how
+  far below the frame an eddy may push a blob. The stagger the mode needs is already
+  there: `SeedAcidBlobs` spreads every kind over the full height, so the column is
+  populated from frame one instead of one batch marching up and leaving a bare screen.
+  Determinism: respawn draws come from a private xorshift seeded off the population's own
+  seed, so a `--shot` replays exactly and the fluid's `rand()` sequence is untouched.
+  `rise_stretch` makes a moving blob a teardrop for almost nothing -- an ANISOTROPIC
+  kernel, `q.y` scaled by `1/(1+s)` before the distance and the gradient carrying the
+  matching `1/(1+s)^2`, with `s` uploaded per blob in the previously unused `AcidBlobGPU
+  .b.w` (speed relative to the rise speed, scaled by how small the blob is, capped at 0.8
+  -- past that a metaball stops reading as a blob and starts reading as a smear).
+  `rise_bottom_light` is one vertical ramp on the oil (not on the ink: the glass is not
+  lit, the wax is), applied before the film so it also feeds the scattered light, and
+  carried into `oil_hdr` so the base of the lamp is the HOT part and not merely the pale
+  part.
+  Colour: the user clarified that "the hue of the ENTIRE screen can shift", so there is
+  no per-blob colour anywhere. Two global options, both keyed, both CPU-side on `effOil`
+  in `UploadAcidConstants`. `hue_rotate_period` rotates the whole oil family's hue in HSV
+  (S/V preserved); `hue_sweep_period` keeps the curated list, now up to 12 entries
+  (`sweep_count`, `sweep_oil_N`/`sweep_ink_N`; the shipped `sweep_pair_N_*` spelling is
+  still read first, and the short form is what gets written). The important part for the
+  user's favourite palettes: a sweep entry's oil value may be THREE floats (one anchor,
+  the other three shades derived as before) or TWELVE (the four `oil_color_N` shades
+  verbatim). The eight tile9 palettes are hand-picked four-shade sets and had to reach
+  the screen exactly as they were rendered, not re-derived from a single anchor and toned
+  down. When no entry carries a full set the old anchor path runs untouched. Plus
+  `oil_saturation`, one vividness multiplier whatever fed the palette.
+  `post_chroma` / `post_lift` close out the transparent-film work: the film costs 10-20%
+  perceptual chroma and some lightness, and rather than re-author every palette for it
+  the FINAL acid composite is scaled -- chroma about the pixel's own luma (hue and luma
+  survive), then a luma multiplier. Measured on tile9-08 at t=75, OKLab means over the
+  non-dark pixels: opaque L .663 C .194; film 0.5 + `post_chroma 1.2` / `post_lift 1.05`
+  L .618 C .199; at `post_lift 1.12` L .641 C .205. So the shader key reproduces the
+  post-processed preview -- chroma is fully back, lightness lands a few % short because
+  the film also deepens the darks. The user's pick (transparency 0.5 with the chroma
+  held) is now the shipped default of the whole glass family, at 1.2 / 1.08.
+  Coverage note: the tile9 bases sit at threshold ~0.47-0.56 with repulsion 0.90 and NO
+  rise. Under a constant rise the blobs bunch as they climb and that pair floods the
+  frame into one continent (rendered: the oil filled ~90% and the black holes were all
+  that moved). The rise inis use threshold 0.85 with the tile9 repulsion, which puts the
+  coverage back where the tile9 tiles sit while leaving the lobes separate enough to
+  merge and neck apart on the way up.
+  Configs `reference/configs/acid-rise-12.ini` (the 8 tile9 palettes in hue order, 900 s
+  per trip) and `acid-rise-rotate.ini` (continuous rotation, 600 s per turn), shipped as
+  presets "Liquid Acid - rising colours.ini" / "- rising hue rotation.ini".
+  Sheets (960x540, seed 1234, --hdr on, t = 20/60/100/140):
+  **build2/shots/rise/sheet-rise.png** (base with the rise and the sweep off / rise +
+  8-palette sweep / rise + hue rotation) and **sheet-chroma.png** (the film A/B above).
+  What they show: the sweep column walks hot pink -> magenta while black masses leave the
+  top and fresh oil climbs in under the bottom edge, and the bubbles stay BLACK through
+  every hue, exactly as asked -- the ink is mono, only the oil takes the colour. The
+  rotation column is the honest version of the caveat in the code: orange -> OLIVE ->
+  green, and the green is a 104-nit full-frame mean where the sweep sits at 34, so on the
+  OLED it wants `oil_saturation` or `post_lift` pulled down. `AcidCB` gained laP17 (416 ->
+  432 bytes) and one more raw-string split in shaders.h.
+  Also, the manual pause (tray `CMD_PAUSE`) used to freeze the LAST FRAME on the panel:
+  `FluidRenderer::PresentBlack()` now clears and presents ONE black frame on the
+  transition into a manual pause (the second monitor too) and then the shell stops
+  presenting as before, so a panel left paused goes dark for no extra GPU work. A
+  FULLSCREEN pause deliberately does not do this -- that wallpaper is behind the game
+  anyway and clearing it would flash black when the game exits. `CMD_PAUSE_ON = 8` /
+  `CMD_PAUSE_OFF = 9` are explicit, non-toggling ids so `tools/away-pause.ps1` (new
+  `-Explicit` switch) can stop tracking state; `CMD_PAUSE = 1` stays the toggle for the
+  tray menu. NOT verified on the panel -- a `--shot` run has no swap chain and never
+  reaches this path; the reasoning is from the code and the user's live exe has to be
+  rebuilt and relaunched by them before `-Explicit` does anything (an older exe ignores
+  8/9 silently).
+  Regressions: the acid path is a NO-OP at the new defaults --
+  `liquid-acid-a-real.ini` 960x540 t=75 comes back md5 **32E9B585A5B061536188420C88BE4DB6**,
+  bit-identical to the previous commit's build2/shots/oil-trans/laa-t00-075.png. That
+  took a fix: the field loop's `dot(q, q)` had been expanded by hand to
+  `q.x*q.x + qy*qy` for the anisotropy, which moved the rounding and changed every acid
+  frame; written as `dot()` on the scaled vector it is identical again (`q.y / 1` is
+  exact). `style=fluid`: we-look-live 60 s 2560x1440 seed 1234 --hdr on md5
+  **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged.

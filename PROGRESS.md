@@ -31,14 +31,15 @@ Everything below is committed on `main`; nothing is running in the background.
 | Liquid Acid oil reads as a FILM, not a cut-out: `oil_thin_edge`/`oil_edge_frac` (soft thickness edge, thin oil goes dark), `meniscus_from_ink` (emergent halo: ink colour, weight = ink brightness, vanishes on black ink), `swarm_lens` (soft holes), `oil_glow`, `oil_specular`, `oil_iridescence`, `refraction_width`; all default 0. Configs `liquid-acid-a-real.ini`, `layering1-09-real.ini`; A/B build2/shots/oil/ | 54780a0 |
 | Transparent coloured oil FILM: `oil_transparency` (Beer-Lambert per channel over the refracted ink + backlit scatter), `oil_absorb`, `oil_film_bump`, `oil_refract_body`, `oil_ink_blur`; holes stay pure ink; all default 0. Configs `liquid-acid-a-glass.ini`, `liquid-acid-water-glass.ini`; A/B build2/shots/oil-trans/ | 08a89aa |
 | Screen mirroring for EVERY look: `[mirror]` mode off/horizontal/vertical/quad/kaleidoscope, `segments`, `source` quarter, `center`, `rotate_period`, `drift`, `soft`; one uv fold at the top of the display shader (no new PSO), pointer mapped; tray overlay presets "Mirror - quad / kaleidoscope 6 / off (overlay)" stack on any running look. Sheet build2/shots/mirror/ | db43eb9 |
-| Screen mirroring / kaleidoscope `[mirror]` (display-pass uv fold, all three looks, overlay presets in reference/presets/) | (this commit) |
+| Screen mirroring / kaleidoscope `[mirror]` (display-pass uv fold, all three looks, overlay presets in reference/presets/) | db43eb9 |
+| Lava-lamp rise (`rise_speed/wobble/respawn/stretch/bottom_light`), a 12-slot palette sweep that can carry the tile9 four-shade palettes verbatim (`sweep_count`, `sweep_oil_N`), global `hue_rotate_period` + `oil_saturation`, `post_chroma`/`post_lift`, black frame on manual pause + `CMD_PAUSE_ON/OFF` | (this commit) |
 
 Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
 
 ## The user's picks so far
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
 - Rim: the softer variation.
-- Oil film: transparency 0.5 with chroma held to the opaque level ("the 50% chroma held is the best"; ~x1.2 post chroma) -> to be baked in as `post_chroma`/`post_lift` keys by the lava-lamp executor.
+- Oil film: transparency 0.5 with chroma held to the opaque level ("the 50% chroma held is the best"; ~x1.2 post chroma). LANDED as `post_chroma` 1.2 / `post_lift` 1.08 and made the shipped default of the whole glass family + the rise inis.
 - Ink: `ink-auto-bursts` (WE bursts driving ink, water clears) and the crowded paint pour
   (`ink-pour`), then the duotone versions of both: `ink-duo-pour-teal-vermillion`,
   `ink-duo-pour-yellow-magenta`, `ink-duo-bursts-yellow-magenta`.

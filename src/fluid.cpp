@@ -1276,6 +1276,48 @@ void FluidRenderer::RenderGradient(float timeSec) {
     m_cmd->ResourceBarrier(1, &b);
 }
 
+// One black frame, presented and then left on screen. Manual pause used to
+// stop calling Frame(), which leaves the LAST rendered frame sitting on the
+// panel -- a static image burning on an OLED for as long as the user is away.
+// Clearing the back buffer and presenting once costs a single frame and the
+// panel then shows black until the pause is lifted. Nothing about the sim is
+// touched: m_time, the dye and the blob population all resume untouched.
+void FluidRenderer::PresentBlack() {
+    if (m_headless || !m_swapChain || m_presentBroken) return;
+    BeginFrame();
+    const UINT i = m_frameIndex;
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = m_backBuffers[i].Get();
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_cmd->ResourceBarrier(1, &b);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)i * m_rtvStride;
+    m_cmd->ClearRenderTargetView(rtv, black, 0, nullptr);
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    m_cmd->ResourceBarrier(1, &b);
+    // the second monitor, if it is mirroring us, goes dark with the first
+    if (m_mirrorChain) {
+        const UINT mi = m_mirrorChain->GetCurrentBackBufferIndex();
+        D3D12_RESOURCE_BARRIER mb = b;
+        mb.Transition.pResource = m_mirrorBuffers[mi].Get();
+        mb.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        mb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        m_cmd->ResourceBarrier(1, &mb);
+        D3D12_CPU_DESCRIPTOR_HANDLE mrtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        mrtv.ptr += (SIZE_T)(kFrames + 1 + mi) * m_rtvStride;
+        m_cmd->ClearRenderTargetView(mrtv, black, 0, nullptr);
+        mb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        mb.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+        m_cmd->ResourceBarrier(1, &mb);
+    }
+    EndFrameAndPresent();
+}
+
 void FluidRenderer::ReassertColorSpace() {
     if (!m_swapChain) return;
     const DXGI_COLOR_SPACE_TYPE scRGB = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
@@ -1926,9 +1968,9 @@ struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
-    float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], men[4];
+    float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 416, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 432, "AcidCB layout");
 
 // GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
 struct InkParamsGPU {
@@ -2186,6 +2228,11 @@ void FluidRenderer::SeedAcidBlobs() {
             place(b, rng.f(0.05f, 0.95f), rng.f(0.05f, 0.95f));
         }
     }
+    // The seeding above already spreads every kind over the FULL height, which
+    // is exactly the stagger rise_respawn needs: the column is populated from
+    // the first frame and never empties, instead of one batch marching up
+    // together and leaving a bare screen behind it.
+    m_acidRespawnRng = rng.next() | 1u;
     m_acidSeeded = true;
 }
 
@@ -2299,6 +2346,23 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // buoyancy (uv y is down, so "up" is negative); holes sink
         ty += (b.wgt > 0.0f ? -1.0f : 1.0f) * a.buoyancy * (b.baseR / 0.12f);
 
+        // ---- LAVA LAMP rise (rise_speed / rise_wobble) -------------------
+        // A constant upward drift on the TARGET velocity, so the damping
+        // relaxation still smooths it and the fluid can still shove a blob
+        // sideways. Holes are water, not oil: they climb at 0.7x, which is
+        // what makes a bubble creep across the disc it sits in rather than
+        // riding it like a painted dot.
+        if (a.riseSpeed > 1e-6f) {
+            const float rs = a.riseSpeed * (b.wgt > 0.0f ? 1.0f : 0.7f);
+            ty -= rs;
+            if (a.riseWobble > 1e-4f) {
+                // two incommensurate sines on the blob's own curl phases:
+                // long lazy sway, never in step with its neighbours.
+                tx += a.riseWobble * rs *
+                      (0.85f * sinf(0.17f * t + b.s1) + 0.45f * sinf(0.29f * t + b.s2));
+            }
+        }
+
         // Soft repulsion between SAME-SIGN blobs: keeps discs and bubbles from
         // collapsing into one continent (the oil PoC's size-sorting failure),
         // while holes stay free to sit inside oil.
@@ -2328,8 +2392,44 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         const float m = fmaxf(a.wrapMargin, 0.02f);
         if (b.x < -m)        b.x += 1.0f + 2.0f * m;
         if (b.x > 1.0f + m)  b.x -= 1.0f + 2.0f * m;
-        if (b.y < -m)        b.y += 1.0f + 2.0f * m;
-        if (b.y > 1.0f + m)  b.y -= 1.0f + 2.0f * m;
+        // rise_respawn: a blob that has climbed clear of the TOP re-enters
+        // BELOW the bottom edge, at a fresh x and a fresh radius from its own
+        // kind's range, instead of reappearing at the same x with the same
+        // size (a visible loop once the whole column has cycled once). The
+        // population is unchanged either way -- this is a teleport, not a
+        // spawn -- so nothing about the field's density moves.
+        const bool respawnMode = (a.riseSpeed > 1e-6f && a.riseRespawn);
+        if (respawnMode && b.y < -m - b.baseR) {
+            auto rf = [&]() {
+                m_acidRespawnRng ^= m_acidRespawnRng << 13;
+                m_acidRespawnRng ^= m_acidRespawnRng >> 17;
+                m_acidRespawnRng ^= m_acidRespawnRng << 5;
+                return (m_acidRespawnRng >> 8) * (1.0f / 16777216.0f);
+            };
+            float lo = a.bubbleMin, hi = a.bubbleMax, bias = a.sizeBias;
+            if      (b.kind == 0) { lo = a.discMin; hi = a.discMax; bias = a.bigBias; }
+            else if (b.kind == 1) { lo = a.webMin;  hi = a.webMax;  bias = a.bigBias; }
+            else if (b.kind == 3) { lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; }
+            b.baseR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+            b.x = rf();
+            b.y = 1.0f + m + b.baseR;
+            b.vx = 0.0f;
+            b.vy = 0.0f;
+            b.s1 = rf() * 6.2831853f;
+            b.s2 = rf() * 6.2831853f;
+        } else if (!respawnMode) {
+            if (b.y < -m)        b.y += 1.0f + 2.0f * m;
+            if (b.y > 1.0f + m)  b.y -= 1.0f + 2.0f * m;
+        }
+        // In respawn mode the y wrap is off entirely: a blob is parked past
+        // 1+m on purpose and has to climb back in. A hard ceiling on how far
+        // below the frame it may be pushed is the only guard needed -- without
+        // it a strong downward eddy could carry one off and the rise would
+        // take minutes to bring it back, thinning the population for free.
+        if (respawnMode) {
+            const float floorY = 1.0f + m + b.baseR + 0.06f;
+            if (b.y > floorY) { b.y = floorY; if (b.vy > 0.0f) b.vy = 0.0f; }
+        }
 
         b.phase += b.breathRate * dt;
     }
@@ -2350,7 +2450,9 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(effInk, a.inkRamp, sizeof(effInk));
     memcpy(effMen, a.meniscusCol, sizeof(effMen));
     if (a.hueSweepPeriod > 0.01f) {
-        const int np = LiquidAcidConfig::kSweepPairs;
+        int np = a.sweepCount;
+        if (np < 1) np = 1;
+        if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
         const float u = fmodf(m_time / a.hueSweepPeriod, 1.0f) * np;
         const int k0 = (int)u % np, k1 = (k0 + 1) % np;
         // smoothstep the cross-fade so each pair gets a long settled stretch
@@ -2360,6 +2462,43 @@ void FluidRenderer::UploadAcidConstants() {
         HsvLerp3(&a.sweepOil[k0 * 3], &a.sweepOil[k1 * 3], f, oilA);
         HsvLerp3(&a.sweepInk[k0 * 3], &a.sweepInk[k1 * 3], f, inkA);
         BuildAcidPalette(a, oilA, inkA, effOil, effInk, effMen);
+        // Hand-authored four-shade entries (sweep_oil_N given twelve floats)
+        // override the derived oil family: cross-fade the four shades one for
+        // one, so the user's tile9 palettes land on screen exactly as they
+        // were rendered instead of being rebuilt from a single anchor. An
+        // entry without a full set contributes the family just derived for
+        // it, so the two forms mix freely inside one list. Nothing here runs
+        // unless an ini actually carries a full set.
+        if (a.sweepOilFullSet[k0] || a.sweepOilFullSet[k1]) {
+            float fam0[12], fam1[12], dummyInk[12], dummyMen[3];
+            if (a.sweepOilFullSet[k0]) memcpy(fam0, &a.sweepOilFull[k0 * 12], sizeof(fam0));
+            else BuildAcidPalette(a, &a.sweepOil[k0 * 3], &a.sweepInk[k0 * 3],
+                                  fam0, dummyInk, dummyMen);
+            if (a.sweepOilFullSet[k1]) memcpy(fam1, &a.sweepOilFull[k1 * 12], sizeof(fam1));
+            else BuildAcidPalette(a, &a.sweepOil[k1 * 3], &a.sweepInk[k1 * 3],
+                                  fam1, dummyInk, dummyMen);
+            for (int ci = 0; ci < 4; ci++)
+                HsvLerp3(&fam0[ci * 3], &fam1[ci * 3], f, &effOil[ci * 3]);
+        }
+    }
+    // ---- global hue rotation (hue_rotate_period) -------------------------
+    // The user's ask was "the hue of the ENTIRE screen can shift", so this is
+    // one angle applied to the WHOLE oil family, never per blob: neighbouring
+    // discs keep their relative shades and the frame reads as one palette
+    // turning, not as confetti. The ink is untouched -- on the mono-ink
+    // tile9 family it stays grey and the holes stay black through every hue.
+    if (a.hueRotatePeriod > 0.01f) {
+        const float deg = 360.0f * fmodf(m_time / a.hueRotatePeriod, 1.0f);
+        for (int ci = 0; ci < 4; ci++) HsvHueShiftCpu(&effOil[ci * 3], deg);
+    }
+    // ---- oil_saturation: one vividness knob, whatever fed the palette ----
+    if (fabsf(a.oilSaturation - 1.0f) > 0.001f) {
+        for (int ci = 0; ci < 4; ci++) {
+            float h, s, v;
+            RgbToHsv(&effOil[ci * 3], h, s, v);
+            RGB c = HSVtoRGB(h, fminf(fmaxf(s * a.oilSaturation, 0.0f), 1.0f), v);
+            effOil[ci * 3 + 0] = c.r; effOil[ci * 3 + 1] = c.g; effOil[ci * 3 + 2] = c.b;
+        }
     }
 
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
@@ -2374,7 +2513,20 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].b[0] = effOil[ci * 3 + 0];
         dst[i].b[1] = effOil[ci * 3 + 1];
         dst[i].b[2] = effOil[ci * 3 + 2];
-        dst[i].b[3] = 0.0f;
+        // .w = per-blob anisotropy for rise_stretch (0 = round, the shipped
+        // look). A rising drop in a lamp is a teardrop while it is moving and
+        // relaxes round as it slows, and a small one is dragged out far more
+        // than a heavy disc -- so the amount is speed relative to the rise
+        // speed, scaled by how small the blob is. Capped: past ~0.8 the
+        // metaball stops reading as a blob and starts reading as a smear.
+        float stretch = 0.0f;
+        if (a.riseStretch > 0.0005f && a.riseSpeed > 1e-6f) {
+            const float sp = sqrtf(b.vx * b.vx + b.vy * b.vy);
+            const float sf = fminf(sp / (a.riseSpeed * 1.6f), 1.0f);
+            const float rf2 = fminf(fmaxf(0.075f / fmaxf(b.baseR, 0.012f), 0.25f), 1.6f);
+            stretch = fminf(a.riseStretch * sf * rf2, 0.80f);
+        }
+        dst[i].b[3] = stretch;
     }
 
     AcidParamsGPU p = {};
@@ -2418,8 +2570,10 @@ void FluidRenderer::UploadAcidConstants() {
     float p15[4] = { fmaxf(a.oilTransparency, 0.0f), fmaxf(a.oilAbsorb, 0.0f),
                      fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
     float p16[4] = { fmaxf(a.oilInkBlur, 0.0f), 0.0f, 0.0f, 0.0f };
+    float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
+                     fmaxf(a.postLift, 0.0f), 0.0f };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
-    memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16);
+    memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 }
@@ -2465,7 +2619,9 @@ void FluidRenderer::UploadInkConstants() {
     memcpy(tThick, k.tintThick, sizeof(tThick));
     if (k.pairSweepPeriod > 0.01f) {
         const LiquidAcidConfig& a = m_cfg.acid;   // the curated pair list
-        const int np = LiquidAcidConfig::kSweepPairs;
+        int np = a.sweepCount;                    // sweep_count, default 5
+        if (np < 1) np = 1;
+        if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
         const float u = fmodf(m_time / k.pairSweepPeriod, 1.0f) * np;
         const int k0 = (int)u % np, k1 = (k0 + 1) % np;
         float f = u - floorf(u);

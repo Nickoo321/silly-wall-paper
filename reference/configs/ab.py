@@ -4,8 +4,11 @@ prefix is e.g. build/shots/s0-live  -> uses prefix-120.png, -180.png, -240.png
 """
 import sys, os, glob
 os.chdir(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
-sys.path.insert(0, r"C:/Users/abg77/AppData/Local/Temp/claude/C--Users-abg77-OneDrive-Desktop-wall-paper-engine-claude-code/8c9d0c8d-d72a-4f56-9d50-a24cc6eac2d0/scratchpad/pylibs")
-from PIL import Image, ImageDraw, ImageFont
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # fallback: session scratchpad copy (pip install --user pillow is preferred)
+    sys.path.insert(0, r"C:/Users/abg77/AppData/Local/Temp/claude/C--Users-abg77-OneDrive-Desktop-wall-paper-engine-claude-code/8c9d0c8d-d72a-4f56-9d50-a24cc6eac2d0/scratchpad/pylibs")
+    from PIL import Image, ImageDraw, ImageFont
 out = sys.argv[1]
 cols = [a.split('=', 1) for a in sys.argv[2:]]
 W = 960; H = 540; pad = 8; head = 34  # thumbnails; pad = 8; head = 34

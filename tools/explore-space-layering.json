@@ -1,0 +1,97 @@
+{
+  "_comment": "Knob space for tools/explore.py — sparse mono ink + coloured oil (and the inverse). See PROGRESS.md / WORKLOG.md 2026-09-17 for the anchor idea. Bases cycle a,b,c,a,b,c,... across the requested --count.",
+  "bases": [
+    {
+      "name": "water",
+      "ini": "reference/configs/liquid-acid-water.ini",
+      "keys": {
+        "sim.gravity": [0, 2],
+        "drops.interval": [6, 12, 20],
+        "drops.density": [3, 6],
+        "liquid_acid.rim_ink_follow": [0.5, 1.0],
+        "liquid_acid.grain_shadow_weight": [0, 0.8],
+        "liquid_acid.toe_tint": [0, 0.35]
+      },
+      "groups": {
+        "ink_tint": [
+          {"label": "ink white/white", "values": {"ink.tint_thin": "0.85 0.85 0.85", "ink.tint_thick": "1.00 1.00 1.00"}},
+          {"label": "ink ltgrey/white", "values": {"ink.tint_thin": "0.55 0.55 0.58", "ink.tint_thick": "0.97 0.97 1.00"}},
+          {"label": "ink grey/blkish", "values": {"ink.tint_thin": "0.28 0.28 0.30", "ink.tint_thick": "0.62 0.62 0.65"}}
+        ],
+        "paper": [
+          {"label": "paper black", "values": {"ink.paper_color": "0.00 0.00 0.00"}},
+          {"label": "paper warm-blk", "values": {"ink.paper_color": "0.05 0.03 0.02"}},
+          {"label": "paper navy", "values": {"ink.paper_color": "0.01 0.02 0.07"}},
+          {"label": "paper purple", "values": {"ink.paper_color": "0.06 0.01 0.07"}}
+        ],
+        "oil_palette": [
+          {"label": "oil orange", "values": {"liquid_acid.oil_color_1": "0.898 0.271 0.145", "liquid_acid.oil_color_2": "0.949 0.341 0.110", "liquid_acid.oil_color_3": "0.855 0.239 0.125", "liquid_acid.oil_color_4": "0.976 0.427 0.110"}},
+          {"label": "oil red", "values": {"liquid_acid.oil_color_1": "0.85 0.10 0.08", "liquid_acid.oil_color_2": "0.90 0.15 0.05", "liquid_acid.oil_color_3": "0.80 0.08 0.10", "liquid_acid.oil_color_4": "0.95 0.12 0.06"}},
+          {"label": "oil gold", "values": {"liquid_acid.oil_color_1": "0.95 0.77 0.10", "liquid_acid.oil_color_2": "0.98 0.82 0.05", "liquid_acid.oil_color_3": "0.90 0.70 0.08", "liquid_acid.oil_color_4": "1.00 0.85 0.15"}},
+          {"label": "oil magenta", "values": {"liquid_acid.oil_color_1": "0.88 0.12 0.62", "liquid_acid.oil_color_2": "0.85 0.10 0.55", "liquid_acid.oil_color_3": "0.90 0.18 0.68", "liquid_acid.oil_color_4": "0.80 0.08 0.50"}},
+          {"label": "oil white/ltgrey", "values": {"liquid_acid.oil_color_1": "0.92 0.92 0.92", "liquid_acid.oil_color_2": "0.85 0.85 0.85", "liquid_acid.oil_color_3": "0.97 0.97 0.97", "liquid_acid.oil_color_4": "0.80 0.80 0.80"}},
+          {"label": "oil black", "values": {"liquid_acid.oil_color_1": "0.05 0.05 0.05", "liquid_acid.oil_color_2": "0.03 0.03 0.03", "liquid_acid.oil_color_3": "0.08 0.08 0.08", "liquid_acid.oil_color_4": "0.02 0.02 0.02"}}
+        ],
+        "oil_coverage": [
+          {"label": "cov low", "values": {"liquid_acid.blob_count": 24, "liquid_acid.threshold": 0.8}},
+          {"label": "cov mid", "values": {"liquid_acid.blob_count": 40, "liquid_acid.threshold": 0.8}},
+          {"label": "cov midhi", "values": {"liquid_acid.blob_count": 64, "liquid_acid.threshold": 0.65}}
+        ]
+      }
+    },
+    {
+      "name": "duo",
+      "ini": "reference/configs/ink-duo-pour-teal-vermillion.ini",
+      "keys": {
+        "ink.veil_floor": [0, 0.12, 0.25],
+        "ink.tint_mid_dip": [0, 0.7, 1.0],
+        "ink.pair_sweep_period": [0, 120]
+      },
+      "groups": {
+        "tint_pair": [
+          {"label": "mono wht/wht", "values": {"ink.tint_thin": "0.55 0.55 0.55", "ink.tint_thick": "0.95 0.95 0.95"}},
+          {"label": "mono grey/blk", "values": {"ink.tint_thin": "0.30 0.30 0.32", "ink.tint_thick": "0.65 0.65 0.68"}},
+          {"label": "colour teal/verm", "values": {"ink.tint_thin": "0.04 0.63 0.65", "ink.tint_thick": "0.90 0.27 0.15"}},
+          {"label": "colour yel/mag", "values": {"ink.tint_thin": "0.96 0.77 0.02", "ink.tint_thick": "0.88 0.12 0.62"}}
+        ],
+        "paper": [
+          {"label": "paper black", "values": {"ink.paper_color": "0.00 0.00 0.00"}},
+          {"label": "paper warm-blk", "values": {"ink.paper_color": "0.05 0.03 0.02"}},
+          {"label": "paper navy", "values": {"ink.paper_color": "0.01 0.02 0.07"}},
+          {"label": "paper purple", "values": {"ink.paper_color": "0.06 0.01 0.07"}}
+        ]
+      }
+    },
+    {
+      "name": "bands",
+      "ini": "reference/configs/liquid-acid-a.ini",
+      "groups": {
+        "mode": [
+          {"label": "bands oil-mono/ink-teal", "values": {
+            "liquid_acid.ink_mode": "bands",
+            "liquid_acid.oil_color_1": "0.90 0.90 0.90", "liquid_acid.oil_color_2": "0.80 0.80 0.80", "liquid_acid.oil_color_3": "0.15 0.15 0.15", "liquid_acid.oil_color_4": "0.97 0.97 0.97"
+          }},
+          {"label": "bands oil-mag/ink-grey", "values": {
+            "liquid_acid.ink_mode": "bands",
+            "liquid_acid.oil_color_1": "0.88 0.12 0.62", "liquid_acid.oil_color_2": "0.85 0.10 0.55", "liquid_acid.oil_color_3": "0.90 0.18 0.68", "liquid_acid.oil_color_4": "0.80 0.08 0.50",
+            "liquid_acid.ink_stop_1": "0.55 0.55 0.55", "liquid_acid.ink_stop_2": "0.05 0.05 0.05", "liquid_acid.ink_stop_3": "0.30 0.30 0.30", "liquid_acid.ink_stop_4": "0.85 0.85 0.85"
+          }},
+          {"label": "water oil-white/ink-teal", "values": {
+            "liquid_acid.ink_mode": "water", "liquid_acid.ink_complement_lock": 0,
+            "liquid_acid.oil_color_1": "0.92 0.92 0.92", "liquid_acid.oil_color_2": "0.85 0.85 0.85", "liquid_acid.oil_color_3": "0.97 0.97 0.97", "liquid_acid.oil_color_4": "0.80 0.80 0.80",
+            "sim.vorticity": 12, "sim.saturation_restore": 0, "sim.gravity": 2, "sim.gravity_pow": 1.5, "sim.gravity_blur": 3.0,
+            "behavior.idle_splats": 0, "behavior.wanderers": 0,
+            "ink.inverted": 1, "ink.chroma": 0, "ink.paper_color": "0.00 0.00 0.00", "ink.tint_thin": "0.26 0.62 0.64", "ink.tint_thick": "0.80 1.00 0.98"
+          }},
+          {"label": "water oil-mag/ink-mono", "values": {
+            "liquid_acid.ink_mode": "water", "liquid_acid.ink_complement_lock": 0,
+            "liquid_acid.oil_color_1": "0.88 0.12 0.62", "liquid_acid.oil_color_2": "0.85 0.10 0.55", "liquid_acid.oil_color_3": "0.90 0.18 0.68", "liquid_acid.oil_color_4": "0.80 0.08 0.50",
+            "sim.vorticity": 12, "sim.saturation_restore": 0, "sim.gravity": 2, "sim.gravity_pow": 1.5, "sim.gravity_blur": 3.0,
+            "behavior.idle_splats": 0, "behavior.wanderers": 0,
+            "ink.inverted": 1, "ink.chroma": 0, "ink.paper_color": "0.00 0.00 0.00", "ink.tint_thin": "0.55 0.55 0.58", "ink.tint_thick": "0.95 0.95 0.97"
+          }}
+        ]
+      }
+    }
+  ]
+}

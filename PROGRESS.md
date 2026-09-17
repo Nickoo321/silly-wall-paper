@@ -25,6 +25,7 @@ Everything below is committed on `main`; nothing is running in the background.
 | Liquid Acid research doc (creator, genre technique, palettes, ranked ideas) | 84e3970 |
 | Automation-on-ink combos (hue-cycled drops, WE bursts, paint pour) | e2ca248, 4e2b32c |
 | Duotone ink configs (user's three picks) with the WE hue-shift disabled | 3b59ebf |
+| Looks switchable at runtime via tray presets (`EnsureLookResources`), `reference/presets/` (10 looks), `--shot-preset`; `[ink] pair_sweep_period`; acid `rim_order` / `grain_shadow_weight` / `toe_tint` | d9258f0 |
 | Tools: `tools/panel-check.ps1`, `tools/oled-brightness.ps1`, `reference/configs/refsheet.py` | b0e4af4 etc. |
 
 Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
@@ -41,11 +42,13 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
    the 240-nit SDR white or the HDR-lifted cores; hue and composition are trustworthy, brightness
    relations are not. `tools\panel-check.ps1 -Ini <ini>` swaps the live look and relaunches the
    port from build2; `-Restore` puts the WE look back. Brightness is at 0 (`oled-brightness.ps1 100`).
-2. **Duotone pair rotation.** The duotone ink is a fixed pair per config. Rotating slowly through
-   the curated complementary list (as the acid sweep does) is a small code change.
-3. **Liquid Acid polish from the research doc**, cheapest first: dark-then-bright rim ordering;
-   grain weighted into shadows; oil moving slower than ink; ink-tinted black toe; one coverage
-   scalar instead of three blob fractions; `rim_ink_follow` toward 1.0.
+2. **Install the presets.** The tray Presets menu enumerates `%APPDATA%\FluidWallpaper\moods\`;
+   copy `reference/presets/*.ini` there (needs the user's ok) so the looks appear in the menu.
+   "WE parity (fluid).ini" is the way back to the original look.
+3. **Liquid Acid polish**: rim_order / grain_shadow_weight / toe_tint are implemented (default off)
+   and await the user's verdict on the panel; still open from the research: oil slower than ink,
+   one coverage scalar instead of three blob fractions, `rim_ink_follow` toward 1.0, a WARM toe
+   (toe_tint follows the ink hue, which is teal for palette A).
 4. **Liquid Acid water-ink coverage** sits at ~42% vs the ~50% target (one knob nudge).
 5. **Moods / hue-cycler policy** for the acid and ink looks (they bypass the WE colour chain;
    the hue-shift automation must stay OFF for duotone ink — it rotates the whole frame).

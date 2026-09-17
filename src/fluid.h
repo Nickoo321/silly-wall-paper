@@ -91,6 +91,42 @@ struct LiquidAcidConfig {
     float inkSoft     = 0.42f;      // band-edge softness (0 = hard steps)
     float inkMix      = 0.88f;      // 0 = keep the parity colour, 1 = full ramp
     float inkHueVary  = 14.0f;      // degrees of ramp hue-rotate driven by the dye's own hue
+    // Complement lock: hold the ink's hue OPPOSITE the oil's on the wheel.
+    // The regional variation above still moves the ink around, but only inside
+    // a window centred on (mean oil hue + 180), so the ink can never drift
+    // toward the oil hue and the pair stays complementary all the time.
+    bool  inkComplementLock = true;
+    float inkComplementSpan = 40.0f;   // width of that window, degrees
+    // Sweep the palette through a curated list of VIVID complementary pairs
+    // (orange/teal -> red/cyan -> magenta/green -> gold/violet -> lime/purple),
+    // cross-fading oil family and ink ramp together. A continuous hue rotation
+    // was tried first and rejected: no rotation keeps a palette vivid at every
+    // hue, because the saturation and lightness a colour needs to read as
+    // "vivid" depend on the hue (a mid-value teal is a good teal; the same
+    // value at yellow is olive). Curated anchors sidestep that entirely, and
+    // match the reference pack, where each loop is one vivid pair.
+    // Seconds for a full trip through the list; 0 = off (use the fixed palette).
+    float hueSweepPeriod = 0.0f;
+    static const int kSweepPairs = 5;
+    // Each pair is two vivid anchors: the oil colour and the ink's mid tone.
+    // The rest of the palette (the other three oil shades, the ink's near-black
+    // and its two oil-hue bands, the meniscus) is derived from them using the
+    // saturation/value ratios of the authored palette above, so every swept
+    // pair has the same internal structure as the hand-tuned one.
+    float sweepOil[kSweepPairs * 3] = {
+        0.898f, 0.271f, 0.145f,   // vermillion
+        0.930f, 0.120f, 0.160f,   // red
+        0.880f, 0.120f, 0.620f,   // magenta
+        0.970f, 0.780f, 0.100f,   // gold
+        0.550f, 0.850f, 0.120f,   // lime
+    };
+    float sweepInk[kSweepPairs * 3] = {
+        0.086f, 0.478f, 0.494f,   // teal
+        0.100f, 0.620f, 0.500f,   // cyan-green
+        0.220f, 0.700f, 0.240f,   // green
+        0.340f, 0.160f, 0.720f,   // violet
+        0.480f, 0.120f, 0.660f,   // purple
+    };
     float inkGain     = 2.30f;      // luminance -> ramp position
     float inkBias     = 0.05f;
     float seamStrength= 0.70f;      // dark seams along |grad dye|
@@ -464,7 +500,8 @@ private:
         float phase;         // breathing phase
         float breathRate;    // rad / s
         float wgt;           // +1 (oil) or -holeWeight (hole / bubble of water)
-        float col[3];        // flat fill colour (oil palette pick)
+        int   colIdx;        // oil palette slot; resolved at upload so a swept
+                             // palette reaches the blobs too
         float s1, s2;        // curl-drift phase offsets
         int   kind;          // 0 disc, 1 web, 2 bubble, 3 hole
     };

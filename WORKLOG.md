@@ -587,3 +587,20 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   (+/- span) and a slow shared hue sweep so the pair stays opposite while cycling.
 - OLED dimmed to 30/100 via DDC/CI at the user's request (tools/oled-brightness.ps1);
   restore with `powershell -File tools\oled-brightness.ps1 100`.
+- Hue follow-up: first attempt (matrix hue-rotate sweep) went muddy (olive ink / pastel oil);
+  replaced by ink-complement lock + sweep through curated vivid pairs with the ink's dark base
+  kept in stops 1/2. A/B build2/shots/hue-ab.png (A fixed a12, B lock+sweep: yellow/purple ->
+  orange/teal -> magenta/green over 60..120 s). Sent to the user; awaiting verdict + agent's
+  key/cost report.
+- User asked for (3) `style=ink` (ink-in-water, shared with liquid_acid's ink path) and (4) a
+  separate 3D ink sim side project. Fable planners writing reference/INK2D-PLAN.md and
+  reference/INK3D-PLAN.md; Opus executors after review. refs: reference/shots/photos/
+  ink-in-water-ref-*.jpg. GPU lock rule added to AGENTS.md (build2/shots/gpu.lock).
+- Sweep landed: `[liquid_acid]` ink_complement_lock=1 (default), ink_complement_span=40,
+  hue_sweep_period=0 (off; 90 for the A/B), sweep_pair_N_oil/ink overrides; 5 curated
+  pairs (vermillion/teal, red/cyan-green, magenta/green, gold/violet, lime/purple); blobs
+  carry a palette index; meniscus halo gated on |grad|. liquid-acid-a/b/c.ini pin lock=0
+  so they render unchanged. Cost corrected (earlier table was inflated ~1.9x by a
+  concurrent render): fluid baseline, +0.87 ms full acid, +1.01 ms with lock+sweep at 1440p.
+  Open: gold/violet pair = big bright yellow area at SDR white (ABL exposure, unchecked on
+  panel); swept ink has no oil-hue bands (dark-base rule) — A keeps orange marbling.

@@ -314,6 +314,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
     float4 laP10;        // x swarmClump y swarmDark   z -          w -
+    float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -343,6 +344,35 @@ float AcidBand(float x, float n, float soft) {
     float f = floor(x * n), fr = frac(x * n);
     return (f + smoothstep(0.5 - soft, 0.5 + soft, fr)) / n;
 }
+// Hue rotation that PRESERVES saturation and value, so a colour is exactly as
+// vivid at its new hue as it was at its old one. CssHueRotate (the W3C matrix)
+// holds luma instead, so a bright orange rotated toward yellow lands on olive
+// and a saturated red-orange lands on pastel lavender - which is what the
+// first sweep build did. Every reference frame is vivid at every hue, so the
+// sweep and the complement lock both rotate here, not in the matrix.
+float3 AcidRgb2Hsv(float3 c) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float d  = mx - mn;
+    float h  = 0.0;
+    if (d > 1e-7) {
+        if (mx == c.r)      h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+        else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+        else                h = (c.r - c.g) / d + 4.0;
+        h /= 6.0;
+    }
+    return float3(h, (mx > 1e-7) ? d / mx : 0.0, mx);
+}
+float3 AcidHsv2Rgb(float3 c) {
+    float3 q = abs(frac(c.x + float3(1.0, 0.6666667, 0.3333333)) * 6.0 - 3.0);
+    return c.z * lerp(1.0, saturate(q - 1.0), c.y);
+}
+float3 AcidHueShift(float3 c, float deg) {
+    float3 hsv = AcidRgb2Hsv(c);
+    hsv.x = frac(hsv.x + deg * 0.0027777778);
+    return AcidHsv2Rgb(hsv);
+}
+
 // Procedural bubble swarm. A jittered cellular layer of round droplets with a
 // wide (squared-hash) size range: hundreds of bubbles of every size for ~20
 // hashes per pixel, where the same thing in metaballs would cost hundreds of
@@ -557,7 +587,20 @@ float4 PSMain(VSOut i) : SV_Target {
         // OIL covers it - that is what painted hard, fluid-shaped black smears
         // across the oil discs. Guard on the chroma magnitude.
         if (dot(cc, cc) > 1e-10)
-            rampC = CssHueRotate(rampC, atan2(cc.y, cc.x) * laP3.w * 0.31831);
+            rampC = AcidHueShift(rampC, atan2(cc.y, cc.x) * laP3.w * 0.31831);
+    }
+    // Complement lock: clamp the ramp's hue into a window centred on the oil's
+    // opposite. Applied AFTER the regional variation, so the ink still drifts
+    // — it just drifts inside the complementary window instead of wandering
+    // toward the oil hue. Near-greys have no hue to clamp, so skip them.
+    if (laP11.x > 0.5) {
+        float3 rhsv = AcidRgb2Hsv(rampC);
+        if (rhsv.y > 0.04) {                             // near-greys have no hue
+            float d = laP11.z - rhsv.x * 360.0;
+            d = d - 360.0 * floor(d / 360.0 + 0.5);      // wrap to [-180, 180]
+            float half = max(laP11.y, 0.0) * 0.5;
+            if (abs(d) > half) rampC = AcidHueShift(rampC, d - sign(d) * half);
+        }
     }
     inkC = lerp(inkC, rampC, saturate(laP3.z));
     // dark seams where |grad dye| is steep (the marbled acrylic-pour edging)
@@ -663,6 +706,13 @@ R"hlsl(
     if (laP2.x > 0.002) {
         float hx = (sdf + laP7.z) / max(laP2.y, 1e-5);
         float halo = exp(-hx * hx);
+        // sdf = (field - thresh) / |grad| is only a distance where |grad| is
+        // strong. On a broad low-gradient plateau that never reaches the
+        // threshold, a tiny field deficit divided by a tiny gradient still
+        // lands inside the halo band, painting a fuzzy blob-shaped glow with
+        // no oil under it. Real blob surfaces have |grad| >~ 2 (it scales as
+        // 1/radius, and the largest discs here are ~0.4), so gate on it.
+        halo *= smoothstep(0.5, 1.5, gl);
         col = lerp(col, laMen.rgb, saturate(halo * laP2.x));
     }
 

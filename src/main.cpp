@@ -251,6 +251,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.inkSoft      = getF(S, L"ink_soft", a.inkSoft);
         a.inkMix       = getF(S, L"ink_mix", a.inkMix);
         a.inkHueVary   = getF(S, L"ink_hue_vary", a.inkHueVary);
+        a.inkComplementLock = getB(S, L"ink_complement_lock", a.inkComplementLock);
+        a.inkComplementSpan = getF(S, L"ink_complement_span", a.inkComplementSpan);
+        a.hueSweepPeriod    = getF(S, L"hue_sweep_period", a.hueSweepPeriod);
         a.inkGain      = getF(S, L"ink_gain", a.inkGain);
         a.inkBias      = getF(S, L"ink_bias", a.inkBias);
         a.seamStrength = getF(S, L"seam_strength", a.seamStrength);
@@ -277,6 +280,22 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
             GetPrivateProfileStringW(S, L"meniscus_color", L"", buf, 64, ini);
             if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
                 a.meniscusCol[0] = r; a.meniscusCol[1] = g; a.meniscusCol[2] = b;
+            }
+        }
+        // sweep_pair_N_oil / sweep_pair_N_ink: the curated vivid pair list
+        for (int ci = 0; ci < LiquidAcidConfig::kSweepPairs; ci++) {
+            wchar_t key[40], buf[64] = {};
+            float r, g, b;
+            swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
+            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                a.sweepOil[ci * 3 + 0] = r; a.sweepOil[ci * 3 + 1] = g; a.sweepOil[ci * 3 + 2] = b;
+            }
+            buf[0] = 0;
+            swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
+            GetPrivateProfileStringW(S, key, L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                a.sweepInk[ci * 3 + 0] = r; a.sweepInk[ci * 3 + 1] = g; a.sweepInk[ci * 3 + 2] = b;
             }
         }
         // oil_color_1..4 and ink_stop_1..4, "r g b" floats like splat_color_N

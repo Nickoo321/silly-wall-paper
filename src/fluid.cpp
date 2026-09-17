@@ -1708,9 +1708,107 @@ struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
-    float p10[4], men[4];
+    float p10[4], p11[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 320, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 336, "AcidCB layout");
+
+// CPU mirror of AcidHueShift in shaders.h: rotate HUE ONLY, holding saturation
+// and value, so a swept colour is exactly as vivid at its new hue as it was at
+// its old one. (A W3C matrix hue-rotate holds luma instead and turns a bright
+// orange into olive on the way to yellow.) The oil colours and the ink stops
+// are rotated here rather than in the pixel shader because the shader picks a
+// flat fill per pixel out of the blob buffer.
+static void RgbToHsv(const float c[3], float& h, float& sv, float& v) {
+    const float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
+    const float mn = fminf(c[0], fminf(c[1], c[2]));
+    const float d = mx - mn;
+    h = 0.0f;
+    if (d > 1e-7f) {
+        if (mx == c[0])      h = (c[1] - c[2]) / d + (c[1] < c[2] ? 6.0f : 0.0f);
+        else if (mx == c[1]) h = (c[2] - c[0]) / d + 2.0f;
+        else                 h = (c[0] - c[1]) / d + 4.0f;
+        h /= 6.0f;
+    }
+    sv = (mx > 1e-7f) ? d / mx : 0.0f;
+    v = mx;
+}
+
+static void HsvHueShiftCpu(float c[3], float deg) {
+    float h, sat, val;
+    RgbToHsv(c, h, sat, val);
+    h = fmodf(h + deg / 360.0f, 1.0f);
+    if (h < 0.0f) h += 1.0f;
+    RGB out = HSVtoRGB(h, sat, val);
+    c[0] = out.r; c[1] = out.g; c[2] = out.b;
+}
+
+// Cross-fade two colours through HSV along the SHORT way round the wheel, so
+// a magenta -> green transition passes through red/orange rather than sliding
+// through desaturated grey the way a linear RGB lerp does.
+static void HsvLerp3(const float a3[3], const float b3[3], float t, float out[3]) {
+    float ha, sa, va, hb, sb, vb;
+    RgbToHsv(a3, ha, sa, va);
+    RgbToHsv(b3, hb, sb, vb);
+    float dh = hb - ha;
+    if (dh > 0.5f) dh -= 1.0f;
+    if (dh < -0.5f) dh += 1.0f;
+    float h = fmodf(ha + dh * t + 1.0f, 1.0f);
+    RGB c = HSVtoRGB(h, sa + (sb - sa) * t, va + (vb - va) * t);
+    out[0] = c.r; out[1] = c.g; out[2] = c.b;
+}
+
+// Rebuild the whole palette around two vivid anchors, reusing the S/V ratios
+// of the hand-tuned palette so a swept pair has the same internal structure:
+// four close oil shades, an ink ramp of [ink mid, near-black, oil dark, oil
+// bright], and a bright ink-hue meniscus.
+static void BuildAcidPalette(const LiquidAcidConfig& a, const float oilA[3],
+                             const float inkA[3], float outOil[12],
+                             float outInk[12], float outMen[3]) {
+    float ho, so, vo, hi, si, vi;
+    RgbToHsv(oilA, ho, so, vo);
+    RgbToHsv(inkA, hi, si, vi);
+    // the authored oil family's spread around its first entry
+    static const float sMul[4] = { 1.000f, 1.055f, 1.019f, 1.058f };
+    static const float vMul[4] = { 1.000f, 1.057f, 0.952f, 1.087f };
+    for (int i = 0; i < 4; i++) {
+        RGB c = HSVtoRGB(ho, fminf(so * sMul[i], 1.0f), fminf(vo * vMul[i], 1.0f));
+        outOil[i * 3 + 0] = c.r; outOil[i * 3 + 1] = c.g; outOil[i * 3 + 2] = c.b;
+    }
+    auto put = [&](int i, float h, float sat, float val) {
+        RGB c = HSVtoRGB(h, fminf(sat, 1.0f), fminf(val, 1.0f));
+        outInk[i * 3 + 0] = c.r; outInk[i * 3 + 1] = c.g; outInk[i * 3 + 2] = c.b;
+    };
+    // Dark base. In every reference the ink is mostly NEAR-BLACK, with the
+    // colour living in bands and filaments (ref 2: deep purple-black, lilac
+    // only at the fronts). Stops 0/1 therefore keep the ink hue but stay dark;
+    // only stops 2/3 carry the vivid complement, so the open ink reads as a
+    // tinted black instead of flooding with mid tone.
+    put(0, hi, si,          vi * 0.260f);   // dark base (the open ink)
+    put(1, hi, si * 0.850f, vi * 0.090f);   // near-black, ink-tinted
+    put(2, hi, si,          vi * 0.720f);   // mid band
+    put(3, hi, si * 0.800f, vi * 1.450f);   // vivid front / filament band
+    RGB m = HSVtoRGB(hi, fminf(si * 0.745f, 1.0f), fminf(vi * 1.858f, 1.0f));
+    outMen[0] = m.r; outMen[1] = m.g; outMen[2] = m.b;
+    (void)a;
+}
+
+// Saturation-weighted mean HSV hue of the oil palette, in the same
+// parameterisation the shader measures the ink ramp with, so the complement
+// clamp is consistent on both sides.
+static float OilMeanHueDeg(const float cols[12]) {
+    float sx = 0.0f, sy = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        const float c[3] = { cols[i * 3 + 0], cols[i * 3 + 1], cols[i * 3 + 2] };
+        float h, sat, val;
+        RgbToHsv(c, h, sat, val);
+        const float a = h * 6.2831853f, w = sat * val;
+        sx += cosf(a) * w;
+        sy += sinf(a) * w;
+    }
+    if (sx * sx + sy * sy < 1e-12f) return 0.0f;
+    float d = atan2f(sy, sx) * 180.0f / 3.14159265358979f;
+    return d < 0.0f ? d + 360.0f : d;
+}
 
 // Private deterministic RNG: the blob population must replay exactly under a
 // --shot seed, and must not perturb the fluid's own rand() sequence (which
@@ -1787,11 +1885,7 @@ void FluidRenderer::SeedAcidBlobs() {
     auto drawR = [&](float lo, float hi, float bias) {
         return lo + (hi - lo) * powf(rng.f(), fmaxf(bias, 0.05f));
     };
-    auto setCol = [&](AcidBlob& b, int idx) {
-        b.col[0] = a.oilColors[idx * 3 + 0];
-        b.col[1] = a.oilColors[idx * 3 + 1];
-        b.col[2] = a.oilColors[idx * 3 + 2];
-    };
+    auto setCol = [&](AcidBlob& b, int idx) { b.colIdx = idx & 3; };
     auto place = [&](AcidBlob& b, float x, float y) {
         b.x = x; b.y = y; b.vx = b.vy = 0.0f;
         b.phase = rng.f(0.0f, TWO_PI);
@@ -2014,6 +2108,28 @@ void FluidRenderer::UploadAcidConstants() {
     const UINT fi = m_frameIndex;
     if (!m_acidBlobData[fi] || !m_acidParamData[fi]) return;
 
+    // ---- effective palette for this frame -------------------------------
+    // With the sweep off this is just the authored palette. With it on, the
+    // oil anchor and the ink mid tone cross-fade between curated vivid pairs
+    // and the rest of the palette is rebuilt around them using the authored
+    // palette's own S/V ratios.
+    float effOil[12], effInk[12], effMen[3];
+    memcpy(effOil, a.oilColors, sizeof(effOil));
+    memcpy(effInk, a.inkRamp, sizeof(effInk));
+    memcpy(effMen, a.meniscusCol, sizeof(effMen));
+    if (a.hueSweepPeriod > 0.01f) {
+        const int np = LiquidAcidConfig::kSweepPairs;
+        const float u = fmodf(m_time / a.hueSweepPeriod, 1.0f) * np;
+        const int k0 = (int)u % np, k1 = (k0 + 1) % np;
+        // smoothstep the cross-fade so each pair gets a long settled stretch
+        float f = u - floorf(u);
+        f = f * f * (3.0f - 2.0f * f);
+        float oilA[3], inkA[3];
+        HsvLerp3(&a.sweepOil[k0 * 3], &a.sweepOil[k1 * 3], f, oilA);
+        HsvLerp3(&a.sweepInk[k0 * 3], &a.sweepInk[k1 * 3], f, inkA);
+        BuildAcidPalette(a, oilA, inkA, effOil, effInk, effMen);
+    }
+
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
     const int n = (int)m_acidBlobs.size();
     for (int i = 0; i < n && i < kAcidMaxBlobs; i++) {
@@ -2022,20 +2138,21 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].a[1] = b.y;
         dst[i].a[2] = b.baseR * (1.0f + a.breathAmt * sinf(b.phase));
         dst[i].a[3] = b.wgt;
-        dst[i].b[0] = b.col[0];
-        dst[i].b[1] = b.col[1];
-        dst[i].b[2] = b.col[2];
+        const int ci = (b.colIdx < 0 || b.colIdx > 3) ? 0 : b.colIdx;
+        dst[i].b[0] = effOil[ci * 3 + 0];
+        dst[i].b[1] = effOil[ci * 3 + 1];
+        dst[i].b[2] = effOil[ci * 3 + 2];
         dst[i].b[3] = 0.0f;
     }
 
     AcidParamsGPU p = {};
     for (int i = 0; i < 4; i++) {
-        p.oil[i][0] = a.oilColors[i * 3 + 0];
-        p.oil[i][1] = a.oilColors[i * 3 + 1];
-        p.oil[i][2] = a.oilColors[i * 3 + 2];
-        p.ink[i][0] = a.inkRamp[i * 3 + 0];
-        p.ink[i][1] = a.inkRamp[i * 3 + 1];
-        p.ink[i][2] = a.inkRamp[i * 3 + 2];
+        p.oil[i][0] = effOil[i * 3 + 0];
+        p.oil[i][1] = effOil[i * 3 + 1];
+        p.oil[i][2] = effOil[i * 3 + 2];
+        p.ink[i][0] = effInk[i * 3 + 0];
+        p.ink[i][1] = effInk[i * 3 + 1];
+        p.ink[i][2] = effInk[i * 3 + 2];
     }
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
     float p0[4] = { (float)(n < kAcidMaxBlobs ? n : kAcidMaxBlobs),
@@ -2052,9 +2169,13 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
     memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
     float p10[4] = { a.swarmClump, a.swarmDark, 0.0f, 0.0f };
-    float men[4] = { a.meniscusCol[0], a.meniscusCol[1], a.meniscusCol[2], 0.0f };
+    // Target ink hue = the oil family's mean hue, swept, plus 180 degrees.
+    float targetHue = fmodf(OilMeanHueDeg(effOil) + 180.0f, 360.0f);
+    float p11[4] = { a.inkComplementLock ? 1.0f : 0.0f, a.inkComplementSpan,
+                     targetHue, 0.0f };   // .w unused: the sweep is applied above
+    float men[4] = { effMen[0], effMen[1], effMen[2], 0.0f };
     memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
-    memcpy(p.p10, p10, 16); memcpy(p.men, men, 16);
+    memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 }
 

@@ -246,6 +246,8 @@ static void BuildDefs() {
         { L"Ink band softness",                 0.01f, 0.5f, 0.01f, 2, &c.acid.inkSoft,       nullptr, L"liquid_acid", L"ink_soft", false, nullptr, 3, L"0 = hard steps between bands" },
         { L"Ink palette strength",              0,     1,    0.02f, 2, &c.acid.inkMix,        nullptr, L"liquid_acid", L"ink_mix", false, nullptr, 3, L"0 = keep the normal fluid colours, 1 = full duotone ramp" },
         { L"Ink hue variation (deg)",           0,     90,   1,     0, &c.acid.inkHueVary,    nullptr, L"liquid_acid", L"ink_hue_vary", false, nullptr, 3, L"Rotates the ramp by the dye's own hue so the ink still drifts" },
+        { L"Complement window (deg)",           5,     180,  1,     0, &c.acid.inkComplementSpan, nullptr, L"liquid_acid", L"ink_complement_span", false, nullptr, 3, L"How far the ink hue may wander from the oil's opposite. Small = strictly two-hue" },
+        { L"Palette sweep (s per cycle, 0=off)",   0,     600,  5,     0, &c.acid.hueSweepPeriod, nullptr, L"liquid_acid", L"hue_sweep_period", false, nullptr, 3, L"Cross-fade through the curated vivid complementary pairs. 0 = fixed palette" },
         { L"Ink ramp gain",                     0.3f,  3,    0.05f, 2, &c.acid.inkGain,       nullptr, L"liquid_acid", L"ink_gain", false, nullptr, 3, L"Maps dye brightness onto the ramp. Higher = more bright ink" },
         { L"Seam strength (dark edging)",       0,     1,    0.02f, 2, &c.acid.seamStrength,  nullptr, L"liquid_acid", L"seam_strength", false, nullptr, 3, L"Dark seams where the dye gradient is steep (acrylic-pour edging)" },
         { L"Seam threshold",                    0,     0.5f, 0.01f, 2, &c.acid.seamLo,        nullptr, L"liquid_acid", L"seam_lo", false, nullptr, 3, L"Gradient magnitude a seam starts at" },
@@ -275,6 +277,7 @@ static void BuildDefs() {
         // Look switch. Writes [look] liquid_acid=0|1; the ini also accepts
         // [look] style=fluid|liquid_acid. Needs an app restart: the display
         // PSO variant is built at device creation.
+        { L"Lock ink opposite the oil hue",     &c.acid.inkComplementLock, L"liquid_acid", L"ink_complement_lock", nullptr, 3, L"Hold the ink's hue on the far side of the wheel from the oil" },
         { L"Liquid Acid look (restart)",        &c.acid.enabled,     L"look",     L"liquid_acid", nullptr, 3, L"Oil-on-inked-water render look. Takes effect on the next app start" },
         { L"Start with Windows",                nullptr,             nullptr,     nullptr, nullptr, 3, nullptr },
     };

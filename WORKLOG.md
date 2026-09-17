@@ -695,3 +695,17 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   on palette A's banded ink with one headless render (build2/shots/rim/a-rim-090.png): halo
   brightens where bright filaments meet the edge, fades on dark stretches, no artefacts.
   Applied 0.7/0.8 to liquid-acid-a/b/c and -a-sweep inis.
+- Rim softened to 0.4/0.5 everywhere (user: "not the harder one"), 5669297. OLED set to 0
+  via DDC (panels in standby; readback 0/0, re-check when awake).
+- Research (Opus, web only): reference/research/LIQUID-ACID-RESEARCH.md — no official
+  breakdown exists; genre setup = backlit glass dish, oil on dyed water, macro from above
+  (a transmission image -> Beer-Lambert ink is right); rim = meniscus refraction, dark
+  inside / bright outside, bright half is concentrated background colour (rim_ink_follow
+  -> ~1.0); discs vs webs are one dewetting-coverage parameter, not three fracs; palettes
+  sampled as hex; grade = crushed warm toe, grain in shadows, per-channel clipping.
+- "Odd combos" of ink physics + WE automation (build2/shots/combo/, inis derived from
+  we-look-live): c3 = style=ink inverted, chroma 1, full WE emission -> opaque marbled
+  paint-pour look (no clear water), sent to user. c1/c5 (WE + gravity / + drops) dim at
+  t=75 (parity dark phase). c2/c4 (drops-only emission under the parity chain) render
+  nearly black: one dim drop by 40 s — the periodic emitter + fluid colour path needs a
+  debug pass (governor? PickSplatColor brightness? interval?).

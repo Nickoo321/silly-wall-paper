@@ -1261,7 +1261,16 @@ R"hlsl(
     // zero deep inside a merged mass so no concentric rings appear there.
     float rimX = (sdf - rimCtr) / rimHW;
     float rimB = exp(-rimX * rimX)
-               * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field));
+               * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field))
+    // ...and the SAME |grad| gate the bright halo already carries. sdf =
+    // (field - thresh) / |grad| is only a distance where the gradient is
+    // strong; between two surfaces that are nearly merged (or nearly necked
+    // apart) both the deficit and the gradient collapse, and the quotient
+    // still lands inside the rim band -- painting a thin dark ARC along a
+    // saddle with no isoline under it. That is the curved hairline the user
+    // photographed below a big hole. The halo was gated for exactly this
+    // reason and the dark twin never was.
+               * smoothstep(0.5, 1.5, gl);
     // The hairline lives only where the halo does, and the soft thickness
     // edge has already taken over most of its job.
     float rimK = saturate(laP1.z) * haloInk * (1.0 - 0.65 * saturate(laP13.x));

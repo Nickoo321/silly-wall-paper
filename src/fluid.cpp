@@ -2434,8 +2434,18 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // size (a visible loop once the whole column has cycled once). The
         // population is unchanged either way -- this is a teleport, not a
         // spawn -- so nothing about the field's density moves.
+        // A blob's FIELD reaches baseR * support_scale, not baseR, so the old
+        // test (centre above -margin-baseR) teleported a big disc while its
+        // lower lobe was still a quarter of the way down the screen: the whole
+        // top of the frame twitched every time one respawned. That was the
+        // user's "there is some flickering sometimes". Use the support radius,
+        // cut at the distance where the Wyvill kernel has decayed to ~2% --
+        // past that the blob cannot move any isoline. For the small kinds this
+        // is a SHORTER trip than the old margin+baseR, so the on-screen
+        // population does not thin out.
+        const float supOut = b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
         const bool respawnMode = (a.riseSpeed > 1e-6f && a.riseRespawn);
-        if (respawnMode && b.y < -m - b.baseR) {
+        if (respawnMode && b.y < -supOut) {
             auto rf = [&]() {
                 m_acidRespawnRng ^= m_acidRespawnRng << 13;
                 m_acidRespawnRng ^= m_acidRespawnRng >> 17;
@@ -2448,7 +2458,7 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             else if (b.kind == 3) { lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; }
             b.baseR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
             b.x = rf();
-            b.y = 1.0f + m + b.baseR;
+            b.y = 1.0f + b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
             b.vx = 0.0f;
             b.vy = 0.0f;
             b.s1 = rf() * 6.2831853f;
@@ -2463,7 +2473,7 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // it a strong downward eddy could carry one off and the rise would
         // take minutes to bring it back, thinning the population for free.
         if (respawnMode) {
-            const float floorY = 1.0f + m + b.baseR + 0.06f;
+            const float floorY = 1.0f + supOut + 0.06f;
             if (b.y > floorY) { b.y = floorY; if (b.vy > 0.0f) b.vy = 0.0f; }
         }
 

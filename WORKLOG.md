@@ -709,3 +709,11 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   t=75 (parity dark phase). c2/c4 (drops-only emission under the parity chain) render
   nearly black: one dim drop by 40 s — the periodic emitter + fluid colour path needs a
   debug pass (governor? PickSplatColor brightness? interval?).
+- Automation-on-ink combos that WORK (user's intent: the WE automated emission driving the
+  ink physics, not one scripted drop): ink-auto-drops.ini (style=ink inverted, chroma 1,
+  hue-cycled drops density 6 every ~4 s + gravity 2, no WE emission -> coloured drop caps in
+  clear water), ink-auto-bursts.ini (WE idle bursts + darts, no wanderers, parity fade
+  0.999 so water clears, gravity 2 -> coloured ink clouds with curls on black),
+  ink-auto-bursts-drops.ini (both). Drops in the WE colour path need density ~6 because
+  WE palette colours are scaled 0.15 and single splats never "ignite". Sheet:
+  build2/shots/combo/auto-sheet.png. c3 (full WE emission) = opaque paint-pour, no water.

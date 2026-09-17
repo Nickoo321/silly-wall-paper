@@ -38,5 +38,10 @@ if (-not (Test-Path $src)) { Log "ini not found: $src"; exit 1 }
 if (-not (Test-Path $bak)) { Copy-Item $live $bak; Log "backup written: $bak" } else { Log "backup already exists (kept): $bak" }
 Copy-Item $src $live -Force
 Stop-Port
-Start-Process (Join-Path $root "build2\FluidWallpaper.exe") -WorkingDirectory (Join-Path $root "build2")
-Log "live settings.ini <- $src ; launched build2\FluidWallpaper.exe"
+# Launch a COPY so agents can keep rebuilding build2\FluidWallpaper.exe while the live one runs
+$liveDir = Join-Path $root "build2\live"
+if (-not (Test-Path $liveDir)) { New-Item -ItemType Directory -Path $liveDir | Out-Null }
+Copy-Item (Join-Path $root "build2\FluidWallpaper.exe") (Join-Path $liveDir "FluidWallpaper.exe") -Force
+Get-ChildItem (Join-Path $root "build2") -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination $liveDir -Force
+Start-Process (Join-Path $liveDir "FluidWallpaper.exe") -WorkingDirectory $liveDir
+Log "live settings.ini <- $src ; launched build2\live\FluidWallpaper.exe (copy of build2)"

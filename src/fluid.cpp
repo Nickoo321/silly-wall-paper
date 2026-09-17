@@ -13,6 +13,8 @@
 using Microsoft::WRL::ComPtr;
 
 extern void Fail(const char* what, HRESULT hr);   // main.cpp
+extern void WpLog(const char* fmt, ...);          // main.cpp: rolling log file
+extern void ForegroundDesc(char* out, size_t cap);
 #define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) Fail(#expr, _hr); } while (0)
 
 // Must match cbuffer CB in shaders.h (22 DWORDs).
@@ -118,10 +120,54 @@ void FluidRenderer::InitCommon(HWND hwnd, int width, int height, const FluidConf
     }
 
     CreateDevice(hwnd, width, height);
+    if (FAILED(m_initHr)) return;   // swap chain refused; TryInit() cleans up
     if (!m_cfg.gradientMode) CreateSimResources();
     printf("Renderer ready (%s), sim %dx%d, dye %dx%d\n",
            m_cfg.gradientMode ? "gradient mode" : "fluid",
            m_simW, m_simH, m_dyeW, m_dyeH);
+}
+
+// The one call that is allowed to fail without taking the process with it.
+// DXGI refuses a flip-model swap chain with E_ACCESSDENIED while another app
+// holds the output exclusively -- a fullscreen game, or DWM composition still
+// being torn down -- and the resume out of a fullscreen pause fires at exactly
+// that moment. Every attempt is logged with its HRESULT and with whatever owns
+// the foreground, because that is the diagnosis.
+bool FluidRenderer::CreateSwapChainSoft(HWND hwnd, const DXGI_SWAP_CHAIN_DESC1& sd,
+                                        Microsoft::WRL::ComPtr<IDXGISwapChain1>& out) {
+    HRESULT hr = m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd,
+                                                   nullptr, nullptr, &out);
+    if (SUCCEEDED(hr)) return true;
+    char fg[256];
+    ForegroundDesc(fg, sizeof(fg));
+    WpLog("CreateSwapChainForHwnd hwnd=%p %dx%d FAILED hr=0x%08lX  %s",
+          (void*)hwnd, (int)sd.Width, (int)sd.Height, (unsigned long)hr, fg);
+    printf("CreateSwapChainForHwnd failed (hr=0x%08lX) - %s\n", (unsigned long)hr, fg);
+    if (m_softInit) { m_initHr = hr; return false; }
+    Fail("m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1)", hr);
+    return false;
+}
+
+// Init(), but a refused swap chain unwinds to a clean torn-down renderer and
+// returns false instead of putting a fatal dialog over a black desktop.
+bool FluidRenderer::TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg) {
+    m_softInit = true;
+    m_initHr = S_OK;
+    InitCommon(hwnd, width, height, cfg);
+    m_softInit = false;
+    if (FAILED(m_initHr)) {
+        Shutdown();       // releases whatever CreateDevice managed to build
+        return false;
+    }
+    return true;
+}
+
+bool FluidRenderer::TryReattach(HWND hwnd) {
+    m_softInit = true;
+    m_initHr = S_OK;
+    Reattach(hwnd);
+    m_softInit = false;
+    return SUCCEEDED(m_initHr);
 }
 
 void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
@@ -162,7 +208,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
 
         ComPtr<IDXGISwapChain1> sc1;
-        HR(m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1));
+        if (!CreateSwapChainSoft(hwnd, sd, sc1)) return;
         HR(sc1.As(&m_swapChain));
         m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
@@ -1577,10 +1623,21 @@ void FluidRenderer::Shutdown() {
         if (m_acidBlobUpload[i])  { m_acidBlobUpload[i]->Unmap(0, nullptr);  m_acidBlobUpload[i].Reset(); }
         if (m_acidParamUpload[i]) { m_acidParamUpload[i]->Unmap(0, nullptr); m_acidParamUpload[i].Reset(); }
         if (m_inkParamUpload[i])  { m_inkParamUpload[i]->Unmap(0, nullptr);  m_inkParamUpload[i].Reset(); }
+        if (m_dropletUpload[i])     { m_dropletUpload[i]->Unmap(0, nullptr);     m_dropletUpload[i].Reset(); }
+        if (m_dropletCellUpload[i]) { m_dropletCellUpload[i]->Unmap(0, nullptr); m_dropletCellUpload[i].Reset(); }
         m_acidBlobData[i] = nullptr;
         m_acidParamData[i] = nullptr;
         m_inkParamData[i] = nullptr;
+        m_dropletData[i] = nullptr;
+        m_dropletCellData[i] = nullptr;
     }
+    // droplet particle sim: the population is CPU state, a resume reseeds it
+    m_acidDrops.clear();
+    m_dropletOrder.clear();
+    m_dropletCellStart.clear();
+    m_dropletCellCount.clear();
+    m_dropletSeededFor = -1;
+    m_dropletSpawnAcc = 0.0f;
     m_velReadback.Reset();
     m_velPending = false;
     m_acidBlobs.clear();
@@ -1713,7 +1770,7 @@ void FluidRenderer::Reattach(HWND hwnd) {
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     sd.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
     ComPtr<IDXGISwapChain1> sc1;
-    HR(m_factory->CreateSwapChainForHwnd(m_queue.Get(), hwnd, &sd, nullptr, nullptr, &sc1));
+    if (!CreateSwapChainSoft(hwnd, sd, sc1)) return;
     HR(sc1.As(&m_swapChain));
     m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
     ReassertColorSpace();

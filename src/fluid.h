@@ -601,6 +601,17 @@ struct FrameInput {
 class FluidRenderer {
 public:
     void Init(HWND hwnd, int width, int height, const FluidConfig& cfg);
+    // Init() and Reattach() for the paths that MUST NOT kill the process.
+    // Creating a swap chain can be refused by DXGI for reasons that have
+    // nothing to do with us and everything to do with what else owns the
+    // screen: a fullscreen game that still holds the output exclusively
+    // returns E_ACCESSDENIED, and the resume out of a fullscreen pause fires
+    // at exactly the moment that game is handing the output back. That used
+    // to reach Fail() and put up a fatal dialog over a black desktop. These
+    // return false instead, leaving the renderer fully torn down and safe to
+    // try again; the caller backs off and retries.
+    bool TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg);
+    bool TryReattach(HWND hwnd);
     // Headless capture mode (--shot): device WITHOUT a swap chain, no window.
     // The display pass renders into an FP16 (R16G16B16A16_FLOAT) offscreen RT
     // of the requested size; CaptureOffscreen() reads it back as linear scRGB.
@@ -654,6 +665,9 @@ public:
     // No-op headless or while the swap chain is gone.
     void PresentBlack();
     void Reattach(HWND hwnd);   // new swapchain after Explorer restart; sim state survives
+    // Shared by CreateDevice and Reattach; soft-fails under TryInit/TryReattach.
+    bool CreateSwapChainSoft(HWND hwnd, const DXGI_SWAP_CHAIN_DESC1& sd,
+                             Microsoft::WRL::ComPtr<IDXGISwapChain1>& out);
     bool PresentBroken() const { return m_presentBroken; }   // window died mid-frame
     // second-monitor mirror
     void EnableMirror(HWND hwnd, int width, int height);
@@ -698,6 +712,10 @@ private:
     struct DoubleTex { Tex a, b; Tex* read = &a; Tex* write = &b; void Swap() { Tex* t = read; read = write; write = t; } };
 
     void InitCommon(HWND hwnd, int width, int height, const FluidConfig& cfg);
+    // Set while TryInit/TryReattach are running: the swap-chain creation then
+    // records its HRESULT in m_initHr and unwinds instead of calling Fail().
+    bool     m_softInit = false;
+    HRESULT  m_initHr = S_OK;
     void CreateDevice(HWND hwnd, int width, int height);
     void CreateOffscreenTarget();      // headless render target + readback
     // One display/gradient graphics PSO from `src`, optionally with defines.

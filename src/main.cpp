@@ -30,6 +30,7 @@
 //   --mouse-none       no mouse splats (the default in shot mode)
 
 #include <windows.h>
+#include <cstdarg>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <dxgi1_6.h>
@@ -86,6 +87,59 @@ wchar_t         g_iniPath[MAX_PATH] = {};
 wchar_t         g_configIniPath[MAX_PATH] = {};   // == g_iniPath unless --ini
 bool            g_configReadOnly = false;         // --shot: never write config
 
+// ---------------------------------------------------------------------------
+// Rolling diagnostic log, %APPDATA%\FluidWallpaper\FluidWallpaper.log.
+// Deliberately tiny and append-only. It exists because a swap-chain creation
+// was once DENIED on a resume while a fullscreen game owned the output
+// (E_ACCESSDENIED), and all the evidence there was of it was one fatal
+// message box and a dead process. Now every attempt, its HRESULT and what was
+// in the foreground land here. Nobody creates this file by hand -- the first
+// WpLog() call does. Skipped entirely under --shot (g_configReadOnly), so a
+// headless render still writes nothing anywhere.
+// ---------------------------------------------------------------------------
+wchar_t         g_logPath[MAX_PATH] = {};
+void WpLog(const char* fmt, ...) {
+    if (g_configReadOnly || !g_logPath[0]) return;
+    char line[1024];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int n = _snprintf_s(line, _TRUNCATE, "[%04d-%02d-%02d %02d:%02d:%02d.%03d] ",
+                        st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
+                        st.wSecond, st.wMilliseconds);
+    if (n < 0) return;
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(line + n, sizeof(line) - n, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    strcat_s(line, "\r\n");
+    HANDLE h = CreateFileW(g_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;
+    LARGE_INTEGER sz = {};
+    // Roll at 256 KB by truncating: a wallpaper must never fill a disk, and
+    // the interesting entries are always the last ones.
+    if (GetFileSizeEx(h, &sz) && sz.QuadPart > 256 * 1024) {
+        SetFilePointer(h, 0, nullptr, FILE_BEGIN);
+        SetEndOfFile(h);
+    }
+    DWORD wrote = 0;
+    WriteFile(h, line, (DWORD)strlen(line), &wrote, nullptr);
+    CloseHandle(h);
+}
+
+// Foreground window class + title for those log lines: when a swap chain is
+// refused, WHICH app owns the screen is the whole diagnosis.
+void ForegroundDesc(char* out, size_t cap) {
+    HWND fg = GetForegroundWindow();
+    wchar_t cls[96] = L"?", title[128] = L"?";
+    if (fg) {
+        GetClassNameW(fg, cls, 96);
+        GetWindowTextW(fg, title, 128);
+    }
+    _snprintf_s(out, cap, _TRUNCATE, "fg='%ls' title='%ls'%s", cls, title,
+                (fg && IsZoomed(fg)) ? " maximized" : "");
+}
+
 static void InitSettingsPath() {
     wchar_t* appdata = nullptr;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &appdata))) {
@@ -94,6 +148,7 @@ static void InitSettingsPath() {
         CoTaskMemFree(appdata);
         CreateDirectoryW(dir, nullptr);
         _snwprintf_s(g_iniPath, _TRUNCATE, L"%s\\settings.ini", dir);
+        _snwprintf_s(g_logPath, _TRUNCATE, L"%s\\FluidWallpaper.log", dir);
     }
     wcscpy_s(g_configIniPath, MAX_PATH, g_iniPath);
 }
@@ -2098,6 +2153,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     bool blackFramePending = true;        // one black frame per manual pause
     static bool g_suspended = false;      // renderer fully torn down
     static bool fsSuspended = false;      // suspension came from the fs trigger
+    // Resume retry state. resumeWanted stays true from the moment something
+    // asked for a resume until one actually succeeds, so a refusal is a delay
+    // and never a permanently black desktop.
+    static bool       resumeWanted = false;
+    static int        resumeFails = 0;
+    static ULONGLONG  nextResumeTry = 0;
     static FluidConfig savedCfg;          // live config snapshot for the resume
     const ULONGLONG bootTick = GetTickCount64();   // --test-suspend clock
 
@@ -2110,11 +2171,49 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         printf("[%02d:%02d:%02d.%03d] renderer suspended (%s)\n",
                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, why);
     };
-    auto resumeRenderer = [&]() {
+    auto resumeRenderer = [&]() -> bool {
         // same Init call as startup, then the startup state restore: resolved
         // HDR options (like the per-frame call site does), coverage override,
         // scRGB color space.
-        renderer.Init(hwnd, width, height, savedCfg);
+        //
+        // TryInit, not Init: DXGI refuses a swap chain with E_ACCESSDENIED
+        // while another app still holds the output exclusively, and this
+        // resume fires at exactly the moment a fullscreen game is handing the
+        // output back. That used to reach Fail() -- a fatal dialog over a
+        // black desktop, which is how the wallpaper died once. Now a refusal
+        // leaves the renderer torn down and we come back later.
+        if (!renderer.TryInit(hwnd, width, height, savedCfg)) {
+            resumeFails++;
+            // 250 ms, 500, 1 s, 2, 4, 8, 16, then every 30 s
+            ULONGLONG back = 250ull << (resumeFails - 1 < 6 ? resumeFails - 1 : 6);
+            if (back > 30000ull) back = 30000ull;
+            nextResumeTry = GetTickCount64() + back;
+            char fg[256];
+            ForegroundDesc(fg, sizeof(fg));
+            WpLog("resume attempt %d failed, retrying in %llu ms  %s",
+                  resumeFails, (unsigned long long)back, fg);
+            printf("resume failed (attempt %d), retrying in %llu ms\n",
+                   resumeFails, (unsigned long long)back);
+            // After a couple of minutes of refusals the window itself is the
+            // likeliest suspect (Explorer restarted while we were suspended
+            // and this hwnd is parented to a WorkerW that no longer exists),
+            // so rebuild it before the next try.
+            if (resumeFails >= 8) {
+                HWND host2 = FindWallpaperHost();
+                if (host2) {
+                    HWND fresh = CreateWallpaperWindow(host2, width, height);
+                    if (fresh) {
+                        if (hwnd && fresh != hwnd) DestroyWindow(hwnd);
+                        hwnd = fresh;
+                        g_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
+                        WpLog("resume: rebuilt the wallpaper window (hwnd=%p)", (void*)hwnd);
+                    }
+                }
+            }
+            return false;
+        }
+        resumeFails = 0;
+        nextResumeTry = 0;
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;
         renderer.SetHdrOptions(peak, g_gamutMode);
         renderer.SetCoverageWanted(g_moodSettings.enabled);
@@ -2129,6 +2228,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         GetLocalTime(&st);
         printf("[%02d:%02d:%02d.%03d] renderer resumed\n",
                st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        WpLog("renderer resumed");
+        return true;
     };
 
     ULONGLONG lastFsCheck = 0, lastHdrCheck = 0;
@@ -2161,10 +2262,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                     hwnd = CreateWallpaperWindow(newHost, width, height);
                     g_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
                     // suspended: skip the swapchain-only reattach — the resume
-                    // does a full Init() onto this new window instead
-                    if (!g_suspended) renderer.Reattach(hwnd);
-                    g_wallpaperLost = false;
-                    QueryPerformanceCounter(&prev);
+                    // does a full Init() onto this new window instead.
+                    // TryReattach: this one creates a swap chain too, and it
+                    // can be refused for the same reasons. Staying "lost" just
+                    // means this 1 s loop asks again.
+                    if (!g_suspended && !renderer.TryReattach(hwnd)) {
+                        WpLog("reattach refused, staying lost (hwnd=%p)", (void*)hwnd);
+                    } else {
+                        g_wallpaperLost = false;
+                        QueryPerformanceCounter(&prev);
+                    }
                 }
             }
             if (g_wallpaperLost) {
@@ -2275,7 +2382,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             // fullscreen app exited: rebuild the renderer like startup did
             fsSuspended = false;
             fsPausedSince = 0;
-            resumeRenderer();
+            resumeWanted = true;
+            nextResumeTry = 0;
+        }
+
+        // Resume (or re-try a refused resume) on its own backoff clock. The
+        // game may still own the output for a while after it loses the
+        // foreground, so the first attempt is quite likely to be refused --
+        // that is normal and costs one log line, not the process.
+        if (g_suspended && resumeWanted && !g_wallpaperLost &&
+            tick >= nextResumeTry) {
+            if (resumeRenderer()) resumeWanted = false;
         }
 
         // hidden test hook: force one suspend ~3 s after start, resume ~8 s
@@ -2284,9 +2401,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             if (!g_suspended && el >= 3.0 && el < 8.0) {
                 printf("[test-suspend] forcing suspend at %.1f s\n", el);
                 suspendRenderer("test hook, freeing GPU/RAM");
-            } else if (g_suspended && !fsSuspended && el >= 8.0) {
+            } else if (g_suspended && !fsSuspended && !resumeWanted && el >= 8.0) {
                 printf("[test-suspend] forcing resume at %.1f s\n", el);
-                resumeRenderer();
+                resumeWanted = true;
+                nextResumeTry = 0;
             }
         }
 

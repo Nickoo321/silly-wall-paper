@@ -604,3 +604,18 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   concurrent render): fluid baseline, +0.87 ms full acid, +1.01 ms with lock+sweep at 1440p.
   Open: gold/violet pair = big bright yellow area at SDR white (ABL exposure, unchecked on
   panel); swept ink has no oil-hue bands (dark-base rule) — A keeps orange marbling.
+
+## 2026-09-17 — session-limit cutoff; 3D parked; 2D ink finishing
+
+- Both Opus executors died at the 5-hour session limit (~23:30 on 09-16). User: stagger
+  subagents, one at a time; "3D can be next week's job".
+- **3D ink (src_ink3d/, build3/) parked as WIP**: M0 passes (raymarch, jitter fixed the
+  banding); M1 drop rendered as a striped streak — bisected to the per-frame unsharp
+  `sharpen` pass running unbounded (bi-sharp0-040.png shows a clean falling blob with it
+  off). Resume point: bound/disable sharpen, re-run M1 gates, then M2 (vorticity/buoyancy
+  tuned to the plume look) and timings. Plan: reference/INK3D-PLAN.md.
+- **2D ink**: the "entry orb" that ate ~20 renders was the periodic drop EMITTER's first
+  drop (interval 9 s, timer primed at 0.3..1.0 x interval) landing at t~6-7 s, not the
+  Gaussian halo — found by reading UpdateDrops. Shot inis now use drops=0 (QueueDrop still
+  works); shipped inis keep drops=1. Final 1080p sheet rendering (paper / inverted /
+  acid-water); acid-water tile drifted to ~90% oil coverage — to fix from liquid-acid-a.ini.

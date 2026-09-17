@@ -24,3 +24,12 @@ add_executable(AcidWallpaper WIN32 src_acid/main.cpp src_acid/acid.cpp)
 target_compile_definitions(AcidWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(AcidWallpaper PRIVATE /utf-8)
 target_link_libraries(AcidWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32)
+
+# Ink3DWallpaper — standalone 3D "ink in water" simulation (src_ink3d/).
+# Separate launcher; shares no sources with the other targets. Milestones
+# M0-M2 are HEADLESS: --shot only, no window, no WorkerW, no tray.
+# Build it in build3/ so it never fights build/ or build2/.
+add_executable(Ink3DWallpaper WIN32 src_ink3d/main.cpp src_ink3d/ink3d.cpp src_ink3d/config.cpp)
+target_compile_definitions(Ink3DWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(Ink3DWallpaper PRIVATE /utf-8)
+target_link_libraries(Ink3DWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)

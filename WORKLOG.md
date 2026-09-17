@@ -691,3 +691,7 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   rim-ab.png, rim-refsheet.png.
 - `style=fluid` regression: we-look-live.ini 60 s 2560x1440 md5
   **10E36EBF1A74EDFE609065D757300054** before and after (build2/shots/rim/regress-fluid.png).
+- Rim follow-up landed (cf554e8). User: "new rim looks good". Verified rim_vary/rim_ink_follow
+  on palette A's banded ink with one headless render (build2/shots/rim/a-rim-090.png): halo
+  brightens where bright filaments meet the edge, fades on dark stretches, no artefacts.
+  Applied 0.7/0.8 to liquid-acid-a/b/c and -a-sweep inis.

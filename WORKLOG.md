@@ -717,3 +717,7 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   ink-auto-bursts-drops.ini (both). Drops in the WE colour path need density ~6 because
   WE palette colours are scaled 0.15 and single splats never "ignite". Sheet:
   build2/shots/combo/auto-sheet.png. c3 (full WE emission) = opaque paint-pour, no water.
+- User pick on the combos: ink-auto-bursts (WE bursts driving ink, clear water) and the
+  paint-pour (full WE emission through the ink render) are "the best for now", preferring the
+  crowded paint-pour -> tracked as reference/configs/ink-pour.ini. To be judged on the panel
+  later today via tools\panel-check.ps1 -Ini reference\configs\ink-pour.ini (then -Restore).

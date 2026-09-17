@@ -561,7 +561,9 @@ float3 InkWater(float3 C, float2 uv, float2 texel, float2 pos, out float hdrM) {
     // Complementary tints blend to grey-brown at the midpoint (the flat "mud"
     // on smooth mid-density plumes). Real ink goes DARK where it is neither
     // thin nor saturated, so dip the blend toward black around the midpoint.
-    tint *= 1.0 - ikP4.z * pow(4.0 * tk * (1.0 - tk), 2.0);
+    // Done on the opacity, so the dip shows the BACKGROUND colour (paper_color),
+    // which need not be black.
+    op *= 1.0 - ikP4.z * pow(4.0 * tk * (1.0 - tk), 2.0);
     hdrM = d * ikP3.y * InkMotion(uv);    // hot cores expand, veils stay SDR
     return lerp(ikPaper.rgb, tint * lerp(float3(1.0, 1.0, 1.0), chroma,
                                          saturate(ikP0.y)), op);

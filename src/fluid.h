@@ -258,8 +258,8 @@ struct InkConfig {
     // Faint dye below this opacity goes to the background instead of a
     // semi-transparent wash (inverted). 0 = off.             veil_floor
     float veilFloor    = 0.0f;
-    // Dip the duotone blend toward black around its midpoint so mid-density
-    // dye reads as dark ink instead of the grey-brown RGB midpoint. tint_mid_dip
+    // Dip the duotone opacity around its midpoint so mid-density dye shows
+    // the background colour instead of the grey-brown RGB midpoint. tint_mid_dip
     float tintMidDip   = 0.0f;
     float parallax     = 0.0f;      // cheap 2nd layer: 0 = off               parallax
     float parallaxScale= 0.92f;     //                                        parallax_scale

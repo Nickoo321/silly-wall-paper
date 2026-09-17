@@ -54,10 +54,21 @@
 
 using Microsoft::WRL::ComPtr;
 
+void WpLog(const char* fmt, ...);            // defined below; used by Fail()
+void ForegroundDesc(char* out, size_t cap);
+
 void Fail(const char* what, HRESULT hr) {
     char buf[512];
     _snprintf_s(buf, _TRUNCATE, "%s failed (hr=0x%08lX)", what, (unsigned long)hr);
     fprintf(stderr, "FATAL: %s\n", buf);
+    // Record it BEFORE the dialog. A fatal box the user dismisses -- or
+    // never sees, because a fullscreen game is covering it -- used to leave
+    // no evidence at all, which is exactly the position the second of the
+    // two crashes left us in. Now every Fail() is in the log with its
+    // HRESULT and with whatever owned the foreground.
+    char fgd[256];
+    ForegroundDesc(fgd, sizeof(fgd));
+    WpLog("FATAL %s  %s", buf, fgd);
     MessageBoxA(nullptr, buf, "Fluid Wallpaper - fatal error", MB_ICONERROR);
     ExitProcess(1);
 }
@@ -2128,7 +2139,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                g_monitor2Rect.right, g_monitor2Rect.bottom);
 
     FluidRenderer renderer;
-    renderer.Init(hwnd, width, height, cfg);
+    // STARTUP uses TryInit for the same reason the resume does. Both fatal
+    // dialogs the user hit were a swap chain refused while a game owned the
+    // output -- once on a resume, once on a launch. A wallpaper that cannot
+    // have the screen yet should WAIT for it, not put a message box over the
+    // game and quit. A refusal here simply starts the process in the same
+    // suspended state a fullscreen pause produces, and the backoff loop in
+    // the message loop brings it up as soon as the output is free.
+    bool startupOk = renderer.TryInit(hwnd, width, height, cfg);
+    if (!startupOk) {
+        char fgd[256];
+        ForegroundDesc(fgd, sizeof(fgd));
+        WpLog("startup Init refused; starting suspended and retrying  %s", fgd);
+        printf("startup: the swap chain was refused; waiting for the output\n");
+    }
     g_renderer = &renderer;
     renderer.SetCoverageWanted(g_moodSettings.enabled);
 
@@ -2160,6 +2184,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     static int        resumeFails = 0;
     static ULONGLONG  nextResumeTry = 0;
     static FluidConfig savedCfg;          // live config snapshot for the resume
+    if (!startupOk) {
+        // The startup Init was refused: come up in the SUSPENDED state and let
+        // the backoff loop below do exactly what it does after a game exits.
+        // Nothing else has to know: from here on this is an ordinary suspend.
+        savedCfg = cfg;
+        g_suspended = true;
+        resumeWanted = true;
+        nextResumeTry = 0;
+    }
     const ULONGLONG bootTick = GetTickCount64();   // --test-suspend clock
 
     auto suspendRenderer = [&](const char* why) {

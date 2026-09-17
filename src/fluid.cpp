@@ -212,12 +212,25 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         HR(sc1.As(&m_swapChain));
         m_factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
+        // Colour space, NOT fatal. An output that is being handed back by a
+        // fullscreen app can refuse these for a moment, and a wallpaper that
+        // is merely in the wrong colour space is still a wallpaper -- dying
+        // over it is not a trade anyone would make. ReassertColorSpace() runs
+        // on every resume and every reattach anyway, so a refusal here is
+        // corrected within a second.
         const DXGI_COLOR_SPACE_TYPE scRGB = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
         UINT support = 0;
-        HR(m_swapChain->CheckColorSpaceSupport(scRGB, &support));
-        if (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) {
-            HR(m_swapChain->SetColorSpace1(scRGB));
-            printf("Swap chain: R16G16B16A16_FLOAT, scRGB color space set (1.0 = 80 nits)\n");
+        HRESULT cshr = m_swapChain->CheckColorSpaceSupport(scRGB, &support);
+        if (FAILED(cshr)) {
+            WpLog("CheckColorSpaceSupport failed hr=0x%08lX (continuing in the default space)",
+                  (unsigned long)cshr);
+            printf("WARNING: CheckColorSpaceSupport failed (hr=0x%08lX)\n", (unsigned long)cshr);
+        } else if (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) {
+            HRESULT sshr = m_swapChain->SetColorSpace1(scRGB);
+            if (FAILED(sshr))
+                WpLog("SetColorSpace1 failed hr=0x%08lX", (unsigned long)sshr);
+            else
+                printf("Swap chain: R16G16B16A16_FLOAT, scRGB color space set (1.0 = 80 nits)\n");
         } else {
             printf("WARNING: scRGB color space not supported on this output!\n");
         }

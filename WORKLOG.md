@@ -727,3 +727,10 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   yellow/magenta}: build2/shots/combo/duo-*.png, sheets duo-pour-sheet / duo-bursts-sheet.
   Sent; awaiting pick. If approved: rotate the pair through the acid sweep list over time
   (small code change reusing the liquid_acid pair list).
+- User picked 3 duotones (pour teal/vermillion, pour yellow/magenta, bursts yellow/magenta) but
+  "the red one looks washed out". Root cause: my combo inis (from we-look-live) left
+  hueshift_enabled=1, which post-rotates the WHOLE frame with the CSS matrix (desaturating)
+  — so tints drifted (yellow/magenta rendered blue/green at t=75). Proof: same tints on
+  ink-inverted.ini rendered true. Fixed configs: reference/configs/ink-duo-*.ini
+  (hueshift off, grading neutral). Note: in SDR PNGs dim veils of a yellow tint read olive;
+  cores get the HDR lift on the panel.

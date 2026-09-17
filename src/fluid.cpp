@@ -334,21 +334,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     // --- graphics PSOs (display + gradient) ---
     auto makeGfx = [&](const char* src, ComPtr<ID3D12PipelineState>& pso,
                        const D3D_SHADER_MACRO* defines = nullptr) {
-        ComPtr<ID3DBlob> vs = Compile(src, "VSMain", "vs_5_0", defines);
-        ComPtr<ID3DBlob> ps = Compile(src, "PSMain", "ps_5_0", defines);
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
-        pd.pRootSignature = m_graphicsRS.Get();
-        pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
-        pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-        pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-        pd.SampleMask = UINT_MAX;
-        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        pd.NumRenderTargets = 1;
-        pd.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        pd.SampleDesc.Count = 1;
-        HR(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)));
+        MakeGraphicsPso(src, pso, defines);
     };
     makeGfx(kDisplaySrc, m_psoDisplay);
     makeGfx(kGradientSrc, m_psoGradient);
@@ -368,6 +354,56 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     CreateAcidBuffers();
 
     if (m_headless) CreateOffscreenTarget();
+}
+
+// One display/gradient graphics PSO. Identical to the lambda CreateDevice used
+// to inline, so a PSO compiled later by EnsureLookResources() is built exactly
+// the same way as one compiled at device creation.
+void FluidRenderer::MakeGraphicsPso(const char* src,
+                                    Microsoft::WRL::ComPtr<ID3D12PipelineState>& pso,
+                                    const D3D_SHADER_MACRO* defines) {
+    ComPtr<ID3DBlob> vs = Compile(src, "VSMain", "vs_5_0", defines);
+    ComPtr<ID3DBlob> ps = Compile(src, "PSMain", "ps_5_0", defines);
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+    pd.pRootSignature = m_graphicsRS.Get();
+    pd.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    pd.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+    pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pd.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    pd.SampleMask = UINT_MAX;
+    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pd.NumRenderTargets = 1;
+    pd.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    pd.SampleDesc.Count = 1;
+    HR(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&pso)));
+}
+
+// Runtime look switching. The upload rings (acid blobs, acid params, InkCB)
+// and the 64x36 velocity readback are already created unconditionally by
+// CreateAcidBuffers() / CreateSimResources(), and the acid blob population is
+// (re)seeded lazily by Frame(); the ONLY thing missing when a look is turned
+// on after startup is its display PSO. Compiling one takes ~0.3 s (D3DCompile
+// of kDisplaySrc), so do it off the GPU timeline: idle-wait first, exactly as
+// SetResolutions does, then compile. Both branches are no-ops once built, so
+// this is safe to call on every preset apply and every checkbox click.
+void FluidRenderer::EnsureLookResources() {
+    if (!m_device) return;
+    const bool needAcid = m_cfg.acid.enabled && !m_psoLiquidAcid;
+    const bool needInk  = m_cfg.ink.enabled  && !m_psoInk;
+    if (!needAcid && !needInk) return;
+    WaitForGpuIdle();
+    if (needAcid) {
+        const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
+        MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, defs);
+        m_acidSeeded = false;          // Frame() reseeds under the current keys
+        printf("look: liquid_acid PSO compiled on demand\n");
+    }
+    if (needInk) {
+        const D3D_SHADER_MACRO defs[] = { { "INK", "1" }, { nullptr, nullptr } };
+        MakeGraphicsPso(kDisplaySrc, m_psoInk, defs);
+        printf("look: ink PSO compiled on demand\n");
+    }
 }
 
 // Headless render target: one FP16 texture the size of the requested shot,
@@ -2262,12 +2298,14 @@ void FluidRenderer::UploadAcidConstants() {
     float p9[4] = { a.swarmScaleA, a.swarmScaleB, a.swarmRMin, a.swarmRMax };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
     memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
-    float p10[4] = { a.swarmClump, a.swarmDark, (a.inkMode == 1 ? 1.0f : 0.0f), 0.0f };
+    float p10[4] = { a.swarmClump, a.swarmDark, (a.inkMode == 1 ? 1.0f : 0.0f),
+                     fmaxf(a.toeTint, 0.0f) };
     // Target ink hue = the oil family's mean hue, swept, plus 180 degrees.
     float targetHue = fmodf(OilMeanHueDeg(effOil) + 180.0f, 360.0f);
     float p11[4] = { a.inkComplementLock ? 1.0f : 0.0f, a.inkComplementSpan,
                      targetHue, 0.0f };   // .w unused: the sweep is applied above
-    float p12[4] = { a.rimVary, a.rimInkFollow, 0.0f, 0.0f };
+    float p12[4] = { a.rimVary, a.rimInkFollow, a.rimOrder ? 1.0f : 0.0f,
+                     fmaxf(a.grainShadowW, 0.0f) };
     float men[4] = { effMen[0], effMen[1], effMen[2], 0.0f };
     memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
     memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
@@ -2301,10 +2339,33 @@ void FluidRenderer::UploadInkConstants() {
     const float p4[4] = { k.motionOpacity, 0.0f, 0.0f, 0.0f };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16);
     memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16); memcpy(p.p4, p4, 16);
+
+    // ---- duotone PAIR ROTATION ([ink] pair_sweep_period) -----------------
+    // With the sweep off these are just the authored tints. With it on, the
+    // pair cross-fades through the SAME curated complementary anchors the
+    // liquid_acid palette sweep uses, with the same hue-preserving HSV lerp
+    // and the same smoothstepped fade (so each pair gets a long settled
+    // stretch). The ink anchor drives the THIN veil and the oil anchor the
+    // THICK core: the ink anchors are the darker, cooler half of every pair,
+    // which keeps veils darker than cores — the assignment the user's
+    // hand-picked duotone inis already use (teal veil / vermillion core).
+    float tThin[3], tThick[3];
+    memcpy(tThin,  k.tintThin,  sizeof(tThin));
+    memcpy(tThick, k.tintThick, sizeof(tThick));
+    if (k.pairSweepPeriod > 0.01f) {
+        const LiquidAcidConfig& a = m_cfg.acid;   // the curated pair list
+        const int np = LiquidAcidConfig::kSweepPairs;
+        const float u = fmodf(m_time / k.pairSweepPeriod, 1.0f) * np;
+        const int k0 = (int)u % np, k1 = (k0 + 1) % np;
+        float f = u - floorf(u);
+        f = f * f * (3.0f - 2.0f * f);
+        HsvLerp3(&a.sweepInk[k0 * 3], &a.sweepInk[k1 * 3], f, tThin);
+        HsvLerp3(&a.sweepOil[k0 * 3], &a.sweepOil[k1 * 3], f, tThick);
+    }
     for (int i = 0; i < 3; i++) {
         p.paper[i]     = k.paper[i];
-        p.tintThin[i]  = k.tintThin[i];
-        p.tintThick[i] = k.tintThick[i];
+        p.tintThin[i]  = tThin[i];
+        p.tintThick[i] = tThick[i];
     }
     memcpy(m_inkParamData[fi], &p, sizeof(p));
 }

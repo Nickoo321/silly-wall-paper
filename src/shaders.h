@@ -356,9 +356,9 @@ cbuffer AcidCB : register(b1) {
     float4 laP7;         // x oilHdr     y rimHdr      z meniscusOff w inkShading
     float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
-    float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w -
+    float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w toeTint
     float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
-    float4 laP12;        // x rimVary    y rimInkFollow z -         w -
+    float4 laP12;        // x rimVary    y rimInkFollow z rimOrder  w grainShadowW
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -843,9 +843,19 @@ R"hlsl(
         // oil edge's own refraction (ink_mode=water is mostly clear water).
         haloMul *= lerp(1.0, 0.55 + 0.90 * smoothstep(0.03, 0.45, il), saturate(laP12.y));
     }
+    // ---- paired-annulus ordering (rim_order) -----------------------------
+    // laP12.z = 0: the shipped placement — dark band centred at rim_inset,
+    // bright halo centred at -meniscus_offset, wherever the ini put them.
+    // laP12.z = 1: force the physical pairing (Micromachines 13(7):1021) —
+    // the dark band one half-width INSIDE the isoline and the bright caustic
+    // one half-width OUTSIDE it, so they are adjacent and never overlap.
+    float rimHW = max(laP1.x * rimMul, 1e-5);
+    float menHW = max(laP2.y * rimMul, 1e-5);
+    float rimCtr = laP12.z > 0.5 ?  rimHW : laP1.y;
+    float menCtr = laP12.z > 0.5 ? -menHW : -laP7.z;
     // dark rim: a Gaussian band centred just INSIDE the boundary, forced to
     // zero deep inside a merged mass so no concentric rings appear there.
-    float rimX = (sdf - laP1.y) / max(laP1.x * rimMul, 1e-5);
+    float rimX = (sdf - rimCtr) / rimHW;
     float rimB = exp(-rimX * rimX)
                * (1.0 - smoothstep(thresh * 1.7, thresh * 3.4, field));
     oilC *= 1.0 - saturate(laP1.z) * rimB;
@@ -906,7 +916,7 @@ R"hlsl(
     // ref 1) and it is what separates the oil from the ink. Painted with the
     // ramp's bright stop so it reads even over black ink.
     if (laP2.x * haloMul > 0.002) {
-        float hx = (sdf + laP7.z) / max(laP2.y * rimMul, 1e-5);
+        float hx = (sdf - menCtr) / menHW;
         float halo = exp(-hx * hx);
         // sdf = (field - thresh) / |grad| is only a distance where |grad| is
         // strong. On a broad low-gradient plateau that never reaches the
@@ -929,9 +939,29 @@ R"hlsl(
                               + (1.0 - smoothstep(laP1.x * 2.0, laP1.x * 7.0, sdf)) * cov * 0.30);
         col = lerp(col, col * 0.18, dot1 * sMask * laP6.x);
     }
+    // ---- ink-tinted toe (toe_tint) ---------------------------------------
+    // The genre's darkest ink is #180808 / #2c1506 — a lifted, HUE-TINTED toe,
+    // never a crush to neutral black. Lift only the bottom of the range, and
+    // only toward a low-value version of the ink ramp's own mid hue, so the
+    // tint always belongs to this palette (and follows the palette sweep).
+    // laP10.w = 0 leaves the shipped neutral toe untouched.
+    if (laP10.w > 0.001) {
+        float3 inkHue = laInk[1].rgb / max(max(laInk[1].r, max(laInk[1].g, laInk[1].b)), 1e-3);
+        float  toeL   = dot(col, float3(0.2126, 0.7152, 0.0722));
+        col += inkHue * (0.12 * saturate(laP10.w) * (1.0 - smoothstep(0.0, 0.22, toeL)));
+    }
     // ---- coarse ANIMATED film grain over everything ----------------------
+    // grain_shadow_weight (laP12.w) biases the amplitude into the darks:
+    // in every reference frame the ink is visibly noisy while the flat oil
+    // discs are clean, which is what real high-ISO backlit macro looks like.
+    // (1 - luma)^2 -- squared, so mid-tones already lose most of the grain.
+    float grainAmp = laP5.z;
+    if (laP12.w > 0.0005) {
+        float gl2 = saturate(1.0 - dot(col, float3(0.2126, 0.7152, 0.0722)));
+        grainAmp *= lerp(1.0, gl2 * gl2, saturate(laP12.w));
+    }
     col += (AcidHash21(floor(i.pos.xy / max(laP5.w, 1.0)) + frac(laP6.z) * 913.7) - 0.5)
-         * laP5.z;
+         * grainAmp;
     C = saturate(col);
     // HDR: the oil is a flat fill, so give it its own highlight level rather
     // than inheriting the ink's. Keep the hot part small (ABL): the rim band.

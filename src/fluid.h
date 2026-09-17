@@ -91,6 +91,13 @@ struct LiquidAcidConfig {
     float rimInkFollow= 0.0f;       // 0..1 scale the halo by the ink
                                     // brightness just OUTSIDE the isoline
                                     // (the halo is refracted ink)
+    // Paired-annulus ordering (Micromachines 13(7):1021 — the meniscus makes a
+    // DARK ring hugging the drop and a BRIGHT caustic piled up just outside
+    // it). 0 = the shipped placement (rim at rim_inset, halo at
+    // meniscus_offset, which may overlap or sit apart); 1 = force them
+    // adjacent and ordered: dark band centred one half-width INSIDE the
+    // isoline, bright halo centred one half-width OUTSIDE it.   rim_order
+    bool  rimOrder    = false;
     float refraction  = 0.050f;     // ink uv offset along the field gradient near rims
     float translucency= 0.16f;      // how much the ink under the oil modulates it
     float oilTexture  = 0.07f;      // faint in-blob mottle (interiors stay flat)
@@ -177,6 +184,14 @@ struct LiquidAcidConfig {
     // --- grain / speckle ---
     float grainAmt    = 0.030f;     // coarse animated film grain
     float grainScale  = 3.0f;       // px per grain cell (>1 = coarse)
+    // Weight the grain into the SHADOWS (the refs' dark ink is visibly noisy
+    // while the flat oil discs are clean — real sensor noise, not an overlay).
+    // amplitude *= lerp(1, (1-luma)^2, w). 0 = the shipped uniform grain.
+    float grainShadowW= 0.0f;       //                       grain_shadow_weight
+    // Ink-tinted toe: lift the very darkest pixels toward a dark version of
+    // the ink hue instead of neutral black (the refs' toe is #180808 warm,
+    // never a pure crush). 0 = the shipped neutral toe.            toe_tint
+    float toeTint     = 0.0f;
     float speckle     = 0.12f;      // cellular dots concentrated at interfaces
     float speckScale  = 240.0f;     // cells per uv unit
 };
@@ -218,6 +233,15 @@ struct InkConfig {
     float vignette     = 0.15f;     // radial darkening of the paper          vignette
     float tintThin[3]  = { 0.70f, 0.85f, 1.00f };   // inverted: thin veil    tint_thin
     float tintThick[3] = { 1.00f, 1.00f, 1.00f };   // inverted: opaque core  tint_thick
+    // Duotone PAIR ROTATION. With chroma=0 the ink is a fixed two-colour
+    // duotone (thin veil / opaque core). This cross-fades that pair through
+    // the SAME curated complementary list liquid_acid sweeps
+    // (LiquidAcidConfig::sweepInk / sweepOil, hue-preserving HSV lerp — the
+    // CSS hue matrix was tried and went muddy). Thin takes the ink anchor
+    // (the darker half) and thick the oil anchor, which is exactly the
+    // assignment the user's hand-picked duotone inis already use.
+    // Seconds for one full trip through the list; 0 = off (fixed pair).
+    float pairSweepPeriod = 0.0f;   //                     pair_sweep_period
     float coreKnee     = 0.30f;     // inverted: opacity where the tint
                                     // crosses from thin to thick             core_knee
     float hdrCore      = 1.0f;      // inverted: scale of the raw-dye level
@@ -452,6 +476,15 @@ public:
         m_dropQueued = true; m_dropQx = x; m_dropQy = y; m_dropQvy = vy;
     }
     void SetResolutions(int simRes, int dyeRes);   // recreates sim textures live
+    // Make the CURRENT [look] renderable without restarting the app.
+    // Idempotent and cheap when nothing is missing: the extra display PSOs
+    // (LIQUID_ACID / INK) are compiled at device creation only for the look
+    // that was enabled then, so a preset or a settings checkbox that turns a
+    // look ON later must call this or DisplayPso() silently falls back to the
+    // fluid PSO. Waits for GPU idle first (same rule as SetResolutions).
+    // Switching a look OFF needs nothing: the PSOs are just not selected, and
+    // the fluid path never reads any of their state.
+    void EnsureLookResources();
     void Reattach(HWND hwnd);   // new swapchain after Explorer restart; sim state survives
     bool PresentBroken() const { return m_presentBroken; }   // window died mid-frame
     // second-monitor mirror
@@ -499,6 +532,12 @@ private:
     void InitCommon(HWND hwnd, int width, int height, const FluidConfig& cfg);
     void CreateDevice(HWND hwnd, int width, int height);
     void CreateOffscreenTarget();      // headless render target + readback
+    // One display/gradient graphics PSO from `src`, optionally with defines.
+    // Factored out of CreateDevice so EnsureLookResources() can compile a
+    // look's variant later with byte-identical settings.
+    void MakeGraphicsPso(const char* src,
+                         Microsoft::WRL::ComPtr<ID3D12PipelineState>& pso,
+                         const D3D_SHADER_MACRO* defines = nullptr);
     void RenderDisplayOffscreen();     // display pass -> m_shotTex
     void CreateSimResources();
     Tex  CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot);

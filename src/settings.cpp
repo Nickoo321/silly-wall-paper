@@ -258,6 +258,8 @@ static void BuildDefs() {
         { L"Seam threshold",                    0,     0.5f, 0.01f, 2, &c.acid.seamLo,        nullptr, L"liquid_acid", L"seam_lo", false, nullptr, 3, L"Gradient magnitude a seam starts at" },
         { L"Film grain",                        0,     0.2f, 0.005f,3, &c.acid.grainAmt,      nullptr, L"liquid_acid", L"grain", false, nullptr, 3, L"Coarse animated grain over the whole frame" },
         { L"Grain coarseness (px)",             1,     6,    0.5f,  1, &c.acid.grainScale,    nullptr, L"liquid_acid", L"grain_scale", false, nullptr, 3, L"Pixels per grain cell. 1 = fine, 4 = chunky macro-film" },
+        { L"Grain into shadows",                0,     1,    0.02f, 2, &c.acid.grainShadowW,  nullptr, L"liquid_acid", L"grain_shadow_weight", false, nullptr, 3, L"Weights the grain by (1-luminance)^2 so flat bright oil stays clean" },
+        { L"Ink-tinted black toe",              0,     1,    0.02f, 2, &c.acid.toeTint,       nullptr, L"liquid_acid", L"toe_tint", false, nullptr, 3, L"Lifts the darkest pixels toward a dark version of the ink hue instead of neutral black" },
         { L"Interface speckle",                 0,     1,    0.02f, 2, &c.acid.speckle,       nullptr, L"liquid_acid", L"speckle", false, nullptr, 3, L"Sparse dark dots hugging the oil/ink boundary" },
         { L"Oil HDR level (0 = follow ink)",    0,     1.4f, 0.02f, 2, &c.acid.oilHdr,        nullptr, L"liquid_acid", L"oil_hdr", false, nullptr, 3, L"Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's" },
         { L"Ink under the oil (0 bands 1 water)",0,    1,    1,     0, nullptr, &c.acid.inkMode,     L"liquid_acid", L"ink_water", false, nullptr, 3, L"1 = the shared ink-in-water render (translucent veils) instead of flat bands" },
@@ -270,6 +272,7 @@ static void BuildDefs() {
         { L"Edge tap spacing (px)",             1,     6,    0.5f,  1, &c.ink.edgeScale,      nullptr, L"ink", L"edge_scale", false, nullptr, 3, L"Screen texels between the gradient taps" },
         { L"Paper vignette",                    0,     0.6f, 0.02f, 2, &c.ink.vignette,       nullptr, L"ink", L"vignette", false, nullptr, 3, L"Radial darkening of the backlit paper (paper mode only)" },
         { L"Core knee (inverted)",              0,     1,    0.02f, 2, &c.ink.coreKnee,       nullptr, L"ink", L"core_knee", false, nullptr, 3, L"Opacity where the tint crosses from the thin-veil colour to the core colour" },
+        { L"Duotone pair rotation (s, 0=off)", 0,   900,  10,    0, &c.ink.pairSweepPeriod, nullptr, L"ink", L"pair_sweep_period", false, nullptr, 3, L"Cross-fade tint_thin/tint_thick through the curated complementary pairs. 0 = the fixed pair" },
         { L"HDR core (inverted)",               0,     1.4f, 0.02f, 2, &c.ink.hdrCore,        nullptr, L"ink", L"hdr_core", false, nullptr, 3, L"How hard dense cores drive the HDR highlight gain. Veils stay SDR" },
         { L"HDR motion gate: still (texels/s)",0,     60,   1,     0, &c.ink.motionLo,       nullptr, L"ink", L"motion_lo", false, nullptr, 3, L"Below this local speed, ink gets no HDR lift at all - keeps the entry patch from blowing out" },
         { L"HDR motion gate: moving",          0,     200,  5,     0, &c.ink.motionHi,       nullptr, L"ink", L"motion_hi", false, nullptr, 3, L"Above this local speed the HDR lift is full. Set at or below the still value to disable the gate" },
@@ -311,13 +314,15 @@ static void BuildDefs() {
         { L"Mood cycling (auto-switch looks)",  &g_moodSettings.enabled, L"moods", L"enabled", nullptr, 3, L"Auto-switch between moods/*.ini recipes" },
         { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second", nullptr, 3, L"Also render the wallpaper on the second monitor" },
         // Look switch. Writes [look] liquid_acid=0|1; the ini also accepts
-        // [look] style=fluid|liquid_acid. Needs an app restart: the display
-        // PSO variant is built at device creation.
+        // [look] style=fluid|liquid_acid. LIVE since the display PSO variants
+        // are compiled on demand (FluidRenderer::EnsureLookResources), called
+        // from the checkbox handler below.
         { L"Lock ink opposite the oil hue",     &c.acid.inkComplementLock, L"liquid_acid", L"ink_complement_lock", nullptr, 3, L"Hold the ink's hue on the far side of the wheel from the oil" },
-        { L"Liquid Acid look (restart)",        &c.acid.enabled,     L"look",     L"liquid_acid", nullptr, 3, L"Oil-on-inked-water render look. Takes effect on the next app start" },
-        // Ink look. Same restart rule: the INK display PSO variant is built at
-        // device creation. "Inverted" is live (read per frame into InkCB).
-        { L"Ink in water look (restart)",       &c.ink.enabled,      L"look",     L"ink", nullptr, 3, L"Beer-Lambert ink-in-water render look. Takes effect on the next app start" },
+        { L"Paired rim (dark in, bright out)",  &c.acid.rimOrder,    L"liquid_acid", L"rim_order", nullptr, 3, L"Forces the dark rim and the bright halo adjacent and ordered across the isoline, instead of wherever rim_inset/meniscus_offset put them" },
+        { L"Liquid Acid look",                  &c.acid.enabled,     L"look",     L"liquid_acid", nullptr, 3, L"Oil-on-inked-water render look. Switches live (first switch costs one shader compile)" },
+        // Ink look. Same rule: the INK display PSO variant is compiled on
+        // demand. "Inverted" is live (read per frame into InkCB).
+        { L"Ink in water look",                 &c.ink.enabled,      L"look",     L"ink", nullptr, 3, L"Beer-Lambert ink-in-water render look. Switches live (first switch costs one shader compile)" },
         { L"Inverted (pale ink on black)",      &c.ink.inverted,     L"ink",      L"inverted", nullptr, 3, L"Off = dark ink on backlit paper. On = pale ink on black (OLED-friendly)" },
         { L"Ink drops",                         &c.drops.enabled,    L"drops",    L"drops", nullptr, 3, L"Periodic falling ink drops. Works with any render look" },
         { L"Drops obey the fullness governor",  &c.drops.obeyGovernor, L"drops",  L"obey_governor", nullptr, 3, L"Skip a drop while the water is already full of ink" },
@@ -740,6 +745,28 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             } else if (d.val) {
                 *d.val = on;
                 WriteIniInt(d.section, d.key, on ? 1 : 0);
+                // Look switches are live. The two looks are mutually exclusive
+                // (DisplayPso() would otherwise just prefer acid), and turning
+                // one ON may need its display PSO compiled first; turning one
+                // OFF needs nothing at all — the fluid path reads none of that
+                // state. Re-sync the boxes so the UI matches the exclusion.
+                if (g_renderer && (d.val == &g_renderer->Config().acid.enabled ||
+                                   d.val == &g_renderer->Config().ink.enabled)) {
+                    if (on) {
+                        if (d.val == &g_renderer->Config().acid.enabled) {
+                            g_renderer->Config().ink.enabled = false;
+                            WriteIniInt(L"look", L"ink", 0);
+                        } else {
+                            g_renderer->Config().acid.enabled = false;
+                            WriteIniInt(L"look", L"liquid_acid", 0);
+                        }
+                    }
+                    g_renderer->EnsureLookResources();
+                    for (size_t j = 0; j < s_checks.size() && j < s_checkCtls.size(); j++)
+                        if (s_checks[j].val)
+                            SendMessageW(s_checkCtls[j], BM_SETCHECK,
+                                         *s_checks[j].val ? BST_CHECKED : BST_UNCHECKED, 0);
+                }
             } else {
                 SetAutostart(on);
             }

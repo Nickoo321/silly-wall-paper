@@ -734,3 +734,49 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   ink-inverted.ini rendered true. Fixed configs: reference/configs/ink-duo-*.ini
   (hueshift off, grading neutral). Note: in SDR PNGs dim veils of a yellow tint read olive;
   cores get the HDR lift on the panel.
+
+## 2026-09-17 — looks as runtime modes, duotone pair rotation, acid polish
+
+- **Looks switch live now.** The gap was ONLY the display PSO: `CreateAcidBuffers()`
+  (blob/param/InkCB upload rings) and the 64x36 velocity readback were already created
+  unconditionally, and `Frame()` already seeds the acid blobs lazily — but
+  `m_psoLiquidAcid` / `m_psoInk` were compiled in `CreateDevice` only for the look that
+  was enabled at startup, so `DisplayPso()` silently fell back to the fluid PSO.
+  New `FluidRenderer::EnsureLookResources()` (idempotent, GPU-idle-waits like
+  `SetResolutions`) compiles whichever variant the current `[look]` needs; the
+  `makeGfx` lambda became `FluidRenderer::MakeGraphicsPso()` so both paths build the
+  PSO identically. Called from `ApplyPreset` (main.cpp) and from the settings
+  checkbox handler; the two look checkboxes are now mutually exclusive and no longer
+  say "(restart)". Switching a look OFF needs nothing — the fluid path reads none of
+  that state.
+- **`WriteConfigToIni` now writes `[look] style` plus full `[ink]`, `[drops]` and
+  `[liquid_acid]` blocks** (and deletes the int forms `[look] ink` / `liquid_acid` /
+  `[liquid_acid] ink_water` so they cannot contradict the string form). Before this a
+  saved preset round-tripped the fluid keys and dropped the look entirely. Key names
+  cross-checked against the parser: no key parsed-but-not-written and none written-but-
+  not-parsed.
+- **`--shot-preset <ini> AT <sec>`**: headless look-switch verification through the
+  tray's own `ApplyPreset`. Two 1280x720 frames in build2/shots/modes/:
+  `switch-to-ink.png` (we-look-live -> "Ink - duo pour teal" at t=20, captured t=60 —
+  teal/vermillion duotone paint-pour, correct) and `switch-to-fluid.png`
+  (ink-inverted -> we-look-live at t=20, captured t=60 — WE-parity neon fluid, correct).
+- **reference/presets/** (new, 10 tray-friendly copies: WE parity, 3 Liquid Acid, 6 Ink).
+  The tray "Presets" menu enumerates the MOODS folder, so these have to be copied into
+  `%APPDATA%\FluidWallpaper\moods\` by hand to appear — nothing was written there.
+  `we-look-live.ini` gained `[look] style=fluid` (a no-op for the default, but without
+  it a preset can never switch BACK to fluid: overlays are partial by design).
+- **`[ink] pair_sweep_period`** (s, default 0 = off): cross-fades `tint_thin`/`tint_thick`
+  through `LiquidAcidConfig::sweepInk`/`sweepOil` with the same `HsvLerp3` +
+  smoothstep the acid palette sweep uses. Thin = ink anchor, thick = oil anchor —
+  exactly the assignment the user's hand-picked duotone inis already use, so veils stay
+  darker than cores. Slider in the Ink group. Sheet: build2/shots/modes/duo-sweep.png
+  (ink-duo-pour-teal-vermillion + period 120: t=75 gold/violet, t=105 lime/purple).
+- **Liquid Acid polish**, three keys, all defaulting to the current behaviour:
+  `rim_order=1` puts the dark band one half-width INSIDE the isoline and the bright
+  caustic one half-width OUTSIDE it (adjacent, never overlapping — Micromachines
+  13(7):1021); `grain_shadow_weight` multiplies grain by `(1-luma)^2`;
+  `toe_tint` lifts the darkest pixels toward a low-value version of the ink ramp's mid
+  hue. Sheets: acid-polish-ab.png, acid-polish-zoom.png (2x crop — the rim change is
+  only readable zoomed), acid-polish-refsheet.png.
+- `style=fluid` regression: we-look-live 60 s 2560x1440 md5
+  **10E36EBF1A74EDFE609065D757300054** (-hdr 414B4321…), unchanged.

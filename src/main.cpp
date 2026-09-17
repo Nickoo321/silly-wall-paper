@@ -18,6 +18,8 @@
 //   --shot-pour X,Y,S,D  hold LMB at (X,Y) px from S for D seconds
 //   --shot-drop X,Y,T[,VY]  one ink drop at (X,Y) px at wallpaper time T
 //                      (VY = downward impulse; default [drops] speed)
+//   --shot-preset <ini> AT <sec>  apply that preset at wallpaper time <sec>,
+//                      through the tray's own ApplyPreset (look switches too)
 //   --seed N           seed every rand() behavior (default 1234) -> determinism
 //   --ini <path>       read config from this file instead of the live ini
 //   --hdr on|off       set the HDR state instead of querying the display
@@ -237,6 +239,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         k.motionLo     = getF(S, L"motion_lo", k.motionLo);
         k.motionHi     = getF(S, L"motion_hi", k.motionHi);
         k.motionOpacity= getF(S, L"motion_opacity", k.motionOpacity);
+        k.pairSweepPeriod = getF(S, L"pair_sweep_period", k.pairSweepPeriod);
         k.parallax     = getF(S, L"parallax", k.parallax);
         k.parallaxScale= getF(S, L"parallax_scale", k.parallaxScale);
         k.parallaxDrift= getF(S, L"parallax_drift", k.parallaxDrift);
@@ -316,6 +319,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.rimDark      = getF(S, L"rim_dark", a.rimDark);
         a.rimVary      = getF(S, L"rim_vary", a.rimVary);
         a.rimInkFollow = getF(S, L"rim_ink_follow", a.rimInkFollow);
+        a.rimOrder     = getB(S, L"rim_order", a.rimOrder);
         a.meniscus     = getF(S, L"meniscus", a.meniscus);
         a.meniscusW    = getF(S, L"meniscus_width", a.meniscusW);
         a.meniscusOff  = getF(S, L"meniscus_offset", a.meniscusOff);
@@ -346,6 +350,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.seamScale    = getF(S, L"seam_scale", a.seamScale);
         a.grainAmt     = getF(S, L"grain", a.grainAmt);
         a.grainScale   = getF(S, L"grain_scale", a.grainScale);
+        a.grainShadowW = getF(S, L"grain_shadow_weight", a.grainShadowW);
+        a.toeTint      = getF(S, L"toe_tint", a.toeTint);
         a.speckle      = getF(S, L"speckle", a.speckle);
         a.speckScale   = getF(S, L"speckle_scale", a.speckScale);
         a.swarmHoles   = getF(S, L"swarm_holes", a.swarmHoles);
@@ -1196,6 +1202,159 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
                    c.splatColors[ci * 3], c.splatColors[ci * 3 + 1], c.splatColors[ci * 3 + 2]);
         WritePrivateProfileStringW(L"color", key, val, path);
     }
+    // ---- the render LOOK and its three sections ---------------------------
+    // Without these a saved preset silently dropped the look: it round-tripped
+    // the fluid keys, then re-applied as style=fluid with the ink/acid tuning
+    // gone. [look] style is written in the string form the inis use (and the
+    // int forms the checkboxes write are cleared, so they cannot contradict
+    // it); the [ink]/[drops]/[liquid_acid] blocks below are written in full,
+    // because a preset that carries a look must carry the tuning that makes
+    // that look look like anything.
+    auto putRgb = [path](const wchar_t* sec, const wchar_t* key, const float* c3) {
+        wchar_t b[64];
+        swprintf_s(b, L"%.4f %.4f %.4f", c3[0], c3[1], c3[2]);
+        WritePrivateProfileStringW(sec, key, b, path);
+    };
+    WritePrivateProfileStringW(L"look", L"style",
+                               c.ink.enabled ? L"ink" : (c.acid.enabled ? L"liquid_acid"
+                                                                        : L"fluid"), path);
+    WritePrivateProfileStringW(L"look", L"ink", nullptr, path);          // delete
+    WritePrivateProfileStringW(L"look", L"liquid_acid", nullptr, path);  // delete
+    {
+        const InkConfig& k = c.ink;
+        const wchar_t* S = L"ink";
+        putI(S, L"inverted", k.inverted);
+        putF(S, L"density", k.density, 3);
+        putF(S, L"chroma", k.chroma, 3);
+        putF(S, L"edge_strength", k.edgeStrength, 3);
+        putF(S, L"edge_lo", k.edgeLo, 4);
+        putF(S, L"edge_hi", k.edgeHi, 4);
+        putF(S, L"edge_scale", k.edgeScale, 2);
+        putF(S, L"vignette", k.vignette, 3);
+        putF(S, L"core_knee", k.coreKnee, 3);
+        putF(S, L"hdr_core", k.hdrCore, 3);
+        putF(S, L"motion_lo", k.motionLo, 1);
+        putF(S, L"motion_hi", k.motionHi, 1);
+        putF(S, L"motion_opacity", k.motionOpacity, 3);
+        putF(S, L"pair_sweep_period", k.pairSweepPeriod, 1);
+        putF(S, L"parallax", k.parallax, 3);
+        putF(S, L"parallax_scale", k.parallaxScale, 3);
+        putF(S, L"parallax_drift", k.parallaxDrift, 4);
+        putRgb(S, L"paper_color", k.paper);
+        putRgb(S, L"tint_thin", k.tintThin);
+        putRgb(S, L"tint_thick", k.tintThick);
+    }
+    {
+        const DropConfig& d = c.drops;
+        const wchar_t* S = L"drops";
+        putI(S, L"drops", d.enabled);
+        putF(S, L"interval", d.interval, 2);
+        putF(S, L"x_min", d.xMin, 3);   putF(S, L"x_max", d.xMax, 3);
+        putF(S, L"y_min", d.yMin, 3);   putF(S, L"y_max", d.yMax, 3);
+        putF(S, L"speed", d.speed, 1);
+        putF(S, L"radius", d.radius, 3);
+        putF(S, L"density", d.density, 3);
+        putF(S, L"tail_sec", d.tailSec, 2);
+        putF(S, L"tail_density", d.tailDensity, 3);
+        putF(S, L"tail_radius_frac", d.tailRadiusFrac, 3);
+        putF(S, L"tail_speed", d.tailSpeed, 2);
+        putF(S, L"impulse_spread", d.impulseSpread, 3);
+        putF(S, L"asymmetry", d.asymmetry, 3);
+        putI(S, L"spatter", d.spatter);
+        putF(S, L"spatter_radius", d.spatterRadius, 3);
+        putF(S, L"spatter_speed", d.spatterSpeed, 2);
+        putF(S, L"spatter_spread", d.spatterSpread, 3);
+        putI(S, L"color_mode", d.colorMode);
+        putI(S, L"obey_governor", d.obeyGovernor);
+        putRgb(S, L"color", d.color);
+    }
+    {
+        const LiquidAcidConfig& a = c.acid;
+        const wchar_t* S = L"liquid_acid";
+        putI(S, L"blob_count", a.blobCount);
+        putF(S, L"disc_frac", a.discFrac, 3);
+        putF(S, L"web_frac", a.webFrac, 3);
+        putF(S, L"bubble_frac", a.bubbleFrac, 3);
+        putF(S, L"disc_min", a.discMin, 3);   putF(S, L"disc_max", a.discMax, 3);
+        putF(S, L"web_min", a.webMin, 3);     putF(S, L"web_max", a.webMax, 3);
+        putF(S, L"bubble_min", a.bubbleMin, 3); putF(S, L"bubble_max", a.bubbleMax, 3);
+        putF(S, L"hole_min", a.holeMin, 3);   putF(S, L"hole_max", a.holeMax, 3);
+        putF(S, L"size_bias", a.sizeBias, 3);
+        putF(S, L"big_bias", a.bigBias, 3);
+        putF(S, L"hole_weight", a.holeWeight, 3);
+        putF(S, L"threshold", a.threshold, 3);
+        putF(S, L"support_scale", a.supportScale, 3);
+        putF(S, L"aa_scale", a.aaScale, 3);
+        putF(S, L"flow_gain", a.flowGain, 3);
+        putF(S, L"curl_drift", a.curlDrift, 4);
+        putF(S, L"repulsion", a.repulsion, 4);
+        putF(S, L"buoyancy", a.buoyancy, 4);
+        putF(S, L"damping", a.damping, 3);
+        putF(S, L"breath", a.breathAmt, 3);
+        putF(S, L"wrap_margin", a.wrapMargin, 3);
+        putF(S, L"rim_width", a.rimWidth, 4);
+        putF(S, L"rim_inset", a.rimInset, 4);
+        putF(S, L"rim_dark", a.rimDark, 3);
+        putF(S, L"rim_vary", a.rimVary, 3);
+        putF(S, L"rim_ink_follow", a.rimInkFollow, 3);
+        putI(S, L"rim_order", a.rimOrder ? 1 : 0);
+        putF(S, L"meniscus", a.meniscus, 3);
+        putF(S, L"meniscus_width", a.meniscusW, 4);
+        putF(S, L"meniscus_offset", a.meniscusOff, 4);
+        putF(S, L"refraction", a.refraction, 4);
+        putF(S, L"translucency", a.translucency, 3);
+        putF(S, L"oil_texture", a.oilTexture, 3);
+        putF(S, L"ink_shading", a.inkShading, 3);
+        putF(S, L"oil_hdr", a.oilHdr, 3);
+        putF(S, L"rim_hdr", a.rimHdr, 3);
+        putF(S, L"ink_levels", a.inkLevels, 1);
+        putF(S, L"ink_soft", a.inkSoft, 3);
+        putF(S, L"ink_mix", a.inkMix, 3);
+        putF(S, L"ink_hue_vary", a.inkHueVary, 1);
+        putI(S, L"ink_complement_lock", a.inkComplementLock);
+        putF(S, L"ink_complement_span", a.inkComplementSpan, 1);
+        putF(S, L"hue_sweep_period", a.hueSweepPeriod, 1);
+        WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);
+        WritePrivateProfileStringW(S, L"ink_water", nullptr, path);   // delete the int form
+        putF(S, L"ink_gain", a.inkGain, 3);
+        putF(S, L"ink_bias", a.inkBias, 3);
+        putF(S, L"seam_strength", a.seamStrength, 3);
+        putF(S, L"seam_lo", a.seamLo, 3);
+        putF(S, L"seam_hi", a.seamHi, 3);
+        putF(S, L"seam_scale", a.seamScale, 2);
+        putF(S, L"grain", a.grainAmt, 4);
+        putF(S, L"grain_scale", a.grainScale, 2);
+        putF(S, L"grain_shadow_weight", a.grainShadowW, 3);
+        putF(S, L"toe_tint", a.toeTint, 3);
+        putF(S, L"speckle", a.speckle, 3);
+        putF(S, L"speckle_scale", a.speckScale, 1);
+        putF(S, L"swarm_holes", a.swarmHoles, 3);
+        putF(S, L"swarm_drops", a.swarmDrops, 3);
+        putF(S, L"swarm_density", a.swarmDensity, 3);
+        putF(S, L"swarm_scale_holes", a.swarmScaleA, 1);
+        putF(S, L"swarm_scale_drops", a.swarmScaleB, 1);
+        putF(S, L"swarm_r_min", a.swarmRMin, 3);
+        putF(S, L"swarm_r_max", a.swarmRMax, 3);
+        putF(S, L"swarm_rim_dark", a.swarmRimDark, 3);
+        putF(S, L"swarm_drift", a.swarmDrift, 4);
+        putF(S, L"swarm_clump", a.swarmClump, 3);
+        putF(S, L"swarm_dark", a.swarmDark, 3);
+        putRgb(S, L"meniscus_color", a.meniscusCol);
+        for (int ci = 0; ci < LiquidAcidConfig::kSweepPairs; ci++) {
+            wchar_t key[40];
+            swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
+            putRgb(S, key, &a.sweepOil[ci * 3]);
+            swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
+            putRgb(S, key, &a.sweepInk[ci * 3]);
+        }
+        for (int ci = 0; ci < 4; ci++) {
+            wchar_t key[32];
+            swprintf_s(key, L"oil_color_%d", ci + 1);
+            putRgb(S, key, &a.oilColors[ci * 3]);
+            swprintf_s(key, L"ink_stop_%d", ci + 1);
+            putRgb(S, key, &a.inkRamp[ci * 3]);
+        }
+    }
 }
 
 static void SaveFullConfig(const FluidConfig& c) {
@@ -1226,6 +1385,10 @@ static void ApplyPreset(const std::wstring& path) {
         g_renderer->SetResolutions(fresh.simRes, fresh.dyeRes);
     else
         g_renderer->ReinitWanderers();
+    // A preset may carry [look] style=ink / liquid_acid. The display PSO for
+    // that look is only built at device creation for the look that was on
+    // then, so build it now or the look would silently render as fluid.
+    g_renderer->EnsureLookResources();
 
     SaveFullConfig(fresh);
     UpdateTrayTip();
@@ -1294,6 +1457,14 @@ struct ShotOpts {
     bool     drop = false;
     float    dropX = 1280, dropY = 200, dropAt = 0, dropVy = -1.0f;
     bool     dropFired = false;
+    // --shot-preset <ini> AT <sec> : apply that preset at wallpaper time <sec>
+    // through the SAME ApplyPreset() the tray menu uses. This is how a look
+    // SWITCH is verified headlessly: start on one ini, switch mid-run, capture
+    // after. (The shot process is config-read-only, so ApplyPreset's write-back
+    // is a no-op and nothing on disk is touched.)
+    std::wstring presetIni;
+    float    presetAt = 0.0f;
+    bool     presetApplied = false;
 };
 
 static void ShotLog(const char* fmt, ...) {
@@ -1453,6 +1624,11 @@ static int RunShotMode() {
                 const wchar_t* v = argv[++i];
                 int got = swscanf_s(v, L"%f,%f,%f,%f", &o.dropX, &o.dropY, &o.dropAt, &o.dropVy);
                 if (got >= 3) { o.drop = true; if (got == 3) o.dropVy = -1.0f; }
+            } else if (wcscmp(argv[i], L"--shot-preset") == 0 && i + 1 < argc) {
+                // --shot-preset <ini> AT <sec>   (also accepts <ini> <sec>)
+                o.presetIni = argv[++i];
+                if (i + 1 < argc && _wcsicmp(argv[i + 1], L"AT") == 0) i++;
+                if (i + 1 < argc) o.presetAt = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--shot-yield") == 0 && i + 1 < argc) {
                 o.yieldMs = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
@@ -1565,6 +1741,18 @@ static int RunShotMode() {
             }
             // --shot-drop: one ink drop, fired on the first frame at or past
             // its wallpaper time, so the whole run stays reproducible.
+            // --shot-preset: swap the whole look mid-run, through the tray's
+            // own code path (merge over live state, resolutions, look PSOs).
+            if (!o.presetIni.empty() && !o.presetApplied &&
+                frames / 144.0f >= o.presetAt) {
+                o.presetApplied = true;
+                ShotLog("[shot] applying preset %ls at t=%.2fs\n",
+                        o.presetIni.c_str(), frames / 144.0f);
+                ApplyPreset(o.presetIni);
+                ShotLog("[shot] look now: %s\n",
+                        renderer.Config().ink.enabled ? "ink"
+                        : (renderer.Config().acid.enabled ? "liquid_acid" : "fluid"));
+            }
             if (o.drop && !o.dropFired && frames / 144.0f >= o.dropAt) {
                 renderer.QueueDrop(o.dropX, o.dropY, o.dropVy);
                 o.dropFired = true;

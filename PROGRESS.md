@@ -27,6 +27,8 @@ Everything below is committed on `main`; nothing is running in the background.
 | Duotone ink configs (user's three picks) with the WE hue-shift disabled | 3b59ebf |
 | Looks switchable at runtime via tray presets (`EnsureLookResources`), `reference/presets/` (10 looks), `--shot-preset`; `[ink] pair_sweep_period`; acid `rim_order` / `grain_shadow_weight` / `toe_tint` | d9258f0 |
 | Tools: `tools/panel-check.ps1`, `tools/oled-brightness.ps1`, `reference/configs/refsheet.py` | b0e4af4 etc. |
+| `tools/explore.py` random look-exploration tool + knob spaces (layering1 Sonnet batch, tile9 Haiku batch); tiles sent to the user one at a time; Pillow from user site-packages | 87e4c39, 5f18e0f |
+| Liquid Acid oil reads as a FILM, not a cut-out: `oil_thin_edge`/`oil_edge_frac` (soft thickness edge, thin oil goes dark), `meniscus_from_ink` (emergent halo: ink colour, weight = ink brightness, vanishes on black ink), `swarm_lens` (soft holes), `oil_glow`, `oil_specular`, `oil_iridescence`, `refraction_width`; all default 0. Configs `liquid-acid-a-real.ini`, `layering1-09-real.ini`; A/B build2/shots/oil/ | 54780a0 |
 
 Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
 

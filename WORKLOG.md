@@ -1044,3 +1044,26 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   Every droplet key defaults to off, so any ini that does not name them is unchanged -- but the
   two shipped RISING presets were deliberately changed (droplets 1500, swarm_holes/swarm_drops 0),
   so "shipped inis byte-identical" is NOT true of those two. style=fluid holds its md5.
+
+- **Ring / plume artefacts: diagnosed, partly fixed (Fable, 2026-09-17 ~19:50, ee4c045).**
+  Both are ONE bug and it predates the droplets: everything keyed on `sdf = (field - thresh) /
+  |grad|` is wrong wherever the field dips TOWARD the threshold without crossing it. There
+  `field - thresh` and `|grad|` both collapse, the quotient lands wherever it likes, and
+  `thk = smoothstep(0, edgeW, sdf)` concludes the film has thinned to nothing -- so the thin-edge
+  model paints `oilC * saturate(0.30 + 1.10*inkC)` (over black ink: 0.30x, DARK) in a ring around
+  a bubble that never punched through, with oil still inside it. The plume is the same thing at
+  another scale: `lensR = 0.78/|grad|` pins to its 0.35 ceiling on a shallow plateau, so
+  `edgeW` hits its 0.060 cap = ~32 px at 540p, and the iridescence and the glow (both keyed on
+  1-thk) light its middle. NOT the rim and NOT the halo: gating those changed nothing.
+  Measured, one 960x540 t=90 render of acid-rise-12 each (build2/shots/droplets/):
+  `gate.png` droplet gate alone -- no change, so the rings are not stranded droplets.
+  `iso.png` isoOk on rim+halo at 2.5..7.0 -- no change, confirming the above.
+  `thk.png` + `iso2` isoOk on `thk` at 1.35..2.20 -- rings mostly GONE (best result), but the
+  hard blend put a bright seam around the plume.
+  `iso3.png` isoOk on the lensR ceiling -- rings back AND the seam; reverted.
+  `iso4.png` (SHIPPED) isoOk on `thk` at 1.35..6.00 -- no seam, but too soft to kill the rings.
+  So the fix is right and only the blend is wrong. NEXT: keep the tight 1.35..2.20 band for the
+  RING case but make the fallback continuous -- blend `thk` toward `cov` in the same units the
+  thin edge already uses (e.g. clamp `edgeW` by `isoOk * edgeW + (1-isoOk) * rim_width*2` so the
+  band narrows instead of the value jumping), then re-render `iso2` and check the seam. One
+  render per attempt, ~55 s; this is a tune-and-look loop and does not need Opus.

@@ -58,3 +58,11 @@ Single exe, no deps beyond Windows SDK libs.
   invariant when touching color generation.
 - Never zero `m_hueAngle` abruptly (whole-screen color snap) — always glide
   to the next full turn.
+
+## GPU lock (multi-agent rule, 2026-09-16)
+Only ONE GPU render (any `--shot` run, any build target, any worktree) may run at a time —
+two at once starved DWM and greyed the user's OLED. Before any render: wait until
+`build2/shots/gpu.lock` (absolute: C:\Users\abg77\OneDrive\Desktop\wall paper engine\claude code\build2\shots\gpu.lock)
+does not exist (poll every 5 s; give up after 30 min and report), then create it containing
+your agent name + time, render, and delete it in a `finally`/trap. Builds need no lock. Never
+stop the user's FluidWallpaper.exe or Wallpaper Engine.

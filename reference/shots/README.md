@@ -160,3 +160,11 @@ negative blobs, (3) the ink underneath is a marbled FLUID (flat colour bands, da
 turbulent filaments = our fluid sim), (4) coarse film grain, (5) complementary palettes
 (orange/teal, red/purple, yellow/red). Lava-lamp metaballs on black (oil phase 0) are NOT this;
 the earlier AcidWallpaper PoC (posterised blobs + hot rims + hole-blobs) was closer.
+
+## Ink-in-water direction (user, 2026-09-16 evening) — `ink-in-water-ref-*.jpg`
+Phone screenshots of stock "ink in water" search results (black/blue-black acrylic ink dropped
+into clear water, backlit white). What defines it: translucent veils (thin ink = see-through
+grey, thick cores opaque), falling mushroom plumes from single drop impulses, fine filaments and
+sheets, splash droplets. Two branches: (3) `style=ink` in the 2D fluid app (Beer-Lambert
+absorption render, dye-weighted gravity, drop injection, optional 2-layer parallax) and
+(4) a separate 3D ink simulation (volumetric, raymarched) as a side project.

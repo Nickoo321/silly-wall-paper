@@ -1,0 +1,60 @@
+# FluidWallpaper progress (as of 2026-09-17, midday)
+
+## The goal
+One wallpaper app with several selectable looks, each judged on the real OLED panel in HDR:
+
+1. **WE parity** — the neon fluid the user modded in Wallpaper Engine. DONE and approved.
+2. **Liquid Acid** — macro oil floating on inked water (user's references). Landed; polishing.
+3. **Ink in water** — translucent ink drops on black or paper. Landed as a style; the user's
+   preferred variants are the automated duotone ones.
+4. **3D ink sim** — a separate volumetric app. Parked as work in progress until next week.
+
+Everything below is committed on `main`; nothing is running in the background.
+
+## Done, by commit
+| what | commit |
+|---|---|
+| WE parity: config + clamped colour chain + 256 sim grid (the WE motion) | 10d6e71 |
+| Liquid Acid look: metaball oil, ink restyle, bubble swarms, rims, grain | d6f6019 |
+| Complementary-pair hue sweep for Liquid Acid | d236b06 |
+| Plans for 2D ink and 3D ink (Fable planners) | 668db07, 8b634ec |
+| `style=ink` (paper / inverted), drops emitter, dye gravity, `ink_mode=water` for acid | 820d102 |
+| 3D ink sim M0 passing, M1 mid-bisect (parked) | c594127 |
+| Rim variation (`rim_vary`, `rim_ink_follow`), water-ini coverage re-tune | cf554e8 |
+| Rim adopted in all palettes at the softer setting (user: "not the harder one") | 5669297 |
+| Liquid Acid research doc (creator, genre technique, palettes, ranked ideas) | 84e3970 |
+| Automation-on-ink combos (hue-cycled drops, WE bursts, paint pour) | e2ca248, 4e2b32c |
+| Duotone ink configs (user's three picks) with the WE hue-shift disabled | 3b59ebf |
+| Tools: `tools/panel-check.ps1`, `tools/oled-brightness.ps1`, `reference/configs/refsheet.py` | b0e4af4 etc. |
+
+Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
+
+## The user's picks so far
+- Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
+- Rim: the softer variation.
+- Ink: `ink-auto-bursts` (WE bursts driving ink, water clears) and the crowded paint pour
+  (`ink-pour`), then the duotone versions of both: `ink-duo-pour-teal-vermillion`,
+  `ink-duo-pour-yellow-magenta`, `ink-duo-bursts-yellow-magenta`.
+
+## Open items, ranked
+1. **Panel check (needs the user at the desk).** PNG previews are SDR projections and cannot show
+   the 240-nit SDR white or the HDR-lifted cores; hue and composition are trustworthy, brightness
+   relations are not. `tools\panel-check.ps1 -Ini <ini>` swaps the live look and relaunches the
+   port from build2; `-Restore` puts the WE look back. Brightness is at 0 (`oled-brightness.ps1 100`).
+2. **Duotone pair rotation.** The duotone ink is a fixed pair per config. Rotating slowly through
+   the curated complementary list (as the acid sweep does) is a small code change.
+3. **Liquid Acid polish from the research doc**, cheapest first: dark-then-bright rim ordering;
+   grain weighted into shadows; oil moving slower than ink; ink-tinted black toe; one coverage
+   scalar instead of three blob fractions; `rim_ink_follow` toward 1.0.
+4. **Liquid Acid water-ink coverage** sits at ~42% vs the ~50% target (one knob nudge).
+5. **Moods / hue-cycler policy** for the acid and ink looks (they bypass the WE colour chain;
+   the hue-shift automation must stay OFF for duotone ink — it rotates the whole frame).
+6. **Ink look extras not done**: splash droplets (`spatter`), parallax layer, blind A/B sheet.
+7. **3D ink sim**: bound the per-frame sharpen pass, re-run M1, then M2 + timings. Next week.
+8. **Preview fidelity (optional)**: a panel-emulating PNG variant (SDR white mapped to PNG white,
+   soft knee on the lifted cores) so previews stop under-reading brightness.
+
+## How work is paced now
+Max 5x plan; the 5-hour session window is the limit that bites. One Opus executor at a time,
+resumed rather than respawned; code is read before renders are spent; the coordinator does
+config-only experiments itself. Every GPU render holds `build2/shots/gpu.lock`.

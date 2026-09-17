@@ -41,7 +41,7 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
 - Rim: the softer variation.
 - Oil film: transparency 0.5 with chroma held to the opaque level ("the 50% chroma held is the best"; ~x1.2 post chroma). LANDED as `post_chroma` 1.2 / `post_lift` 1.08 and made the shipped default of the whole glass family + the rise inis.
-- ON THE PANEL (2026-09-17 18:50, acid-rise-12 live, HDR, brightness 100): the colours are "amazing" — the vivid tile9 palettes at oil coverage ~85% on black are the keeper; do not tone them down. Verdict pending only on the droplets (must be simulated holes, not the stamped swarm). Panel photos of the cyan phase: reference/shots/panel/2026-09-17-acid-rise-cyan-panel-*.jpg ("statically this is amazing" — the remaining gap is motion: the dots must live and move with the oil).
+- ON THE PANEL (2026-09-17 18:50, acid-rise-12 live, HDR, brightness 100): the colours are "amazing" — the vivid tile9 palettes at oil coverage ~85% on black are the keeper; do not tone them down. Verdict pending only on the droplets (must be simulated holes, not the stamped swarm). Panel photos of the cyan phase: reference/shots/panel/2026-09-17-acid-rise-cyan-panel-*.jpg ("stationary, this is amazing" — the remaining gap is motion: the dots must live and move with the oil).
 - Ink: `ink-auto-bursts` (WE bursts driving ink, water clears) and the crowded paint pour
   (`ink-pour`), then the duotone versions of both: `ink-duo-pour-teal-vermillion`,
   `ink-duo-pour-yellow-magenta`, `ink-duo-bursts-yellow-magenta`.

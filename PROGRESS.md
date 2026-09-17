@@ -71,6 +71,12 @@ of combos: WE + variations, + ink sim, + the oil sim + the mirroring." Considere
   continuous. Organic hand-over = ramp the look-specific parameters instead of cross-fading
   two renders: oil coverage (threshold) rising from empty, ink opacity/veil from 0, mirror
   `soft`/centre drift, palette HSV lerp. No double rendering, no second PSO chain.
+- Preferred transition (user, 2026-09-17): a SWEEP built on the mirror machinery — the fold line
+  becomes a split line, each side paints the same dye with a different look, and the line travels
+  across the screen (any angle, the mirror's soft band on it; optionally an organic front offset by
+  dye density / slow noise so the new look leaks in along the plumes). Per-pixel blend of the two
+  recipes stays as the fallback. Both need one PSO with all looks enabled plus a blend/side weight,
+  used only while a transition is in flight (fluid md5 untouched).
 - Needs from the queued work first: mirror overlays (brief-mirror), lava rise mode, the
   transparent film, and a preset directory the director can enumerate (reference/presets/).
 - Open questions for later: minimum dwell time, blacklist of combos that clash (e.g. mirror on

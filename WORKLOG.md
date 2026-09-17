@@ -1018,3 +1018,31 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   frame; written as `dot()` on the scaled vector it is identical again (`q.y / 1` is
   exact). `style=fluid`: we-look-live 60 s 2560x1440 seed 1234 --hdr on md5
   **10E36EBF1A74EDFE609065D757300054** (-hdr 414B432114EEB0BC68432226FB081E70), unchanged.
+
+- **WIP CHECKPOINT (Fable executor, 2026-09-17 ~19:00) — DROPLET PARTICLE SIM.** User pivot:
+  the procedural swarms "look png'd on... they need to be simulated and attached to the oil".
+  DONE: `[liquid_acid] droplets` particle sim (`src/fluid.cpp` `StepAcidDroplets` /
+  `AcidFieldAt`, state + keys in `src/fluid.h`, ini parse/write in `src/main.cpp`, 10 sliders in
+  `src/settings.cpp`). Particles carry x/y, a DRAWN radius `r` relaxing toward a target `rt`, and
+  a `mergeTo` link -- nothing is ever born, merged or removed in one frame (the user's
+  "flickering"): birth is r=0 growing in, dissolution is rt=0 shrinking out, coalescence sets the
+  survivor's rt to the area-conserving sqrt(r1^2+r2^2) while the absorbed one's rt goes to 0 and
+  its centre is pulled in, so the metaball union necks them. Kind 0 = water trapped in oil
+  (negative weight), kind 1 = oil on open ink (positive, oil-coloured) -- BOTH swarm kinds
+  replaced. Motion: the local oil's own velocity (soft-max over blob kernels) for kind 0, the
+  fluid for kind 1, plus Brownian jitter, gradient confinement to the right side of the isoline,
+  attraction / contact repulsion / coalescence over a 64x36 uniform grid, a radius cap that
+  pinches off a satellite, and `droplet_life` dissolution. Rendered by being ADDED INTO the same
+  metaball `field`/`grad` before the threshold (shaders.h, new `AcidDrops` t2 / `DropCells` t4
+  root SRVs at graphics root params 7/8, `laP18`/`laP19`, AcidCB 432 -> 464 B); the hole weight
+  scales with the LOCAL blob field so a droplet punches through thick oil too. `droplets` > 0
+  forces `swarm_holes`/`swarm_drops` to 0 -- one system.
+  LEFT: not yet run even once (no render budget this session) -- the HLSL is compiled at RUNTIME,
+  so the new droplet block in kDisplaySrc is UNVERIFIED and could still fail to compile; verify
+  with a --shot before anything else. Also left: the rise_respawn off-screen fix (a respawned
+  blob's SUPPORT radius, not its baseR, must clear the frame -- suspected whole-frame flicker
+  source), the reported dark hairline ARC outside a nearly-merged hole (halo/|grad| gate), preset
+  values (`droplets` ~1500, `droplet_spawn_rate` ~40 in acid-rise-12 / acid-rise-rotate and the
+  two "Liquid Acid - rising" presets), the A/B sheets into build2/shots/droplets/, the ms delta
+  and the md5 regression checks. C++ builds clean; every key defaults to off, so shipped inis
+  should be byte-identical -- also unverified.

@@ -272,6 +272,33 @@ struct LiquidAcidConfig {
     float swarmClump  = 0.70f;      // 0 = even blanket, 1 = droplets only in patches
     float swarmDark   = 0.80f;      // how dark a trapped water droplet reads
 
+    // --- DROPLET PARTICLE SIM (the swarms' replacement) -----------------
+    // The user, on the swarm layers: "it still looks like 2 things layered.
+    // The dots look png'd on. They need to be simulated and attached to the
+    // oil, actually simulated." So these droplets are real particles: they
+    // ride the oil they sit in, nucleate, attract, coalesce (area-conserving)
+    // and dissolve, and they are added INTO THE SAME metaball field as the
+    // big blobs before the threshold -- a droplet is literally a hole in (or
+    // a bump of) the oil surface, so it inherits the soft thickness edge, the
+    // thin-oil fringe, the emergent halo and the lens highlight for free.
+    // `droplets` = 0 leaves the shipped procedural swarms untouched; above 0
+    // the swarms are forced off, because ONE system is the whole point.
+    int   droplets      = 0;        // target population (0 = off)      droplets
+    float dropletSpawn  = 40.0f;    // nucleations / s          droplet_spawn_rate
+    float dropletRMin   = 0.0009f;  // uv-y (~1.3 px at 1440p)     droplet_r_min
+    float dropletRMax   = 0.0120f;  // uv-y (1.2% of frame height) droplet_r_max
+    float dropletBias   = 3.2f;     // pow(U,bias): heavy tail to small  droplet_bias
+    float dropletSupport= 2.20f;    // kernel support / visible radius droplet_support
+    float dropletWeight = 1.25f;    // hole punch, x the LOCAL oil field droplet_weight
+    float dropletOilW   = 1.20f;    // field weight of an oil droplet droplet_oil_weight
+    float dropletInkFrac= 0.22f;    // share of spawns that sit on open ink
+    float dropletLife   = 120.0f;   // s before a droplet dissolves     droplet_life
+    float dropletDamping= 4.0f;     // velocity relaxation rate      droplet_damping
+    float dropletJitter = 0.0022f;  // brownian, uv/s                droplet_jitter
+    float dropletAttract= 0.40f;    // same-kind pull within ~3 radii droplet_attract
+    float dropletMerge  = 0.30f;    // overlap fraction that coalesces droplet_merge
+    float dropletRise   = 0.30f;    // trapped water lags the oil, x rise_speed
+
     // --- grain / speckle ---
     float grainAmt    = 0.030f;     // coarse animated film grain
     float grainScale  = 3.0f;       // px per grain cell (>1 = coarse)
@@ -726,6 +753,14 @@ private:
     void CreateAcidBuffers();       // blob SRV + param CBV upload rings (always)
     void SeedAcidBlobs();           // deterministic under the shot seed
     void StepAcidBlobs(float dt);   // CPU sim: fluid advection + curl + repulsion
+    // Droplet particle sim: nucleation, advection by the oil, attraction,
+    // coalescence, dissolution; then the uniform-grid bin the shader reads.
+    void StepAcidDroplets(float dt);
+    // Blob field + gradient + the local oil's own velocity at one uv point.
+    // The CPU twin of the shader's metaball loop, used to keep a trapped
+    // droplet inside the oil and to make it ride that oil.
+    void AcidFieldAt(float x, float y, float aspect, float& outField,
+                     float& outGx, float& outGy, float& outVx, float& outVy) const;
     void UpdateVelocityReadback();  // 64x36 velocity downsample -> CPU (1 frame late)
     void UploadAcidConstants();     // fills this frame's blob + param upload buffers
     void BindAcid();                // root SRV/CBV for the display draw
@@ -876,6 +911,43 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_acidParamUpload[kFrames];
     void*  m_acidBlobData[kFrames] = {};
     void*  m_acidParamData[kFrames] = {};
+
+    // --- droplet particle sim ([liquid_acid] droplets) ------------------
+    // Particles rendered INTO the metaball field. Binned into a uniform grid
+    // each frame so the pixel shader only walks the 3x3 cells around it; the
+    // support radius is clamped to one cell, which is exactly what makes 3x3
+    // sufficient (and what caps the per-pixel cost).
+    static const int kAcidMaxDrops = 4096;
+    static const int kDropGridW = 64, kDropGridH = 36;
+    static const int kDropCellCap = 40;     // per-cell entry cap (shader cost bound)
+    // Nothing here ever appears or disappears in one frame -- that was the
+    // user's "flickering". A droplet is BORN at r = 0 and grows into rt, a
+    // dissolving one has rt = 0 and shrinks away, and a coalescence is the
+    // same mechanism: the survivor's rt jumps to the area-conserving radius
+    // while the absorbed one's rt goes to 0 and its centre is pulled into the
+    // survivor, so the metaball union necks the two together continuously
+    // instead of one of them being deleted mid-frame.
+    struct AcidDrop {
+        float x, y;      // centre, uv (y down)
+        float r;         // DRAWN radius, uv-y units (relaxes toward rt)
+        float rt;        // target radius; 0 = dissolving
+        float vx, vy;    // uv / s
+        float age;       // s since nucleation
+        float out;       // s spent stranded on the wrong side of the interface
+        int   kind;      // 0 = water trapped in oil (hole), 1 = oil on ink
+        int   mergeTo;   // index of the droplet this one is pouring into, else -1
+    };
+    std::vector<AcidDrop> m_acidDrops;
+    std::vector<int>   m_dropletCellStart;  // kDropGridW*kDropGridH + 1
+    std::vector<int>   m_dropletCellCount;
+    std::vector<int>   m_dropletOrder;      // droplet indices, sorted by cell
+    uint32_t m_dropletRng = 0x1234567u;
+    float    m_dropletSpawnAcc = 0.0f;
+    int      m_dropletSeededFor = -1;       // population the bulk fill ran for
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dropletUpload[kFrames];
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dropletCellUpload[kFrames];
+    void*  m_dropletData[kFrames] = {};
+    void*  m_dropletCellData[kFrames] = {};
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoLiquidAcid;
     // low-res velocity readback (same async pattern as the coverage governor)
     Tex    m_velLow;

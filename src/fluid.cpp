@@ -266,7 +266,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rSrv3 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, 0 };
-        D3D12_ROOT_PARAMETER params[7] = {};
+        D3D12_ROOT_PARAMETER params[9] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, 32 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -288,6 +288,16 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[6].Constants = { 3, 0, 12 };         // b3 (MirrorCB)
         params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        // Params 7/8 are the droplet particle sim's two structured buffers —
+        // the particles (t2) and the uniform-grid cell table (t4) — as ROOT
+        // descriptors, same deal as the blob buffer above: no heap slots, and
+        // nothing at all for the shaders that never reference them.
+        params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[7].Descriptor = { 2, 0 };            // t2 (AcidDrops)
+        params[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[8].Descriptor = { 4, 0 };            // t4 (DropCells)
+        params[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -295,7 +305,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 7;
+        rsd.NumParameters = 9;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -1443,6 +1453,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         if (!m_acidSeeded || (int)m_acidBlobs.size() != want) SeedAcidBlobs();
         UpdateVelocityReadback();
         StepAcidBlobs(dt);
+        StepAcidDroplets(dt);
         UploadAcidConstants();
     }
     // Shared ink-in-water constants: needed by style=ink and by the acid look
@@ -1968,9 +1979,18 @@ struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
-    float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4], men[4];
+    float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
+    float p18[4], p19[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 432, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 464, "AcidCB layout");
+
+// One particle of the droplet sim. Must match StructuredBuffer<float4>
+// AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
+// = a water droplet trapped in the oil, positive = an oil droplet on the open
+// ink), w = reserved.
+struct AcidDropGPU { float a[4]; };
+// Must match StructuredBuffer<uint2> DropCells: (first index, count).
+struct DropCellGPU { uint32_t first, count; };
 
 // GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
 struct InkParamsGPU {
@@ -2117,13 +2137,29 @@ void FluidRenderer::CreateAcidBuffers() {
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_inkParamUpload[i])));
+        // droplet particle sim: 64 KB of particles + 18 KB of cell table per
+        // frame. Created unconditionally, like the blob ring, so the display
+        // draw can always bind root params 7/8 whichever PSO is selected —
+        // and zeroed, so with the sim off every cell reports a count of 0.
+        rd.Width = sizeof(AcidDropGPU) * kAcidMaxDrops;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&m_dropletUpload[i])));
+        rd.Width = sizeof(DropCellGPU) * kDropGridW * kDropGridH;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&m_dropletCellUpload[i])));
         D3D12_RANGE none = { 0, 0 };
         HR(m_acidBlobUpload[i]->Map(0, &none, &m_acidBlobData[i]));
         HR(m_acidParamUpload[i]->Map(0, &none, &m_acidParamData[i]));
         HR(m_inkParamUpload[i]->Map(0, &none, &m_inkParamData[i]));
+        HR(m_dropletUpload[i]->Map(0, &none, &m_dropletData[i]));
+        HR(m_dropletCellUpload[i]->Map(0, &none, &m_dropletCellData[i]));
         memset(m_acidBlobData[i], 0, sizeof(AcidBlobGPU) * kAcidMaxBlobs);
         memset(m_acidParamData[i], 0, sizeof(AcidParamsGPU));
         memset(m_inkParamData[i], 0, sizeof(InkParamsGPU));
+        memset(m_dropletData[i], 0, sizeof(AcidDropGPU) * kAcidMaxDrops);
+        memset(m_dropletCellData[i], 0, sizeof(DropCellGPU) * kDropGridW * kDropGridH);
     }
 }
 
@@ -2435,6 +2471,400 @@ void FluidRenderer::StepAcidBlobs(float dt) {
     }
 }
 
+// ===========================================================================
+// DROPLET PARTICLE SIM ([liquid_acid] droplets)
+//
+// The procedural bubble swarms were two cellular layers evaluated in SCREEN
+// space. The user, seeing them on the panel: "it still looks like 2 things
+// layered. The dots look png'd on. They need to be simulated and attached to
+// the oil, actually simulated. Make a surface tension sim and have smaller
+// dots organically form."
+//
+// So these are particles, and -- the important part -- they are rendered by
+// being ADDED INTO THE SAME METABALL FIELD as the big blobs, before the
+// threshold. A trapped water droplet is a literal hole in the oil surface and
+// an oil droplet on the ink (or inside a big hole) is a literal bump of it,
+// which is why they get the soft thickness edge, the thin-oil colour fringe,
+// the emergent halo and the rim without one line of special-case shading --
+// and why two of them approaching NECK together, so a coalescence reads as
+// surface tension. Both swarm kinds are replaced: kind 0 = water in oil,
+// kind 1 = oil on open ink.
+//
+// Determinism: a private xorshift seeded off the shot seed, exactly like the
+// blob population, so a --shot replays and the fluid's own rand() is untouched.
+// ===========================================================================
+
+// CPU twin of the shader's metaball loop: the field, its gradient and the
+// local OIL's own velocity (the same soft-max blend the fill colour uses) at
+// one uv point. rise_stretch's anisotropy is deliberately not reproduced --
+// it only matters for a fast-moving blob's silhouette, and this is used for
+// confinement and for carrying a droplet, where a few percent of a radius is
+// far below what the damping relaxation smooths out anyway.
+void FluidRenderer::AcidFieldAt(float x, float y, float aspect, float& outField,
+                                float& outGx, float& outGy,
+                                float& outVx, float& outVy) const {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const float px = x * aspect, py = y;
+    float f = 0.0f, gx = 0.0f, gy = 0.0f;
+    float vw = 0.0f, vx = 0.0f, vy = 0.0f;
+    for (size_t bi = 0; bi < m_acidBlobs.size(); bi++) {
+        const AcidBlob& b = m_acidBlobs[bi];
+        const float r = b.baseR * (1.0f + a.breathAmt * sinf(b.phase));
+        const float sup = r * a.supportScale;
+        const float s2 = sup * sup;
+        const float qx = px - b.x * aspect, qy = py - b.y;
+        const float d2 = qx * qx + qy * qy;
+        if (d2 >= s2 || s2 < 1e-12f) continue;
+        const float u = 1.0f - d2 / s2;
+        const float u2 = u * u;
+        const float w = u2 * u;
+        f += w * b.wgt;
+        const float k = (-6.0f * u2 / s2) * b.wgt;
+        gx += k * qx;
+        gy += k * qy;
+        if (b.wgt > 0.0f) {
+            const float w2 = w * w, w4 = w2 * w2;
+            vw += w4; vx += b.vx * w4; vy += b.vy * w4;
+        }
+    }
+    outField = f; outGx = gx; outGy = gy;
+    outVx = (vw > 1e-9f) ? vx / vw : 0.0f;
+    outVy = (vw > 1e-9f) ? vy / vw : 0.0f;
+}
+
+void FluidRenderer::StepAcidDroplets(float dt) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    int target = a.droplets;
+    if (target > kAcidMaxDrops) target = kAcidMaxDrops;
+    if (target <= 0) {
+        if (!m_acidDrops.empty()) m_acidDrops.clear();
+        m_dropletSeededFor = -1;
+        return;
+    }
+    if (dt <= 0.0f) return;
+
+    const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    const float simTexX = 1.0f / fmaxf((float)m_simW, 1.0f);
+    const float simTexY = 1.0f / fmaxf((float)m_simH, 1.0f);
+    // The shader walks the 3x3 cells around a pixel, so a droplet's SUPPORT
+    // radius may not exceed one cell -- that is what makes 3x3 exact instead
+    // of "usually enough", and it is also the per-pixel cost bound.
+    const float cellP = fminf(aspect / (float)kDropGridW, 1.0f / (float)kDropGridH);
+    const float rCap  = cellP / fmaxf(a.dropletSupport, 0.5f);
+    const float rMax  = fminf(fmaxf(a.dropletRMax, 1e-4f), rCap);
+    const float rMin  = fminf(fmaxf(a.dropletRMin, 1e-5f), rMax * 0.5f);
+    const float thresh = a.threshold;
+    // ONE relaxation time for birth, coalescence and dissolution: nothing in
+    // this sim changes size or membership discontinuously.
+    const float tau   = 0.34f;
+    const float relax = 1.0f - expf(-dt / tau);
+    const float mrelax = 1.0f - expf(-dt / 0.18f);   // merge centre pull
+    const float life  = a.dropletLife;
+
+    auto rf = [&]() {
+        m_dropletRng ^= m_dropletRng << 13;
+        m_dropletRng ^= m_dropletRng >> 17;
+        m_dropletRng ^= m_dropletRng << 5;
+        return (m_dropletRng >> 8) * (1.0f / 16777216.0f);
+    };
+    // pow(U, bias) with bias > 1 crowds the small end: a heavy tail of tiny
+    // droplets with a few big ones, which is what the macro footage shows.
+    auto drawR = [&]() {
+        return rMin + (rMax - rMin) * powf(rf(), fmaxf(a.dropletBias, 0.05f));
+    };
+    // bilinear tap of the 64x36 velocity readback, uv/s (same as StepAcidBlobs)
+    auto sampleVel = [&](float x, float y, float& ox, float& oy) {
+        float fx2 = x * kVelW - 0.5f, fy2 = y * kVelH - 0.5f;
+        int x0 = (int)floorf(fx2), y0 = (int)floorf(fy2);
+        float tx = fx2 - x0, ty = fy2 - y0;
+        auto at = [&](int xi, int yi, int c) {
+            xi = xi < 0 ? 0 : (xi >= kVelW ? kVelW - 1 : xi);
+            yi = yi < 0 ? 0 : (yi >= kVelH ? kVelH - 1 : yi);
+            return m_velCpu[((size_t)yi * kVelW + xi) * 2 + c];
+        };
+        ox = (at(x0, y0, 0) * (1 - tx) + at(x0 + 1, y0, 0) * tx) * (1 - ty)
+           + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
+        oy = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
+           + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
+        ox *= simTexX; oy *= simTexY;
+    };
+    // Nucleation is a SURFACE effect: a droplet of water comes out of solution
+    // where the film is THIN (near an edge, near another droplet's rim) and
+    // where the flow is shearing, not uniformly across a slab of oil.
+    auto nucleate = [&](int kind, AcidDrop& out) -> bool {
+        for (int tr = 0; tr < 20; tr++) {
+            const float x = rf(), y = rf();
+            float f, gx, gy, ovx, ovy;
+            AcidFieldAt(x, y, aspect, f, gx, gy, ovx, ovy);
+            const float gl = sqrtf(gx * gx + gy * gy) + 1e-6f;
+            const float sdf = (f - thresh) / gl;
+            float p;
+            if (kind == 0) {
+                if (sdf <= 0.004f) continue;               // inside the oil only
+                float vu, vv; sampleVel(x, y, vu, vv);
+                const float sp = sqrtf(vu * vu + vv * vv);
+                p = 0.12f + 0.68f * expf(-sdf / 0.055f) + 0.35f * (1.0f - expf(-sp * 18.0f));
+            } else {
+                if (sdf >= -0.004f) continue;              // open ink only
+                p = 0.10f + 0.70f * expf(sdf / 0.070f);
+            }
+            if (rf() > fminf(p, 1.0f)) continue;
+            out = AcidDrop{};
+            out.x = x; out.y = y;
+            out.r = 0.0f;                                  // born at nothing
+            out.rt = drawR();
+            out.kind = kind;
+            out.mergeTo = -1;
+            return true;
+        }
+        return false;
+    };
+
+    // ---- bulk fill (startup / population change) -------------------------
+    // Nucleating 1500 droplets at ~40/s would leave the first 40 s bare, so
+    // the initial condition is drawn in one go, at full radius and with
+    // staggered ages so they do not all reach droplet_life together.
+    if (m_dropletSeededFor != target) {
+        m_dropletRng = (g_randSeed ? (g_randSeed * 2246822519u) ^ 0xD407u : GetTickCount()) | 1u;
+        m_acidDrops.clear();
+        m_acidDrops.reserve(target);
+        for (int i = 0; i < target; i++) {
+            AcidDrop d;
+            const int kind = (rf() < a.dropletInkFrac) ? 1 : 0;
+            if (!nucleate(kind, d)) continue;
+            d.r = d.rt;
+            d.age = (life > 0.5f) ? rf() * life : 0.0f;
+            m_acidDrops.push_back(d);
+        }
+        m_dropletSeededFor = target;
+        m_dropletSpawnAcc = 0.0f;
+    }
+
+    const int n = (int)m_acidDrops.size();
+    std::vector<float> ax((size_t)n, 0.0f), ay((size_t)n, 0.0f);
+
+    // ---- 1. motion -------------------------------------------------------
+    for (int i = 0; i < n; i++) {
+        AcidDrop& d = m_acidDrops[i];
+        d.age += dt;
+        float f, gx, gy, ovx, ovy;
+        AcidFieldAt(d.x, d.y, aspect, f, gx, gy, ovx, ovy);
+        const float gl = sqrtf(gx * gx + gy * gy) + 1e-6f;
+        const float sdf = (f - thresh) / gl;
+        float vu, vv; sampleVel(d.x, d.y, vu, vv);
+
+        float tx, ty;
+        if (d.kind == 0) {
+            // trapped INSIDE the oil: it rides the oil, not the water. ovx/ovy
+            // is the local oil's own velocity, so a droplet travels with the
+            // disc it sits in and shears when that disc does.
+            tx = ovx; ty = ovy;
+            // ...and lags it slightly (uv y is down, so +y is down): trapped
+            // water is denser than the wax, which is what makes a bubble creep
+            // ACROSS the disc instead of riding it like a painted dot.
+            ty += a.riseSpeed * a.dropletRise;
+        } else {
+            tx = vu * a.flowGain;
+            ty = vv * a.flowGain;
+        }
+        // slow Brownian jitter
+        tx += (rf() * 2.0f - 1.0f) * a.dropletJitter;
+        ty += (rf() * 2.0f - 1.0f) * a.dropletJitter;
+
+        // ---- confinement: kind 0 stays inside the oil, kind 1 outside it --
+        // Push back along the field gradient (which points INTO the oil).
+        const float want = (d.kind == 0) ? 1.0f : -1.0f;
+        const float margin = fmaxf(d.r * 0.6f, 1e-4f);
+        if (sdf * want < margin) {
+            const float over = (margin - sdf * want) / margin;
+            const float push = 0.05f * fminf(over, 3.0f);
+            tx += (gx / gl) * want * push / aspect;
+            ty += (gy / gl) * want * push;
+            d.out += dt;
+        } else {
+            d.out = fmaxf(d.out - dt * 2.0f, 0.0f);
+        }
+        // Stranded on the wrong side for good (the oil moved away): dissolve
+        // it. Never delete it outright -- that is exactly the one-frame pop
+        // the procedural swarm had.
+        if (d.out > 1.2f) d.rt = 0.0f;
+
+        // merge pull: the absorbed droplet's centre slides into the survivor
+        if (d.mergeTo >= 0 && d.mergeTo < n) {
+            const AcidDrop& s = m_acidDrops[d.mergeTo];
+            d.x += (s.x - d.x) * mrelax;
+            d.y += (s.y - d.y) * mrelax;
+        }
+
+        const float k = 1.0f - expf(-fmaxf(a.dropletDamping, 0.1f) * dt);
+        d.vx += (tx - d.vx) * k;
+        d.vy += (ty - d.vy) * k;
+        d.x += d.vx * dt;
+        d.y += d.vy * dt;
+
+        if (life > 0.5f && d.age > life) d.rt = 0.0f;
+        // off the frame: dissolve there, never inside the visible area
+        if (d.x < -0.04f || d.x > 1.04f || d.y < -0.04f || d.y > 1.04f) d.rt = 0.0f;
+        d.r += (d.rt - d.r) * relax;
+        if (!(d.r > 0.0f)) d.r = 0.0f;              // NaN guard
+        if (!(d.x > -10.0f && d.x < 10.0f)) { d.x = 0.5f; d.rt = 0.0f; d.r = 0.0f; }
+        if (!(d.y > -10.0f && d.y < 10.0f)) { d.y = 0.5f; d.rt = 0.0f; d.r = 0.0f; }
+    }
+
+    // ---- 2. uniform grid (neighbour search AND the shader's cell table) ---
+    const int NC = kDropGridW * kDropGridH;
+    auto buildGrid = [&]() {
+        const int m = (int)m_acidDrops.size();
+        m_dropletCellCount.assign((size_t)NC, 0);
+        m_dropletCellStart.assign((size_t)NC + 1, 0);
+        std::vector<int> cellOf((size_t)m, 0);
+        for (int i = 0; i < m; i++) {
+            const AcidDrop& d = m_acidDrops[i];
+            int cx = (int)floorf(d.x * kDropGridW);
+            int cy = (int)floorf(d.y * kDropGridH);
+            cx = cx < 0 ? 0 : (cx >= kDropGridW ? kDropGridW - 1 : cx);
+            cy = cy < 0 ? 0 : (cy >= kDropGridH ? kDropGridH - 1 : cy);
+            const int c = cy * kDropGridW + cx;
+            cellOf[i] = c;
+            if (m_dropletCellCount[c] < kDropCellCap) m_dropletCellCount[c]++;
+            else cellOf[i] = -1;                    // over the per-cell cap
+        }
+        int acc = 0;
+        for (int c = 0; c < NC; c++) { m_dropletCellStart[c] = acc; acc += m_dropletCellCount[c]; }
+        m_dropletCellStart[NC] = acc;
+        std::vector<int> fill((size_t)NC, 0);
+        m_dropletOrder.assign((size_t)acc, 0);
+        for (int i = 0; i < m; i++) {
+            const int c = cellOf[i];
+            if (c < 0) continue;
+            m_dropletOrder[(size_t)m_dropletCellStart[c] + fill[c]] = i;
+            fill[c]++;
+        }
+    };
+    buildGrid();
+
+    // ---- 3. surface tension: attraction, contact repulsion, coalescence ---
+    const float mergeF = 1.0f - fminf(fmaxf(a.dropletMerge, 0.05f), 0.90f);
+    std::vector<AcidDrop> satellites;
+    for (int ci = 0; ci < NC; ci++) {
+        const int cx0 = ci % kDropGridW, cy0 = ci / kDropGridW;
+        const int e0 = m_dropletCellStart[ci] + m_dropletCellCount[ci];
+        for (int si = m_dropletCellStart[ci]; si < e0; si++) {
+            const int i = m_dropletOrder[si];
+            if (m_acidDrops[i].r <= 0.0f) continue;
+            for (int oy = -1; oy <= 1; oy++) {
+                const int yy = cy0 + oy;
+                if (yy < 0 || yy >= kDropGridH) continue;
+                for (int ox = -1; ox <= 1; ox++) {
+                    const int xx = cx0 + ox;
+                    if (xx < 0 || xx >= kDropGridW) continue;
+                    const int cj = yy * kDropGridW + xx;
+                    const int e1 = m_dropletCellStart[cj] + m_dropletCellCount[cj];
+                    for (int sj = m_dropletCellStart[cj]; sj < e1; sj++) {
+                        const int j = m_dropletOrder[sj];
+                        if (j <= i) continue;               // each pair once
+                        AcidDrop& di = m_acidDrops[i];
+                        AcidDrop& dj = m_acidDrops[j];
+                        if (dj.kind != di.kind || dj.r <= 0.0f) continue;
+                        const float dx = (di.x - dj.x) * aspect, dy = di.y - dj.y;
+                        const float d2 = dx * dx + dy * dy;
+                        const float sum = di.r + dj.r;
+                        const float reach = 3.0f * sum;
+                        if (d2 > reach * reach || d2 < 1e-12f) continue;
+                        const float dd = sqrtf(d2), inv = 1.0f / dd;
+                        if (dd < sum * mergeF && di.mergeTo < 0 && dj.mergeTo < 0
+                            && di.rt > 0.0f && dj.rt > 0.0f) {
+                            // COALESCE, area-conserving. The survivor is the
+                            // larger one; the other pours into it (rt -> 0,
+                            // centre pulled in) instead of being deleted, so
+                            // the metaball union necks them together.
+                            const bool iBig = (di.rt >= dj.rt);
+                            const int bi = iBig ? i : j, sm = iBig ? j : i;
+                            const float rb = m_acidDrops[bi].rt, rs = m_acidDrops[sm].rt;
+                            const float area = rb * rb + rs * rs;
+                            float rn = sqrtf(area);
+                            if (rn > rMax) {
+                                // A cap, or every droplet ends up one puddle.
+                                // The surplus area leaves as a SATELLITE, the
+                                // way a real over-fed drop pinches one off.
+                                const float rs2 = area - rMax * rMax;
+                                rn = rMax;
+                                if (rs2 > rMin * rMin) {
+                                    AcidDrop sat = AcidDrop{};
+                                    const float ang = rf() * 6.2831853f;
+                                    const float rr = sqrtf(rs2);
+                                    sat.x = m_acidDrops[bi].x
+                                          + cosf(ang) * (rMax + rr) * 1.25f / aspect;
+                                    sat.y = m_acidDrops[bi].y + sinf(ang) * (rMax + rr) * 1.25f;
+                                    sat.r = 0.0f; sat.rt = rr;
+                                    sat.kind = m_acidDrops[bi].kind; sat.mergeTo = -1;
+                                    satellites.push_back(sat);
+                                }
+                            }
+                            m_acidDrops[bi].rt = rn;
+                            m_acidDrops[sm].rt = 0.0f;
+                            m_acidDrops[sm].mergeTo = bi;
+                            continue;
+                        }
+                        float acc;
+                        if (dd < sum) {
+                            // contact repulsion: two droplets that are not
+                            // merging stay round instead of interpenetrating
+                            acc = (1.0f - dd / sum) * 0.35f;
+                        } else {
+                            // short-range attraction within ~3 radii
+                            acc = -a.dropletAttract * (1.0f - (dd - sum) / (2.0f * sum)) * 0.05f;
+                        }
+                        const float ux = dx * inv, uy = dy * inv;
+                        ax[i] += ux * acc; ay[i] += uy * acc;
+                        ax[j] -= ux * acc; ay[j] -= uy * acc;
+                    }
+                }
+            }
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        m_acidDrops[i].vx += ax[i] * dt;
+        m_acidDrops[i].vy += ay[i] * dt;
+    }
+
+    // ---- 4. retire the fully dissolved, keeping mergeTo consistent -------
+    {
+        std::vector<int> remap(m_acidDrops.size(), -1);
+        std::vector<AcidDrop> keep;
+        keep.reserve(m_acidDrops.size());
+        for (size_t i = 0; i < m_acidDrops.size(); i++) {
+            const AcidDrop& d = m_acidDrops[i];
+            if (d.rt <= 0.0f && d.r < rMin * 0.08f) continue;   // gone, invisibly
+            remap[i] = (int)keep.size();
+            keep.push_back(d);
+        }
+        for (size_t i = 0; i < keep.size(); i++) {
+            AcidDrop& d = keep[i];
+            d.mergeTo = (d.mergeTo >= 0 && d.mergeTo < (int)remap.size())
+                      ? remap[d.mergeTo] : -1;
+        }
+        m_acidDrops.swap(keep);
+    }
+    for (size_t i = 0; i < satellites.size(); i++)
+        if ((int)m_acidDrops.size() < kAcidMaxDrops) m_acidDrops.push_back(satellites[i]);
+
+    // ---- 5. nucleation ---------------------------------------------------
+    m_dropletSpawnAcc += fmaxf(a.dropletSpawn, 0.0f) * dt;
+    if (m_dropletSpawnAcc > 60.0f) m_dropletSpawnAcc = 60.0f;
+    int live = 0;
+    for (size_t i = 0; i < m_acidDrops.size(); i++) if (m_acidDrops[i].rt > 0.0f) live++;
+    while (m_dropletSpawnAcc >= 1.0f) {
+        m_dropletSpawnAcc -= 1.0f;
+        if (live >= target || (int)m_acidDrops.size() >= kAcidMaxDrops) break;
+        AcidDrop d;
+        if (nucleate((rf() < a.dropletInkFrac) ? 1 : 0, d)) { m_acidDrops.push_back(d); live++; }
+    }
+
+    // ---- 6. final bin, the one the shader reads --------------------------
+    buildGrid();
+}
+
 void FluidRenderer::UploadAcidConstants() {
     const LiquidAcidConfig& a = m_cfg.acid;
     const UINT fi = m_frameIndex;
@@ -2548,7 +2978,12 @@ void FluidRenderer::UploadAcidConstants() {
     float p5[4] = { a.seamLo, a.seamHi, a.grainAmt, a.grainScale };
     float p6[4] = { a.speckle, a.speckScale, m_time, aspect };
     float p7[4] = { a.oilHdr, a.rimHdr, a.meniscusOff, a.inkShading };
-    float p8[4] = { a.swarmHoles, a.swarmDrops, a.swarmDensity, a.swarmRimDark };
+    // With the droplet particle sim on, the procedural swarms are forced OFF:
+    // ONE system is the whole point (the user, on the two layered together:
+    // "it still looks like 2 things layered. The dots look png'd on").
+    const bool dropsOn = (a.droplets > 0);
+    float p8[4] = { dropsOn ? 0.0f : a.swarmHoles, dropsOn ? 0.0f : a.swarmDrops,
+                    a.swarmDensity, a.swarmRimDark };
     float p9[4] = { a.swarmScaleA, a.swarmScaleB, a.swarmRMin, a.swarmRMax };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
     memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
@@ -2572,10 +3007,44 @@ void FluidRenderer::UploadAcidConstants() {
     float p16[4] = { fmaxf(a.oilInkBlur, 0.0f), 0.0f, 0.0f, 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
+    float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH, 0.0f };
+    float p19[4] = { fmaxf(a.dropletSupport, 0.5f), fmaxf(a.dropletWeight, 0.0f),
+                     fmaxf(a.dropletOilW, 0.0f), 0.0f };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
     memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
+    memcpy(p.p18, p18, 16); memcpy(p.p19, p19, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
+
+    // ---- droplet particle buffers ---------------------------------------
+    // Sorted by grid cell, with a (first, count) table per cell, so the pixel
+    // shader walks only the 3x3 cells around it. Both buffers stay all-zero
+    // when the sim is off, which is a count of 0 in every cell.
+    if (m_dropletData[fi] && m_dropletCellData[fi]) {
+        AcidDropGPU* dd = (AcidDropGPU*)m_dropletData[fi];
+        DropCellGPU* dc = (DropCellGPU*)m_dropletCellData[fi];
+        const int NC = kDropGridW * kDropGridH;
+        if (!dropsOn || m_dropletOrder.empty()) {
+            memset(dc, 0, sizeof(DropCellGPU) * NC);
+        } else {
+            const int total = (int)m_dropletOrder.size();
+            for (int k = 0; k < total && k < kAcidMaxDrops; k++) {
+                const AcidDrop& d = m_acidDrops[m_dropletOrder[k]];
+                dd[k].a[0] = d.x;
+                dd[k].a[1] = d.y;
+                // SIGN carries the kind: negative = a hole in the oil.
+                dd[k].a[2] = (d.kind == 0) ? -d.r : d.r;
+                dd[k].a[3] = 0.0f;
+            }
+            for (int c = 0; c < NC; c++) {
+                int first = m_dropletCellStart[c], cnt = m_dropletCellCount[c];
+                if (first >= kAcidMaxDrops) { first = 0; cnt = 0; }
+                else if (first + cnt > kAcidMaxDrops) cnt = kAcidMaxDrops - first;
+                dc[c].first = (uint32_t)first;
+                dc[c].count = (uint32_t)(cnt < 0 ? 0 : cnt);
+            }
+        }
+    }
 }
 
 void FluidRenderer::BindAcid() {
@@ -2584,6 +3053,10 @@ void FluidRenderer::BindAcid() {
         m_cmd->SetGraphicsRootConstantBufferView(2, m_acidParamUpload[fi]->GetGPUVirtualAddress());
     if (m_acidBlobUpload[fi])
         m_cmd->SetGraphicsRootShaderResourceView(3, m_acidBlobUpload[fi]->GetGPUVirtualAddress());
+    if (m_dropletUpload[fi])
+        m_cmd->SetGraphicsRootShaderResourceView(7, m_dropletUpload[fi]->GetGPUVirtualAddress());
+    if (m_dropletCellUpload[fi])
+        m_cmd->SetGraphicsRootShaderResourceView(8, m_dropletCellUpload[fi]->GetGPUVirtualAddress());
 }
 
 // ===========================================================================

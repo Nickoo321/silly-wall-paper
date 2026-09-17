@@ -464,12 +464,26 @@ cbuffer AcidCB : register(b1) {
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
     float4 laP16;        // x oilInkBlur y - z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
+    float4 laP18;        // x dropsOn    y gridW      z gridH      w -
+    float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
 struct AcidBlobGPU { float4 a; float4 b; };
 StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
+
+// ---------------------------------------------------------------------------
+// DROPLET PARTICLE SIM. One float4 per particle: xy = centre uv, z = visible
+// radius SIGNED (negative = water trapped in the oil, i.e. a hole; positive =
+// an oil droplet on open ink), w = reserved. The CPU bins them into a uniform
+// grid and uploads them sorted by cell; DropCells[c] = (first, count), so a
+// pixel only walks the 3x3 cells around it. The support radius is clamped on
+// the CPU to one cell, which is what makes 3x3 exact rather than approximate.
+// Both buffers are all-zero (count 0 everywhere) when the sim is off.
+// ---------------------------------------------------------------------------
+StructuredBuffer<float4> AcidDrops : register(t2);
+StructuredBuffer<uint2>  DropCells : register(t4);
 
 float AcidHash21(float2 p) {
     p = frac(p * float2(234.34, 435.345));
@@ -782,6 +796,69 @@ float4 PSMain(VSOut i) : SV_Target {
             float w2 = w * w, w4 = w2 * w2;
             colSum += B.b.rgb * w4;
             colW   += w4;
+        }
+    }
+    // ---- droplets: the SAME surface, not an overlay ----------------------
+    // Every droplet's Wyvill kernel is added into `field`/`grad` BEFORE the
+    // threshold, so a trapped water droplet is a literal hole in the oil and
+    // an oil droplet on the ink is a literal bump of it: both get the soft
+    // thickness edge, the thin-oil colour fringe, the emergent halo, the lens
+    // highlight and the metaball NECK as two of them approach -- which is
+    // what makes a coalescence read as surface tension instead of a cut.
+    //
+    // The negative (hole) weight is scaled by the LOCAL oil field, not by a
+    // constant: deep inside a merged mass the field is several units high and
+    // a fixed -1.2 would not reach the isoline, so small holes would simply
+    // vanish wherever the oil is thick. Scaling by max(field, 1) punches the
+    // same relative depth everywhere. Its own spatial derivative is ignored
+    // in `grad` on purpose: the blob field varies over ~0.1 p-units and a
+    // droplet over ~0.01, so the droplet term dominates the edge anyway.
+    if (laP18.x > 0.5) {
+        const int gw = (int)laP18.y, gh = (int)laP18.z;
+        const int cx = clamp((int)floor(uv.x * gw), 0, gw - 1);
+        const int cy = clamp((int)floor(uv.y * gh), 0, gh - 1);
+        float  dNeg = 0.0, dPos = 0.0;
+        float2 gNeg = float2(0.0, 0.0), gPos = float2(0.0, 0.0);
+        [loop]
+        for (int oy = -1; oy <= 1; oy++) {
+            int yy = cy + oy;
+            if (yy < 0 || yy >= gh) continue;
+            [loop]
+            for (int ox = -1; ox <= 1; ox++) {
+                int xx = cx + ox;
+                if (xx < 0 || xx >= gw) continue;
+                uint2 cell = DropCells[yy * gw + xx];
+                [loop]
+                for (uint di = 0; di < cell.y; di++) {
+                    float4 D = AcidDrops[cell.x + di];
+                    float2 dq = pp - float2(D.x * aspect, D.y);
+                    float  ds = abs(D.z) * laP19.x;
+                    float  ds2 = ds * ds;
+                    float  dd2 = dot(dq, dq);
+                    if (dd2 >= ds2) continue;
+                    float  du = 1.0 - dd2 / ds2;
+                    float  du2 = du * du;
+                    float  dw = du2 * du;
+                    float2 dg = (-6.0 * du2 / ds2) * dq;
+                    if (D.z < 0.0) { dNeg += dw; gNeg += dg; }
+                    else           { dPos += dw; gPos += dg; }
+                }
+            }
+        }
+        if (dNeg > 0.0) {
+            float pun = max(field, 1.0) * laP19.y;
+            field -= dNeg * pun;
+            grad  -= gNeg * pun;
+        }
+        if (dPos > 0.0) {
+            field += dPos * laP19.z;
+            grad  += gPos * laP19.z;
+            // same soft-max fill blend the blobs use, so an oil droplet takes
+            // the palette's own bright shade and merges colour with a blob it
+            // touches instead of stamping a flat disc over it.
+            float dq2 = saturate(dPos), dq4 = dq2 * dq2 * dq2 * dq2;
+            colSum += laOil[3].rgb * dq4;
+            colW   += dq4;
         }
     }
     float3 oilBase = (colW > 1e-9) ? colSum / colW : laOil[0].rgb;

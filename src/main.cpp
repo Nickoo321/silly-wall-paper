@@ -386,6 +386,21 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         if (a.sweepCount < 1) a.sweepCount = 1;
         if (a.sweepCount > LiquidAcidConfig::kSweepMax)
             a.sweepCount = LiquidAcidConfig::kSweepMax;
+        a.droplets     = getI(S, L"droplets", a.droplets);
+        a.dropletSpawn = getF(S, L"droplet_spawn_rate", a.dropletSpawn);
+        a.dropletRMin  = getF(S, L"droplet_r_min", a.dropletRMin);
+        a.dropletRMax  = getF(S, L"droplet_r_max", a.dropletRMax);
+        a.dropletBias  = getF(S, L"droplet_bias", a.dropletBias);
+        a.dropletSupport = getF(S, L"droplet_support", a.dropletSupport);
+        a.dropletWeight  = getF(S, L"droplet_weight", a.dropletWeight);
+        a.dropletOilW    = getF(S, L"droplet_oil_weight", a.dropletOilW);
+        a.dropletInkFrac = getF(S, L"droplet_ink_frac", a.dropletInkFrac);
+        a.dropletLife    = getF(S, L"droplet_life", a.dropletLife);
+        a.dropletDamping = getF(S, L"droplet_damping", a.dropletDamping);
+        a.dropletJitter  = getF(S, L"droplet_jitter", a.dropletJitter);
+        a.dropletAttract = getF(S, L"droplet_attract", a.dropletAttract);
+        a.dropletMerge   = getF(S, L"droplet_merge", a.dropletMerge);
+        a.dropletRise    = getF(S, L"droplet_rise", a.dropletRise);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1426,6 +1441,21 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"hue_rotate_period", a.hueRotatePeriod, 1);
         putF(S, L"oil_saturation", a.oilSaturation, 3);
         putI(S, L"sweep_count", a.sweepCount);
+        putI(S, L"droplets", a.droplets);
+        putF(S, L"droplet_spawn_rate", a.dropletSpawn, 1);
+        putF(S, L"droplet_r_min", a.dropletRMin, 4);
+        putF(S, L"droplet_r_max", a.dropletRMax, 4);
+        putF(S, L"droplet_bias", a.dropletBias, 2);
+        putF(S, L"droplet_support", a.dropletSupport, 2);
+        putF(S, L"droplet_weight", a.dropletWeight, 3);
+        putF(S, L"droplet_oil_weight", a.dropletOilW, 3);
+        putF(S, L"droplet_ink_frac", a.dropletInkFrac, 3);
+        putF(S, L"droplet_life", a.dropletLife, 1);
+        putF(S, L"droplet_damping", a.dropletDamping, 2);
+        putF(S, L"droplet_jitter", a.dropletJitter, 4);
+        putF(S, L"droplet_attract", a.dropletAttract, 3);
+        putF(S, L"droplet_merge", a.dropletMerge, 3);
+        putF(S, L"droplet_rise", a.dropletRise, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

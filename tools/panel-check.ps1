@@ -5,24 +5,38 @@
 # copies the chosen ini over it, stops the running FluidWallpaper.exe, and launches build2\FluidWallpaper.exe
 # (the build with the new looks). -Restore copies the backup back and relaunches build\FluidWallpaper.exe.
 # Wallpaper Engine is never touched. Run ONLY with the user's go-ahead: it changes what is on their screen.
-param([string]$Ini = "", [switch]$Restore)
+#   -InstallPresets : also copy reference\presets\*.ini into %APPDATA%\FluidWallpaper\moods (tray Presets menu)
+# NOTE: run this via a scheduled task (tools\panel-check-task.ps1) when driven from Claude Code — its
+# processes are MSIX-virtualized and their %APPDATA% writes land in a shadow folder the user never sees.
+param([string]$Ini = "", [switch]$Restore, [switch]$InstallPresets)
+$root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+$logf = Join-Path $root "build2\shots\panel-check.log"
+function Log($m) { $l = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m; Add-Content -Path $logf -Value $l; Write-Host $l }
+Log ("start ini='{0}' restore={1} installPresets={2} appdata={3}" -f $Ini, [bool]$Restore, [bool]$InstallPresets, $env:APPDATA)
+if ($InstallPresets) {
+    $moods = Join-Path $env:APPDATA "FluidWallpaper\moods"
+    if (-not (Test-Path $moods)) { New-Item -ItemType Directory -Path $moods | Out-Null }
+    $n = 0
+    Get-ChildItem (Join-Path $root "reference\presets") -Filter *.ini | ForEach-Object { Copy-Item $_.FullName $moods -Force; $n++ }
+    Log ("installed {0} presets into {1} (now {2} inis)" -f $n, $moods, (Get-ChildItem $moods -Filter *.ini).Count)
+}
 $root = Split-Path -Parent $PSScriptRoot
 $live = Join-Path $env:APPDATA "FluidWallpaper\settings.ini"
 $bak  = Join-Path $env:APPDATA "FluidWallpaper\settings-panelcheck-backup.ini"
 function Stop-Port { Get-Process FluidWallpaper -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 800 }
 if ($Restore) {
-    if (-not (Test-Path $bak)) { Write-Host "no backup found at $bak"; exit 1 }
+    if (-not (Test-Path $bak)) { Log "no backup found at $bak"; exit 1 }
     Copy-Item $bak $live -Force
     Stop-Port
     Start-Process (Join-Path $root "build\FluidWallpaper.exe") -WorkingDirectory (Join-Path $root "build")
-    Write-Host "restored settings.ini from backup and relaunched build\FluidWallpaper.exe"
+    Log "restored settings.ini from backup and relaunched build\FluidWallpaper.exe"
     exit 0
 }
-if (-not $Ini) { Write-Host "usage: -Ini <path> | -Restore"; exit 1 }
+if (-not $Ini) { Log "usage: -Ini <path> | -Restore"; exit 1 }
 $src = if ([IO.Path]::IsPathRooted($Ini)) { $Ini } else { Join-Path $root $Ini }
-if (-not (Test-Path $src)) { Write-Host "ini not found: $src"; exit 1 }
-if (-not (Test-Path $bak)) { Copy-Item $live $bak; Write-Host "backup written: $bak" } else { Write-Host "backup already exists (kept): $bak" }
+if (-not (Test-Path $src)) { Log "ini not found: $src"; exit 1 }
+if (-not (Test-Path $bak)) { Copy-Item $live $bak; Log "backup written: $bak" } else { Log "backup already exists (kept): $bak" }
 Copy-Item $src $live -Force
 Stop-Port
 Start-Process (Join-Path $root "build2\FluidWallpaper.exe") -WorkingDirectory (Join-Path $root "build2")
-Write-Host "live settings.ini <- $src ; launched build2\FluidWallpaper.exe"
+Log "live settings.ini <- $src ; launched build2\FluidWallpaper.exe"

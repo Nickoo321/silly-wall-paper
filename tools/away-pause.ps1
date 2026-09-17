@@ -40,7 +40,8 @@ public static class AwayNative {
     if (sb.ToString() == "FluidWallpaperTray") found.Add(h);
     return true;
   }
-  public static IntPtr FindTray() { found.Clear(); EnumWindows(Cb, IntPtr.Zero); return found.Count > 0 ? found[0] : IntPtr.Zero; }
+  public static uint PidOf(IntPtr h) { uint pid; GetWindowThreadProcessId(h, out pid); return pid; }
+  public static List<IntPtr> AllTrays() { found.Clear(); EnumWindows(Cb, IntPtr.Zero); return new List<IntPtr>(found); }
   public static double IdleSeconds() {
     var li = new LASTINPUTINFO(); li.cbSize = (uint)Marshal.SizeOf(li); GetLastInputInfo(ref li);
     return (Environment.TickCount - (int)li.dwTime) / 1000.0;
@@ -51,9 +52,18 @@ public static class AwayNative {
 # $want = $true to pause, $false to resume. With -Explicit that is one of the non-toggling
 # ids and $want is obeyed literally; without it, the single toggle id, and the caller is the
 # one keeping track of which side of the toggle we are on.
+function Find-LiveTray {
+  # Headless --shot renders (agents' A/B tests) may own a FluidWallpaperTray window too; on
+  # 2026-09-17 the first pause landed on one of those and the live sim kept running. Pick the tray
+  # whose process is the LIVE wallpaper: a FluidWallpaper.exe whose command line has no --shot.
+  $live = @(Get-CimInstance Win32_Process -Filter "Name='FluidWallpaper.exe'" |
+            Where-Object { $_.CommandLine -notlike '*--shot*' } | ForEach-Object { [uint32]$_.ProcessId })
+  foreach ($h in [AwayNative]::AllTrays()) { if ($live -contains [AwayNative]::PidOf($h)) { return $h } }
+  return [IntPtr]::Zero
+}
 function Send-Pause([bool]$want) {
-  $h = [AwayNative]::FindTray()
-  if ($h -eq [IntPtr]::Zero) { Log "no FluidWallpaperTray window found (sim not running?)"; return $false }
+  $h = Find-LiveTray
+  if ($h -eq [IntPtr]::Zero) { Log "no LIVE FluidWallpaperTray window found (sim not running, or only --shot instances)"; return $false }
   $id = 1                                            # CMD_PAUSE (toggle)
   if ($Explicit) { if ($want) { $id = 8 } else { $id = 9 } }   # CMD_PAUSE_ON / CMD_PAUSE_OFF
   [AwayNative]::PostMessage($h, 0x0111, [IntPtr]$id, [IntPtr]0) | Out-Null   # WM_COMMAND

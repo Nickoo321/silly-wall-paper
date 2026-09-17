@@ -15,6 +15,8 @@
 //   --shot-size WxH    capture size (default 2560x1440)
 //   --shot-delay N     seconds of wallpaper time to simulate first (default 40)
 //   --shot-series N:S  N captures, S seconds apart, named by elapsed seconds
+//                      (<out>-NNN.png; a sub-second delay or interval names
+//                      them in TENTHS as <out>-NNNN.png, e.g. 0600/0605/0610)
 //   --shot-pour X,Y,S,D  hold LMB at (X,Y) px from S for D seconds
 //   --shot-drop X,Y,T[,VY]  one ink drop at (X,Y) px at wallpaper time T
 //                      (VY = downward impulse; default [drops] speed)
@@ -1950,7 +1952,19 @@ static int RunShotMode() {
         std::wstring shotStem = stem;
         if (o.seriesCount > 1) {
             wchar_t suffix[32];
-            swprintf_s(suffix, L"-%03d", (int)llround(target));
+            // Whole-second series keep the 3-digit form every sheet script
+            // already globs for (reference/configs/ab.py wants prefix-NNN.png).
+            // A sub-second series could not use it: 60 / 60.5 / 61 all round
+            // to 060 / 061 / 061, so one capture silently overwrote another.
+            // Those get TENTHS in four digits instead -- 0600 / 0605 / 0610 --
+            // which still sorts in time order. The choice is made once per
+            // series, from the delay and the interval, so one run never mixes
+            // the two widths.
+            const double iv = (double)o.seriesInterval;
+            const bool wholeSec = fabs((double)o.delaySec - llround((double)o.delaySec)) < 1e-4
+                               && fabs(iv - llround(iv)) < 1e-4;
+            if (wholeSec) swprintf_s(suffix, L"-%03d", (int)llround(target));
+            else          swprintf_s(suffix, L"-%04d", (int)llround(target * 10.0));
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));

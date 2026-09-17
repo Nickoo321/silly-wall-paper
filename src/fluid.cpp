@@ -2712,6 +2712,36 @@ void FluidRenderer::StepAcidDroplets(float dt) {
         d.x += d.vx * dt;
         d.y += d.vy * dt;
 
+        // ---- contribution gate -------------------------------------------
+        // A droplet on the WRONG side of the interface is invisible in itself
+        // -- a positive one inside the oil only adds oil to oil, a negative
+        // one on open ink only subtracts from ink that is already below the
+        // isoline -- but its kernel is TINY and therefore very steep, so it
+        // still dominates |grad| in its neighbourhood. sdf = (field - thresh)
+        // / |grad| then collapses toward 0 there, which drops the pixel into
+        // the dark rim band and flattens the film thickness proxy: a droplet
+        // that is not there draws a hollow dark RING with an oil centre, and
+        // a cluster of them smears a soft dark veil over the sheet. Fade the
+        // whole contribution (field AND gradient) out instead, over half the
+        // droplet's own radius of travel, so it leaves no trace at all.
+        {
+            float f2, gx2, gy2, ovx2, ovy2;
+            AcidFieldAt(d.x, d.y, aspect, f2, gx2, gy2, ovx2, ovy2);
+            const float gl2 = sqrtf(gx2 * gx2 + gy2 * gy2) + 1e-6f;
+            const float side = ((d.kind == 0) ? 1.0f : -1.0f) * ((f2 - thresh) / gl2);
+            float g = side / fmaxf(0.5f * d.r, 1e-5f);
+            g = g < 0.0f ? 0.0f : (g > 1.0f ? 1.0f : g);
+            g = g * g * (3.0f - 2.0f * g);
+            // ...and fade out below about a pixel. A sub-pixel droplet cannot
+            // be resolved -- no pixel lands near enough to its centre for the
+            // kernel to reach full strength and punch through -- so it, too,
+            // would contribute nothing but a gradient spike.
+            const float pxY = 1.0f / fmaxf((float)m_height, 1.0f);
+            float sp2 = (d.r - 0.35f * pxY) / fmaxf(0.85f * pxY, 1e-9f);
+            sp2 = sp2 < 0.0f ? 0.0f : (sp2 > 1.0f ? 1.0f : sp2);
+            d.gate = g * sp2 * sp2 * (3.0f - 2.0f * sp2);
+        }
+
         if (life > 0.5f && d.age > life) d.rt = 0.0f;
         // off the frame: dissolve there, never inside the visible area
         if (d.x < -0.04f || d.x > 1.04f || d.y < -0.04f || d.y > 1.04f) d.rt = 0.0f;
@@ -3044,7 +3074,7 @@ void FluidRenderer::UploadAcidConstants() {
                 dd[k].a[1] = d.y;
                 // SIGN carries the kind: negative = a hole in the oil.
                 dd[k].a[2] = (d.kind == 0) ? -d.r : d.r;
-                dd[k].a[3] = 0.0f;
+                dd[k].a[3] = d.gate;   // contribution scale (see StepAcidDroplets)
             }
             for (int c = 0; c < NC; c++) {
                 int first = m_dropletCellStart[c], cnt = m_dropletCellCount[c];

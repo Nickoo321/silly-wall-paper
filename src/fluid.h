@@ -934,6 +934,7 @@ private:
         float vx, vy;    // uv / s
         float age;       // s since nucleation
         float out;       // s spent stranded on the wrong side of the interface
+        float gate;      // 0..1 contribution scale; see StepAcidDroplets
         int   kind;      // 0 = water trapped in oil (hole), 1 = oil on ink
         int   mergeTo;   // index of the droplet this one is pouring into, else -1
     };

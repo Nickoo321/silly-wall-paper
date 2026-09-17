@@ -476,7 +476,10 @@ StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
 // ---------------------------------------------------------------------------
 // DROPLET PARTICLE SIM. One float4 per particle: xy = centre uv, z = visible
 // radius SIGNED (negative = water trapped in the oil, i.e. a hole; positive =
-// an oil droplet on open ink), w = reserved. The CPU bins them into a uniform
+// an oil droplet on open ink), w = the CPU-side contribution gate (0 while a
+// droplet is on the wrong side of the interface or below a pixel across --
+// invisible either way, and without the gate its steep little gradient would
+// still collapse sdf and print a hollow rim ring; see StepAcidDroplets). The CPU bins them into a uniform
 // grid and uploads them sorted by cell; DropCells[c] = (first, count), so a
 // pixel only walks the 3x3 cells around it. The support radius is clamped on
 // the CPU to one cell, which is what makes 3x3 exact rather than approximate.
@@ -838,8 +841,8 @@ float4 PSMain(VSOut i) : SV_Target {
                     if (dd2 >= ds2) continue;
                     float  du = 1.0 - dd2 / ds2;
                     float  du2 = du * du;
-                    float  dw = du2 * du;
-                    float2 dg = (-6.0 * du2 / ds2) * dq;
+                    float  dw = du2 * du * D.w;
+                    float2 dg = (-6.0 * du2 / ds2) * dq * D.w;
                     if (D.z < 0.0) { dNeg += dw; gNeg += dg; }
                     else           { dPos += dw; gPos += dg; }
                 }
@@ -875,13 +878,43 @@ float4 PSMain(VSOut i) : SV_Target {
     // Clamped: on a broad merged mass |grad| collapses and an unclamped R
     // blew the halo up into frame-sized pale lobes. The largest authored
     // blob radius is ~0.4 p-units, so that is the ceiling.
+    // ---- "is this pixel really ON the isoline?" (isoOk) ------------------
+    // sdf = (field - thresh) / |grad| is a true signed distance only where the
+    // field behaves like a plane: there it changes by exactly one pixel per
+    // pixel, so |grad(sdf)| == 1. Around a blob or a droplet whose field dips
+    // TOWARD the threshold without crossing it, sdf collapses to nearly 0 and
+    // springs back within a couple of pixels, and its own gradient is many
+    // times too steep. That is exactly where the dark rim band painted a
+    // hollow RING with oil still inside it, and where the halo painted a soft
+    // plume with no surface under it (the user photographed both). One number
+    // off two derivatives the quad already has, and it is ~1 on every real
+    // edge, so a genuine rim keeps its authored width.
+    float sdfWarp = length(float2(ddx(sdf), ddy(sdf))) / max(texelSize.y, 1e-7);
+    // A true signed distance has |grad(sdf)| == 1 EXACTLY, so the band can sit
+    // tight above 1; at 2.5..7.0 it only clipped the worst of each ring and
+    // left the rest as a dotted circle.
+    // A true signed distance has |grad(sdf)| == 1 EXACTLY, so the band starts
+    // just above 1. It ENDS far out (6) on purpose: this is a blend weight,
+    // and a narrow band put a hard bright seam around the plume it was meant
+    // to clean up. Wide = gradual = invisible.
+    float isoOk   = 1.0 - smoothstep(1.35, 6.00, sdfWarp);
     float  lensR = clamp(0.78 / max(gl, 1e-3), 0.02, 0.35);
     float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
     float  thk   = 1.0;                       // 1 = full-thickness oil
     // oil_transparency needs the same thickness proxy even when the soft
     // thin edge itself is off: a transparent film MUST be clearest where it
     // is thinnest, or it reads as a sheet of tinted glass cut with scissors.
-    if (laP13.x > 0.0005 || laP15.x > 0.0005) thk = smoothstep(0.0, edgeW, sdf);
+    if (laP13.x > 0.0005 || laP15.x > 0.0005) {
+        thk = smoothstep(0.0, edgeW, sdf);
+        // ...but only as far as sdf can be believed. Where it cannot (isoOk
+        // < 1: the field dips toward the threshold without crossing it, so
+        // sdf collapses although the oil is thick) the thin-edge model would
+        // otherwise conclude the film had thinned to nothing -- which drew a
+        // hollow dark RING around every bubble that failed to punch through,
+        // with oil still inside it. Fall back to the plain coverage, which
+        // cannot lie: 1 in the oil, 0 on the ink.
+        thk = lerp(cov, thk, isoOk);
+    }
     // Refraction: the ink is seen through thinning oil near the rim, so shift
     // the ink lookup along the field gradient inside an edge band. Its width
     // is rim_width * refraction_width (default the shipped 7), widened toward
@@ -900,6 +933,9 @@ float4 PSMain(VSOut i) : SV_Target {
     // part leans the whole disc's contents one way, the fbm part is what makes
     // the marbling wobble as it passes under. Capped to a unit vector, so the
     // key is the offset in uv units and can never run away.
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     if (laP15.w > 0.0005) {
         float2 bq = pp * 3.1 + float2(laP6.z * 0.006, -laP6.z * 0.0045);
         const float bh = 0.05;
@@ -1270,7 +1306,7 @@ R"hlsl(
     // saddle with no isoline under it. That is the curved hairline the user
     // photographed below a big hole. The halo was gated for exactly this
     // reason and the dark twin never was.
-               * smoothstep(0.5, 1.5, gl);
+               * smoothstep(0.5, 1.5, gl) * isoOk;
     // The hairline lives only where the halo does, and the soft thickness
     // edge has already taken over most of its job.
     float rimK = saturate(laP1.z) * haloInk * (1.0 - 0.65 * saturate(laP13.x));
@@ -1398,7 +1434,7 @@ R"hlsl(
         // lands inside the halo band, painting a fuzzy blob-shaped glow with
         // no oil under it. Real blob surfaces have |grad| >~ 2 (it scales as
         // 1/radius, and the largest discs here are ~0.4), so gate on it.
-        halo *= smoothstep(0.5, 1.5, gl);
+        halo *= smoothstep(0.5, 1.5, gl) * isoOk;
         haloW = saturate(halo * laP2.x * haloMul * haloInk);
         col = lerp(col, menC, haloW);
     }

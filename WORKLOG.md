@@ -1041,4 +1041,6 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   (acid-rise-12.ini 20.19s, base.ini 23.69s, 4320 frames). MD5 regression (we-look-live.ini 60s
   2560x1440): **PASS** (10e36ebf1a74edfe609065d757300054). Strip renders (no-pop check):
   strip-060.png / strip-061.png. A/B sheet: build2/shots/droplets/sheet-droplets.png (1944x1130).
-  Shipped inis byte-identical, droplet keys default to off.
+  Every droplet key defaults to off, so any ini that does not name them is unchanged -- but the
+  two shipped RISING presets were deliberately changed (droplets 1500, swarm_holes/swarm_drops 0),
+  so "shipped inis byte-identical" is NOT true of those two. style=fluid holds its md5.

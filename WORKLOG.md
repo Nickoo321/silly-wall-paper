@@ -721,3 +721,9 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   paint-pour (full WE emission through the ink render) are "the best for now", preferring the
   crowded paint-pour -> tracked as reference/configs/ink-pour.ini. To be judged on the panel
   later today via tools\panel-check.ps1 -Ini reference\configs\ink-pour.ini (then -Restore).
+- User: "the random colors just don't have the same pop or intent" (hue-cycled ink combos).
+  Config-only fix: chroma=0 and a complementary pair in tint_thin/tint_thick (veils one
+  colour, dense cores the other). Rendered pour + bursts x {teal/vermillion, violet/red,
+  yellow/magenta}: build2/shots/combo/duo-*.png, sheets duo-pour-sheet / duo-bursts-sheet.
+  Sent; awaiting pick. If approved: rotate the pair through the acid sweep list over time
+  (small code change reusing the liquid_acid pair list).

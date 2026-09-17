@@ -619,3 +619,45 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   Gaussian halo — found by reading UpdateDrops. Shot inis now use drops=0 (QueueDrop still
   works); shipped inis keep drops=1. Final 1080p sheet rendering (paper / inverted /
   acid-water); acid-water tile drifted to ~90% oil coverage — to fix from liquid-acid-a.ini.
+- User on sheet-acidwater-120: "the teal outline is too perfect, uniform and flat". Follow-up
+  (with the coverage re-base, one pass): modulate rim width + halo brightness along the
+  boundary with low-frequency position/time noise (breaks and thickenings), and make the
+  halo intensity follow the ink brightness under it (it is refracted ink), for all liquid_acid.
+
+## 2026-09-17 — `style=ink` (ink in water), shared with liquid_acid
+
+- Third display PSO (`#ifdef INK` in `kDisplaySrc`), same pattern as LIQUID_ACID.
+  Shared `InkWater()` block does Beer-Lambert `T=exp(-k*thick*a)` on the RAW dye,
+  4-tap edge darkening for folds, paper vs INVERTED output; exposed both as
+  `[look] style=ink` and as `[liquid_acid] ink_mode=water`. `style=fluid` shot is
+  byte-identical before and after (md5 10E36EBF… / -hdr 414B4321…).
+- Sim-side, style-agnostic: `[sim] gravity` (dye-weighted, in `CSVorticity`),
+  `gravity_pow`, `gravity_blur`; `[drops]` emitter with `InjectDrop`/`QueueDrop`
+  and `--shot-drop X,Y,T[,VY]`. `Splat()` split into `SplatVelocity`/`SplatDye`.
+- Iteration verdicts (build2/shots/ink/, single-variable, seed 1234):
+  vorticity **48 -> 12** is the single biggest win (48 = smoke puff in 5 s,
+  4 = glassy symmetric); velocity_diffusion **0.998** makes the pair stall
+  mid-frame instead of hitting the floor; density_diffusion **0.9997** (0.999 =
+  pale by 13 s, 1.0 = never clears); gravity **2** with gravity_blur 3 (30-100
+  piles up on the bottom edge, blur 0 seeds grid-scale fringe); drop
+  `asymmetry` 0.35 gives the refs' unequal lobes from two cheap 256-grid
+  impulses around one dye stamp; ink density k 3 (paper) / 4.5 (inverted).
+- LESSON, cost me ~8 renders: the "blown-out orb at the injection point" that
+  survived every tail/impulse/kernel change was **a second scheduled drop** —
+  `[drops] interval=9` primes at `interval*(0.3+0.7*RandF())`, so the emitter's
+  own first drop landed at t≈6-7 s right where the scripted one entered. Shot
+  inis that test a single drop must set `drops=0`; `--shot-drop` still works.
+  Two features survive from that hunt and are keepers: `impulse_spread` (the
+  velocity impulse is wider than the dye stamp) and the DROP_COMPACT splat PSO
+  (finite-support drop kernel). The `[ink] motion_lo/motion_hi` HDR gate is
+  also in, defaulted on, `motion_opacity` off.
+- Cost at 2560x1440, 2880 frames, one render at a time, nothing else running:
+  fluid 26.1 s vs the SAME ini + `style=ink` 26.4 s = **+0.10 ms/frame**. The
+  ink inis themselves run FASTER than the parity look (16.3 s) because they
+  turn off wanderers/idle splats/dart, i.e. far fewer 4096-res dye passes.
+  acid + ink_mode=water 20.9 s (different sim; not comparable to fluid).
+- Open: liquid-acid-water.ini has ~90% oil coverage — every `[liquid_acid]`
+  population key is identical to liquid-acid-a.ini, but that population was
+  tuned against the busy WE-parity flow and merges on the calm ink flow. Needs
+  its own iteration (blob_count ~64, threshold ~0.95, support_scale ~1.7).
+  Panel check with HDR on AND off still owed.

@@ -43,6 +43,18 @@ Single exe, no deps beyond Windows SDK libs.
   %TEMP%\AcidWallpaper.log. SDR only, no bloom. Gotcha: only accumulate the
   field gradient where the per-blob weight is unclamped, else sdf->0 at blob
   centers and the rim color floods the interior.
+- **`style=ink`** ("ink in water") — third display PSO, `#ifdef INK` in
+  `kDisplaySrc`. Beer-Lambert absorption on the dye (`T = exp(-k*thickness)`),
+  edge darkening for folds, two modes: paper (dark ink on backlit white) and
+  INVERTED (pale ink on black — the OLED one). The block is SHARED: the same
+  `InkWater()` is used by `[liquid_acid] ink_mode=water` (oil on ink-in-water).
+  Sim-side and style-agnostic: `[sim] gravity/gravity_pow/gravity_blur`
+  (dye-weighted gravity) and the `[drops]` emitter (`InjectDrop`,
+  `--shot-drop X,Y,T[,VY]`). Inis: reference/configs/ink-{paper,inverted}.ini,
+  liquid-acid-water.ini. Gotchas: `saturation_restore` MUST be 0 (the restore
+  erases neutral dye); vorticity 48 turns a drop into a smoke puff — the ink
+  inis use 12; `idle_splats=0` also suppresses the startup burst so the water
+  starts clear.
 - `src/moods.cpp/h` — mood conductor (DWELL→SHIFT→EMIT→RETURN transitions).
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).

@@ -23,6 +23,10 @@ cbuffer CB : register(b0) {
     float  cap;            // proportional brightness cap
     int2   dims;           // target texture dimensions
     float  baroclinic;     // dye-front torque strength (0 = off)
+    float  gravity;        // dye-weighted gravity, sim texels/s^2 (+y = down, 0 = off)
+    float  gravityPow;     // rho^p, so thin veils hang and dense cores fall
+    float  gravityBlur;    // sim texels: blur radius of the density gravity reads
+    float  pad0_;
 };
 
 SamplerState linearClamp : register(s0);
@@ -103,6 +107,31 @@ void CSVorticity(uint3 id : SV_DispatchThreadID) {
         float rho = dot(SrcC.SampleLevel(linearClamp, uv, 0).rgb, lw);
         float2 g = 0.5 * float2(dr - dl, db - dt_);
         force += baroclinic * rho * float2(g.y, -g.x);
+    }
+
+    // Dye-weighted gravity: ink is denser than water, so a dye-laden parcel
+    // sinks (positive = down, negative = a buoyant/smoke rise). rho^p with
+    // p > 1 means the dense head keeps falling while the thin veils, whose
+    // density is a fraction of it, barely move — which is the shape of the
+    // ref-1 plume. Style-agnostic; exactly zero work when gravity == 0.
+    if (gravity != 0.0) {
+        float2 guv = (float2(p) + 0.5) * texelSize;
+        float3 glw = float3(0.299, 0.587, 0.114);
+        // BLURRED density, not the per-texel one. A buoyancy force driven by a
+        // noisy density field seeds Rayleigh-Taylor fingers at the GRID scale,
+        // and vorticity confinement then amplifies them: the plume came out as
+        // a fuzzy cauliflower instead of the references' smooth sheets. A box
+        // blur over +-gravityBlur sim texels pushes the fastest-growing
+        // wavelength up to that scale, so gravity sets the sink rate of whole
+        // lobes and stops carving fringe.
+        float2 gb = texelSize * max(gravityBlur, 0.0);
+        float  grho = dot(SrcC.SampleLevel(linearClamp, guv, 0).rgb, glw) * 2.0;
+        grho += dot(SrcC.SampleLevel(linearClamp, guv + float2( gb.x,  gb.y), 0).rgb, glw);
+        grho += dot(SrcC.SampleLevel(linearClamp, guv + float2(-gb.x,  gb.y), 0).rgb, glw);
+        grho += dot(SrcC.SampleLevel(linearClamp, guv + float2( gb.x, -gb.y), 0).rgb, glw);
+        grho += dot(SrcC.SampleLevel(linearClamp, guv + float2(-gb.x, -gb.y), 0).rgb, glw);
+        grho /= 6.0;
+        force.y += gravity * pow(max(grho, 0.0), gravityPow);
     }
 
     float2 vel = SrcA.Load(int3(p, 0)).xy;
@@ -242,6 +271,17 @@ void CSDownsample(uint3 id : SV_DispatchThreadID) {
 }
 
 // Dye splat with the reference's proportional cap: brightness limited, hue kept.
+// DROP_COMPACT: the same splat with FINITE SUPPORT. A Gaussian has infinite
+// tails, and for an ink drop that is a real artefact, not a nicety: the outer
+// halo of the dye stamp lies outside the velocity impulse that drives the
+// drop, never acquires momentum, and is left parked at the injection point for
+// the rest of the drop's life — soft mist on paper, an opaque white orb in
+// inverted + HDR. Multiplying by a smooth cutoff at ~1.5-1.8 sigma removes
+// exactly that halo and nothing that is visibly part of the cap.
+// The cutoff is in units of dot(p,p)/radius, i.e. (d/sigma)^2 / 2: 1.8 is
+// 1.90 sigma (weight 0.165) and 3.2 is 2.53 sigma (weight 0.041).
+// Compiled as a SECOND PSO from this same source; the PSO the fluid look uses
+// is compiled without the macro and is byte-identical to before.
 [numthreads(8, 8, 1)]
 void CSSplatDye(uint3 id : SV_DispatchThreadID) {
     if (any(id.xy >= (uint2)dims)) return;
@@ -249,6 +289,9 @@ void CSSplatDye(uint3 id : SV_DispatchThreadID) {
     float2 p = uv - point_;
     p.x *= aspect;
     float3 splat = exp(-dot(p, p) / radius) * color;
+#ifdef DROP_COMPACT
+    splat *= 1.0 - smoothstep(1.8, 3.2, dot(p, p) / max(radius, 1e-9));
+#endif
     float3 base = SrcA.Load(int3(int2(id.xy), 0)).rgb;
     float3 c = base + splat;
     float m = max(c.r, max(c.g, c.b));
@@ -313,7 +356,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP7;         // x oilHdr     y rimHdr      z meniscusOff w inkShading
     float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
-    float4 laP10;        // x swarmClump y swarmDark   z -          w -
+    float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w -
     float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
     float4 laMen;        // meniscus halo colour, rgb
 };
@@ -406,6 +449,116 @@ float AcidSwarm(float2 p, float scale, float density, float clumpAmt,
 }
 #endif
 
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+#if defined(INK) || defined(LIQUID_ACID)
+// ==========================================================================
+// SHARED "ink in water" block — compiled into the INK PSO (style=ink) and
+// into the LIQUID_ACID PSO (used when [liquid_acid] ink_mode=water, so the
+// oil floats on ink-in-water instead of on posterised bands). One
+// implementation, two looks; the fluid PSO has neither macro and therefore
+// none of this code.
+//
+// The dye field stops being a colour and becomes an optical DEPTH. Refs:
+// reference/shots/photos/ink-in-water-ref-*.jpg.
+// ==========================================================================
+cbuffer InkCB : register(b2) {
+    float4 ikP0;        // x density k, y chroma, z edgeStrength, w edgeScale
+    float4 ikP1;        // x edgeLo,   y edgeHi,  z inverted,     w vignette
+    float4 ikP2;        // x parallax, y parallaxScale, z parallaxDrift, w time
+    float4 ikP3;        // x coreKnee, y hdrCore, z motionLo, w motionHi
+    float4 ikP4;        // x motionOpacity, y -, z -, w -
+    float4 ikPaper;     // paper / background colour
+    float4 ikTintThin;  // inverted: light through a thin veil
+    float4 ikTintThick; // inverted: light out of an opaque core
+};
+
+// Ink "thickness" carried by one dye texel. Max channel, not luma: a coloured
+// ink must absorb by its strongest component or a pure blue drop reads thinner
+// than a grey one of the same concentration.
+// Low-res (64x36) copy of the velocity field, the same texture the Liquid Acid
+// blob advection reads back. Used only to tell MOVING ink from ink that is
+// just sitting there.
+Texture2D<float4> VelLow : register(t3);
+
+float InkDensity(float3 c) { return max(c.r, max(c.g, c.b)); }
+
+// Motion gate. A drop's dye stamp always leaves some dye at the injection
+// point that never got any momentum; in inverted + HDR that stationary patch
+// is the brightest thing on screen, which is not what a drop entering water
+// looks like. Gate the HDR lift on |velocity| so only ink that is actually
+// being carried gets to go above SDR white. motionHi <= motionLo disables it.
+float InkMotion(float2 uv) {
+    if (ikP3.w <= ikP3.z) return 1.0;
+    float2 v = VelLow.SampleLevel(linearClamp, uv, 0).xy;
+    return smoothstep(ikP3.z, ikP3.w, length(v));
+}
+
+// Edge darkening. A sheet of ink seen EDGE-ON is a longer optical path, which
+// is why every fold in the references has a dark outline; in 2D the stand-in
+// is the density gradient. 4 taps at edge_scale screen texels.
+float InkEdge(float2 uv, float2 texel, float scale) {
+    float2 ex = float2(texel.x * scale, 0.0), ey = float2(0.0, texel.y * scale);
+    float L = InkDensity(Dye.SampleLevel(linearClamp, uv - ex, 0).rgb);
+    float R = InkDensity(Dye.SampleLevel(linearClamp, uv + ex, 0).rgb);
+    float T = InkDensity(Dye.SampleLevel(linearClamp, uv - ey, 0).rgb);
+    float B = InkDensity(Dye.SampleLevel(linearClamp, uv + ey, 0).rgb);
+    return smoothstep(ikP1.x, max(ikP1.y, ikP1.x + 1e-4),
+                      0.5 * length(float2(R - L, B - T)));
+}
+
+// C   = RAW dye (pre-emboss, pre-CSS chain).
+// pos = SV_Position.xy, for the paper vignette.
+// Returns the display colour in the SAME sRGB-encoded space the fluid look's
+// C is in before SRGBToLinear, plus the level that drives the HDR gain.
+float3 InkWater(float3 C, float2 uv, float2 texel, float2 pos, out float hdrM) {
+    float  d = InkDensity(C);
+    // Unit-max chroma of this parcel. Dye-free pixels are exactly (0,0,0), so
+    // the divide must be guarded or the NaN propagates through every lerp
+    // below and blacks the pixel out (the same trap the acid atan2 fell into).
+    float3 chroma = (d > 1e-4) ? C / d : float3(1.0, 1.0, 1.0);
+    float  thick = d * (1.0 + ikP0.z * InkEdge(uv, texel, ikP0.w));
+    // Same motion gate, on the optical path itself: ink that is not being
+    // carried anywhere reads thinner. This is what demotes the stationary
+    // entry patch from an opaque white disc to a faint mist, without touching
+    // the plume, whose interior is still swirling.
+    if (ikP4.x > 0.001) thick *= lerp(1.0 - saturate(ikP4.x), 1.0, InkMotion(uv));
+    if (ikP2.x > 0.001) {
+        // Cheap second layer: the SAME dye sampled at a slightly different
+        // scale and drift, blurred, added to the path length. Reads as ink
+        // hanging at another depth. A real second field would double the
+        // dominant dye-res passes; this is 4 taps.
+        float2 dr = float2(ikP2.z * ikP2.w, ikP2.z * ikP2.w * 0.6);
+        float2 duv = (uv - 0.5) * ikP2.y + 0.5 + dr;
+        float2 e = texel * 2.0;
+        float d2 = 0.25 * (InkDensity(Dye.SampleLevel(linearClamp, duv + float2( e.x,  e.y), 0).rgb)
+                         + InkDensity(Dye.SampleLevel(linearClamp, duv + float2(-e.x,  e.y), 0).rgb)
+                         + InkDensity(Dye.SampleLevel(linearClamp, duv + float2( e.x, -e.y), 0).rgb)
+                         + InkDensity(Dye.SampleLevel(linearClamp, duv + float2(-e.x, -e.y), 0).rgb));
+        thick += ikP2.x * d2;
+    }
+    // Coloured absorption: the channel the ink is made of absorbs least, so
+    // the light that gets through is the ink's own colour. chroma = 0 gives
+    // a = 1 on every channel = a neutral (black) ink.
+    float3 a = 1.0 + ikP0.y * (1.0 - chroma);
+    float3 T = exp(-ikP0.x * thick * a);
+    if (ikP1.z < 0.5) {
+        // ---- PAPER: backlit white ground, ink subtracts from it ----------
+        float2 sp = pos * texel - 0.5;
+        float  v = 1.0 - ikP1.w * smoothstep(0.35, 1.0, length(sp) * 1.6);
+        hdrM = 0.0;                       // a white field never gets HDR gain
+        return ikPaper.rgb * T * v;
+    }
+    // ---- INVERTED: pale ink on black (the OLED-friendly one) -------------
+    float  op = 1.0 - exp(-ikP0.x * thick);
+    float3 tint = lerp(ikTintThin.rgb, ikTintThick.rgb,
+                       smoothstep(min(ikP3.x, 0.99), 1.0, op));
+    hdrM = d * ikP3.y * InkMotion(uv);    // hot cores expand, veils stay SDR
+    return lerp(ikPaper.rgb, tint * lerp(float3(1.0, 1.0, 1.0), chroma,
+                                         saturate(ikP0.y)), op);
+}
+#endif
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
@@ -502,6 +655,14 @@ float4 PSMain(VSOut i) : SV_Target {
     // highlight expansion below so it can see how hot the dye really is
     // (the clamped, filtered colour can't exceed 1.0 any more).
     float m = max(C.r, max(C.g, C.b));
+#if defined(INK) || defined(LIQUID_ACID)
+    const float3 C0 = C;    // raw dye: what the ink-in-water block absorbs
+#endif
+#ifdef INK
+    // The ink look REPLACES the dye->colour step (and the emboss with it: an
+    // absorbing medium has no pseudo-3D bevel, its depth cue is InkEdge).
+    C = InkWater(C0, uv, texelSize, i.pos.xy, m);
+#else
     if (shading > 0.5) {
         float3 L = Dye.SampleLevel(linearClamp, uv - float2(texelSize.x, 0), 0).rgb;
         float3 R = Dye.SampleLevel(linearClamp, uv + float2(texelSize.x, 0), 0).rgb;
@@ -521,6 +682,7 @@ float4 PSMain(VSOut i) : SV_Target {
         C *= diffuse;
 #endif
     }
+#endif
     // The reference composited the dye into an 8-bit canvas before any CSS
     // filter touched it, so dye above 1.0 (cap 1.35, bursts 1.5) was flattened
     // to 1.0 first. Then: canvas filter (HDR compensation + hue-rotate burst),
@@ -563,6 +725,16 @@ float4 PSMain(VSOut i) : SV_Target {
     // =====================================================================
     // Liquid Acid: restyle the parity colour C as INK, then composite OIL.
     // =====================================================================
+    float3 inkC;
+    if (laP10.z > 0.5) {
+        // ---- ink_mode=water: the SHARED ink-in-water block ---------------
+        // Reads the RAW dye (C0), so it bypasses the parity CSS chain exactly
+        // the way bands mode does at ink_mix ~= 1. The oil, rims, meniscus and
+        // swarms below are unchanged and simply composite over this ink.
+        float inkM;
+        inkC = InkWater(C0, uv, texelSize, i.pos.xy, inkM);
+        m = inkM;
+    } else {
     // ---- INK: flat colour bands, dark seams, duotone ramp ----------------
     float inkLum = max(C.r, max(C.g, C.b));
     float bandIn = saturate(inkLum * laP4.x + laP4.y);
@@ -572,7 +744,7 @@ float4 PSMain(VSOut i) : SV_Target {
     // cut-out. Below the first band edge, fade back to the smooth value.
     band = lerp(bandIn, band, smoothstep(0.0, 1.5 / max(laP3.x, 1.0), bandIn));
     // chroma-preserving quantise of the sim's own colour
-    float3 inkC = C * (band / max(inkLum, 1e-4));
+    inkC = C * (band / max(inkLum, 1e-4));
     // 4-stop ramp indexed by the banded luminance
     float  rs = saturate(band) * 3.0;
     int    ri = (int)floor(rs);
@@ -621,6 +793,7 @@ float4 PSMain(VSOut i) : SV_Target {
         inkC *= 1.0 - laP4.z * smoothstep(laP5.x, max(laP5.y, laP5.x + 1e-3), gm)
                              * smoothstep(1.1, 2.1, gBands);
     }
+    }   // end ink_mode == bands
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(

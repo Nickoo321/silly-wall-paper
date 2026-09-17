@@ -175,6 +175,9 @@ static void BuildDefs() {
         { L"Saturation restore /s",             0,     1,    0.005f,3, &c.satRestore,         nullptr, L"sim", L"saturation_restore", false, nullptr, 0, L"Re-saturates aging dye so old layers stay colorful" },
         { L"Color intensity cap",               0.3f,  4,    0.05f, 2, &c.maxBrightness,      nullptr, L"sim", L"max_brightness", false, nullptr, 0, L"Max dye brightness (hue-preserving clip)" },
         { L"Dye diffusion (smoke spread)",      0,     0.5f, 0.005f,3, &c.dyeDiffusion,       nullptr, L"sim", L"dye_diffusion", false, nullptr, 0, L"Blurs dye. 0 = sharp marbling, high = soft mush" },
+        { L"Gravity (dye sinks / rises)",       -200,  200,  1,     1, &c.gravity,            nullptr, L"sim", L"gravity", false, nullptr, 0, L"Dye-weighted gravity. Positive = ink sinks, negative = smoke rises. 0 = off" },
+        { L"Gravity power (rho^p)",             0.5f,  3,    0.1f,  1, &c.gravityPow,         nullptr, L"sim", L"gravity_pow", false, nullptr, 0, L"Higher = only dense cores fall, thin veils hang" },
+        { L"Gravity smoothing (sim texels)",    0,     12,   0.5f,  1, &c.gravityBlur,        nullptr, L"sim", L"gravity_blur", false, nullptr, 0, L"Blurs the density gravity reads. Low = grid-scale fingering, high = whole lobes sink" },
         { L"FPS limit",                         30,    260,  1,     0, &c.fpsLimit,           nullptr, L"general", L"fps_limit", false, L"Performance", 0, L"Frame rate cap" },
         { L"Count",                             1,     8,    1,     0, nullptr, &c.wandererCount,      L"behavior", L"wanderer_count", true, L"Wanderers", 1, L"Number of autonomous emitters" },
         { L"Speed (px/s)",                      50,    1200, 10,    0, &c.wandererSpeed,      nullptr, L"behavior", L"wanderer_speed", false, nullptr, 1, L"Emitter speed = current strength" },
@@ -255,6 +258,37 @@ static void BuildDefs() {
         { L"Grain coarseness (px)",             1,     6,    0.5f,  1, &c.acid.grainScale,    nullptr, L"liquid_acid", L"grain_scale", false, nullptr, 3, L"Pixels per grain cell. 1 = fine, 4 = chunky macro-film" },
         { L"Interface speckle",                 0,     1,    0.02f, 2, &c.acid.speckle,       nullptr, L"liquid_acid", L"speckle", false, nullptr, 3, L"Sparse dark dots hugging the oil/ink boundary" },
         { L"Oil HDR level (0 = follow ink)",    0,     1.4f, 0.02f, 2, &c.acid.oilHdr,        nullptr, L"liquid_acid", L"oil_hdr", false, nullptr, 3, L"Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's" },
+        { L"Ink under the oil (0 bands 1 water)",0,    1,    1,     0, nullptr, &c.acid.inkMode,     L"liquid_acid", L"ink_water", false, nullptr, 3, L"1 = the shared ink-in-water render (translucent veils) instead of flat bands" },
+        // --- "Ink in water" render look; inert unless [look] style=ink -------
+        { L"Ink density k",                     0.5f,  8,    0.1f,  1, &c.ink.density,        nullptr, L"ink", L"density", false, L"Ink in water", 3, L"Beer-Lambert absorption. High = thin veils already opaque" },
+        { L"Ink chroma (0 = neutral black)",    0,     3,    0.05f, 2, &c.ink.chroma,         nullptr, L"ink", L"chroma", false, nullptr, 3, L"How much the dye's own hue tints the transmitted light" },
+        { L"Edge darkening (folds)",            0,     1,    0.02f, 2, &c.ink.edgeStrength,   nullptr, L"ink", L"edge_strength", false, nullptr, 3, L"Extra optical path where the density gradient is steep = sheets seen edge-on" },
+        { L"Edge threshold (lo)",               0,     0.5f, 0.005f,3, &c.ink.edgeLo,         nullptr, L"ink", L"edge_lo", false, nullptr, 3, L"Gradient magnitude the fold darkening starts at" },
+        { L"Edge threshold (hi)",               0,     0.5f, 0.005f,3, &c.ink.edgeHi,         nullptr, L"ink", L"edge_hi", false, nullptr, 3, L"Gradient magnitude the fold darkening saturates at" },
+        { L"Edge tap spacing (px)",             1,     6,    0.5f,  1, &c.ink.edgeScale,      nullptr, L"ink", L"edge_scale", false, nullptr, 3, L"Screen texels between the gradient taps" },
+        { L"Paper vignette",                    0,     0.6f, 0.02f, 2, &c.ink.vignette,       nullptr, L"ink", L"vignette", false, nullptr, 3, L"Radial darkening of the backlit paper (paper mode only)" },
+        { L"Core knee (inverted)",              0,     1,    0.02f, 2, &c.ink.coreKnee,       nullptr, L"ink", L"core_knee", false, nullptr, 3, L"Opacity where the tint crosses from the thin-veil colour to the core colour" },
+        { L"HDR core (inverted)",               0,     1.4f, 0.02f, 2, &c.ink.hdrCore,        nullptr, L"ink", L"hdr_core", false, nullptr, 3, L"How hard dense cores drive the HDR highlight gain. Veils stay SDR" },
+        { L"HDR motion gate: still (texels/s)",0,     60,   1,     0, &c.ink.motionLo,       nullptr, L"ink", L"motion_lo", false, nullptr, 3, L"Below this local speed, ink gets no HDR lift at all - keeps the entry patch from blowing out" },
+        { L"HDR motion gate: moving",          0,     200,  5,     0, &c.ink.motionHi,       nullptr, L"ink", L"motion_hi", false, nullptr, 3, L"Above this local speed the HDR lift is full. Set at or below the still value to disable the gate" },
+        { L"Motion gate on opacity",            0,     1,    0.02f, 2, &c.ink.motionOpacity,  nullptr, L"ink", L"motion_opacity", false, nullptr, 3, L"How much the motion gate also thins stationary ink. 0 = HDR lift only" },
+        { L"Parallax second layer",             0,     1,    0.02f, 2, &c.ink.parallax,       nullptr, L"ink", L"parallax", false, nullptr, 3, L"Adds the same dye at another scale as extra depth. 0 = off" },
+        { L"Parallax scale",                    0.8f,  1,    0.005f,3, &c.ink.parallaxScale,  nullptr, L"ink", L"parallax_scale", false, nullptr, 3, L"How much bigger the second layer reads" },
+        // --- ink drops (any look) -------------------------------------------
+        { L"Interval (s)",                      2,     90,   1,     0, &c.drops.interval,     nullptr, L"drops", L"interval", false, L"Drops", 3, L"Seconds between ink drops (jittered +-35%)" },
+        { L"Entry speed (downward)",            0,     3000, 25,    0, &c.drops.speed,        nullptr, L"drops", L"speed", false, nullptr, 3, L"Downward velocity impulse. This is what rolls the head into a cap" },
+        { L"Drop radius (%)",                   0.02f, 2,    0.01f, 2, &c.drops.radius,       nullptr, L"drops", L"radius", false, nullptr, 3, L"Splat radius of the drop head, same units as splat radius" },
+        { L"Drop density",                      0.1f,  4,    0.05f, 2, &c.drops.density,      nullptr, L"drops", L"density", false, nullptr, 3, L"Dye intensity of the head. 1.35 = a fully opaque core" },
+        { L"Entry trail (s)",                   0,     4,    0.1f,  1, &c.drops.tailSec,      nullptr, L"drops", L"tail_sec", false, nullptr, 3, L"How long dye keeps feeding in at the entry point after the impulse" },
+        { L"Entry trail density",               0,     1,    0.02f, 2, &c.drops.tailDensity,  nullptr, L"drops", L"tail_density", false, nullptr, 3, L"Intensity of that trail" },
+        { L"Splash droplets",                   0,     12,   1,     0, nullptr, &c.drops.spatter,    L"drops", L"spatter", false, nullptr, 3, L"Satellite droplets around the entry (ref 2). Each one costs a full dye pass" },
+        { L"Splash radius (%)",                 0.01f, 0.4f, 0.005f,3, &c.drops.spatterRadius,nullptr, L"drops", L"spatter_radius", false, nullptr, 3, L"Size of each satellite droplet" },
+        { L"Splash speed",                      0,     2000, 25,    0, &c.drops.spatterSpeed, nullptr, L"drops", L"spatter_speed", false, nullptr, 3, L"Outward impulse of the satellites" },
+        { L"Entry stream width (x drop radius)",0.05f, 1,    0.01f, 2, &c.drops.tailRadiusFrac,nullptr, L"drops", L"tail_radius_frac", false, nullptr, 3, L"Keep this small: a wide entry stamp reads as a bright orb parked at the injection point" },
+        { L"Entry stream pull (x drop speed)",  0,     1,    0.02f, 2, &c.drops.tailSpeed,    nullptr, L"drops", L"tail_speed", false, nullptr, 3, L"Downward impulse on the entry stream so it feeds the stem instead of parking" },
+        { L"Impulse spread (x drop radius)",    0.5f,  4,    0.05f, 2, &c.drops.impulseSpread,nullptr, L"drops", L"impulse_spread", false, nullptr, 3, L"How much wider the velocity impulse is than the dye stamp. Below ~1.5 the dye's outer halo parks at the entry as a bright orb" },
+        { L"Lobe asymmetry",                    0,     1,    0.02f, 2, &c.drops.asymmetry,    nullptr, L"drops", L"asymmetry", false, nullptr, 3, L"0 = a textbook symmetric vortex pair. Higher = unequal lobes, one side leading" },
+        { L"Entry band bottom (uv y)",          0.02f, 0.9f, 0.01f, 2, &c.drops.yMax,         nullptr, L"drops", L"y_max", false, nullptr, 3, L"How far down the screen a drop may enter" },
     };
     s_checks = {
         { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0, L"Autonomous roaming emitters" },
@@ -279,6 +313,12 @@ static void BuildDefs() {
         // PSO variant is built at device creation.
         { L"Lock ink opposite the oil hue",     &c.acid.inkComplementLock, L"liquid_acid", L"ink_complement_lock", nullptr, 3, L"Hold the ink's hue on the far side of the wheel from the oil" },
         { L"Liquid Acid look (restart)",        &c.acid.enabled,     L"look",     L"liquid_acid", nullptr, 3, L"Oil-on-inked-water render look. Takes effect on the next app start" },
+        // Ink look. Same restart rule: the INK display PSO variant is built at
+        // device creation. "Inverted" is live (read per frame into InkCB).
+        { L"Ink in water look (restart)",       &c.ink.enabled,      L"look",     L"ink", nullptr, 3, L"Beer-Lambert ink-in-water render look. Takes effect on the next app start" },
+        { L"Inverted (pale ink on black)",      &c.ink.inverted,     L"ink",      L"inverted", nullptr, 3, L"Off = dark ink on backlit paper. On = pale ink on black (OLED-friendly)" },
+        { L"Ink drops",                         &c.drops.enabled,    L"drops",    L"drops", nullptr, 3, L"Periodic falling ink drops. Works with any render look" },
+        { L"Drops obey the fullness governor",  &c.drops.obeyGovernor, L"drops",  L"obey_governor", nullptr, 3, L"Skip a drop while the water is already full of ink" },
         { L"Start with Windows",                nullptr,             nullptr,     nullptr, nullptr, 3, nullptr },
     };
 

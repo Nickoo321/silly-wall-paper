@@ -28,6 +28,15 @@
 struct LiquidAcidConfig {
     bool  enabled = false;          // [look] style = fluid | liquid_acid
 
+    // Which ink the oil floats on:
+    //   0 "bands" — the posterised duotone ramp below (the shipped look)
+    //   1 "water" — the SHARED ink-in-water block (Beer-Lambert translucency,
+    //               edge darkening, paper/inverted), i.e. exactly what
+    //               [look] style=ink renders, with the oil composited on top.
+    //               The acid refs literally are oil floating on inked water.
+    // [liquid_acid] ink_mode = bands | water   (int form: ink_water = 0|1)
+    int   inkMode = 0;
+
     // --- oil population (counts are fractions of blobCount) ---
     // The references are mostly OIL with ink showing through as channels, so
     // the discs and webs are huge (a third of the frame tall) and the small
@@ -163,6 +172,109 @@ struct LiquidAcidConfig {
     float speckScale  = 240.0f;     // cells per uv unit
 };
 
+// ---------------------------------------------------------------------------
+// "Ink in water" RENDER look (ini section [ink], enabled by [look] style=ink).
+//
+// Per reference/shots/photos/ink-in-water-ref-*.jpg: black acrylic ink dropped
+// into backlit clear water. What defines it is ABSORPTION, not emission — thin
+// veils are see-through grey, thick cores are opaque, and every fold reads as
+// a darker outline because you are looking through more ink edge-on.
+//
+// So the dye field is not a colour any more, it is an optical DEPTH:
+//     T = exp(-k * thickness)          (Beer-Lambert transmittance)
+//     paper mode    out = paper * T            (dark ink on light ground)
+//     inverted mode out = tint(op) * op        (pale ink on black; op = 1 - T)
+// The inverted mode is the OLED-friendly one (no full-frame white field) and
+// is what this look defaults to on the user's panel.
+//
+// The same block is shared with the Liquid Acid look via
+// LiquidAcidConfig::inkMode = 1, so oil can float on ink-in-water.
+// All of it is inert unless `enabled` — the display shader is then compiled
+// without the INK macro and contains none of this code.
+// ---------------------------------------------------------------------------
+struct InkConfig {
+    bool  enabled      = false;     // [look] style=ink  (or [look] ink=1)
+    bool  inverted     = false;     // 0 = paper (dark ink on light ground),
+                                    // 1 = pale ink on a black ground        inverted
+    float density      = 3.0f;      // k: T(1.35)=e^-4=0.02 opaque core,
+                                    //    T(0.05)=0.86 see-through veil      density
+    float chroma       = 0.0f;      // 0 = neutral ink; >0 lets the dye's own
+                                    // hue tint the transmitted light (0..3)  chroma
+    float edgeStrength = 0.35f;     // fold/sheet darkening                   edge_strength
+    float edgeLo       = 0.02f;     // |grad density| window                  edge_lo
+    float edgeHi       = 0.25f;     //                                        edge_hi
+    float edgeScale    = 2.0f;      // gradient tap spacing, screen texels    edge_scale
+    float paper[3]     = { 0.90f, 0.91f, 0.93f };   // paper (or, inverted,
+                                    // the background) colour                 paper_color
+    float vignette     = 0.15f;     // radial darkening of the paper          vignette
+    float tintThin[3]  = { 0.70f, 0.85f, 1.00f };   // inverted: thin veil    tint_thin
+    float tintThick[3] = { 1.00f, 1.00f, 1.00f };   // inverted: opaque core  tint_thick
+    float coreKnee     = 0.30f;     // inverted: opacity where the tint
+                                    // crosses from thin to thick             core_knee
+    float hdrCore      = 1.0f;      // inverted: scale of the raw-dye level
+                                    // that drives the HDR highlight gain     hdr_core
+    // Motion gate on that HDR lift, in sim texels/s of local velocity. A drop
+    // always leaves dye at the injection point that never got any momentum;
+    // stationary, it has no business being the brightest thing on screen.
+    // motion_hi <= motion_lo turns the gate off.            motion_lo motion_hi
+    float motionLo     = 3.0f;
+    float motionHi     = 40.0f;
+    // How much of that gate also applies to the OPTICAL PATH (0 = HDR lift
+    // only). 1 = stationary ink is fully transparent.        motion_opacity
+    float motionOpacity = 0.0f;
+    float parallax     = 0.0f;      // cheap 2nd layer: 0 = off               parallax
+    float parallaxScale= 0.92f;     //                                        parallax_scale
+    float parallaxDrift= 0.004f;    //                                        parallax_drift
+};
+
+// ---------------------------------------------------------------------------
+// Ink DROPS — a style-agnostic emitter ([drops], usable with any [look]).
+// One drop = a single downward Gaussian velocity impulse plus dye. After the
+// pressure projection that impulse is a vortex dipole, which is what rolls the
+// head into the mushroom cap in ref 1; dye-weighted gravity ([sim] gravity)
+// then keeps the dense head sinking while the thin veils hang behind it.
+// ---------------------------------------------------------------------------
+struct DropConfig {
+    bool  enabled     = false;      // drops=1
+    float interval    = 14.0f;      // s between drops (jitter +-35%)  interval
+    float xMin = 0.15f, xMax = 0.85f;   // entry band, uv              x_min x_max
+    float yMin = 0.04f, yMax = 0.22f;   //                             y_min y_max
+    float speed       = 700.0f;     // downward impulse (dx jitter +-60)  speed
+    float radius      = 0.35f;      // splat radius, percent like splat_radius  radius
+    float density     = 1.35f;      // dye intensity (capped by max_brightness) density
+    float tailSec     = 0.6f;       // how long the entry keeps feeding  tail_sec
+    float tailDensity = 0.25f;      //                                 tail_density
+    // The entry is a THIN STREAM, not a second blob. Stamping the tail at the
+    // head's own radius and density painted a fat radially-symmetric orb that
+    // sat at the injection point for the drop's whole life (harmless mist on
+    // paper, a blown-out white ball in inverted + HDR). Both of these keep it
+    // a stream: a small fraction of the head radius, and a gentle downward
+    // impulse so the dye is pulled into the stem instead of parking.
+    float tailRadiusFrac = 0.22f;   // x drop radius                 tail_radius_frac
+    float tailSpeed      = 0.0f;    // x drop speed, downward        tail_speed
+    // The velocity impulse is SPATIALLY WIDER than the dye stamp, by this
+    // ratio. With them the same size, the outer wings of the dye Gaussian sit
+    // outside the moving core, get no momentum, and stay parked at the
+    // injection point as a round blob for the drop's whole life — soft mist on
+    // paper, a blown-out white orb in inverted + HDR. A real drop pushes a
+    // volume of water larger than itself, so >1 is also the physical case.
+    // (splat `radius` is a squared scale, hence the square here.) impulse_spread
+    float impulseSpread  = 2.2f;
+    int   spatter     = 0;          // satellite droplets, 0..12 (0 = off)  spatter
+    float spatterRadius = 0.04f;    //                                 spatter_radius
+    float spatterSpeed  = 500.0f;   //                                 spatter_speed
+    float spatterSpread = 0.05f;    // uv                              spatter_spread
+    int   colorMode   = 0;          // 0 = fixed `color`, 1 = wheel hue  color_mode
+    float color[3]    = { 1.0f, 1.0f, 1.0f };   // dye-space colour     color = "r g b"
+    bool  obeyGovernor= true;       // skip while the screen is too full  obey_governor
+    // Lobe asymmetry. A single radially symmetric impulse makes a textbook
+    // MIRROR-SYMMETRIC vortex pair, which reads as a glassy diagram; real ink
+    // drops (the refs) make several unequal lobes with one side leading. This
+    // splits the head's velocity impulse into two unequal, off-centre ones
+    // around the same dye stamp. 0 = the symmetric single impulse. asymmetry
+    float asymmetry   = 0.35f;
+};
+
 // Defaults mirror reference/project.json (the shipped Wallpaper Engine values),
 // falling back to reference/script.js config for values project.json doesn't set.
 struct FluidConfig {
@@ -174,6 +286,19 @@ struct FluidConfig {
     int   pressureIterations = 20;
     float curl = 48.0f;
     float baroclinic = 0.0f;    // dye-front torque: wakes bend around dye masses (0 = off)
+    // Dye-weighted gravity ([sim] gravity / gravity_pow). Style-agnostic: any
+    // look can use it. Units are sim texels/s^2 per unit density, +y = DOWN.
+    // Velocity dissipation 0.999/step is an ~8 s drag time constant, so terminal
+    // speed is ~8x gravity — tens, not thousands. 0 = the sim is untouched
+    // (the branch in CSVorticity is not taken and the fluid look is identical).
+    float gravity = 0.0f;
+    float gravityPow = 1.5f;    // rho^p: thin veils hang, dense cores fall
+    // Blur radius (sim texels) of the density the gravity force reads. Driving
+    // it from the raw per-texel density seeds grid-scale Rayleigh-Taylor
+    // fingers that vorticity confinement then amplifies — the plume comes out
+    // a fuzzy cauliflower instead of the references' smooth sheets. Blurring
+    // raises the instability wavelength to this scale. [sim] gravity_blur
+    float gravityBlur = 3.0f;
     float flowSpeed = 1.0f;     // global impulse multiplier — slows/strengthens all currents
     float splatRadius = 0.64f;      // percent, /100 like reference
     bool  shading = true;
@@ -262,6 +387,10 @@ struct FluidConfig {
     bool  stats = false;            // periodic dye-field readback stats to stdout
     // "Liquid Acid" render look — additive; inert unless acid.enabled
     LiquidAcidConfig acid;
+    // "Ink in water" render look — additive; inert unless ink.enabled
+    InkConfig ink;
+    // drop emitter — style-agnostic; inert unless drops.enabled
+    DropConfig drops;
 };
 
 // Per-frame input from the app shell (global cursor, desktop focus).
@@ -300,6 +429,19 @@ public:
     // immediately (resolution fields excluded from the UI — they need recreate)
     FluidConfig& Config() { return m_cfg; }
     void ReinitWanderers() { InitWanderers(); }
+    // One ink drop at (x, y) PIXELS: a downward velocity impulse plus dye, and
+    // optional satellite splash droplets. Any argument left at its sentinel
+    // (-1 / nullptr) is taken from FluidConfig::drops, so the scheduler, the
+    // settings window and --shot-drop all produce the same drop.
+    void InjectDrop(float x, float y, float vx = 0.0f, float vy = -1.0f,
+                    float radiusPct = -1.0f, float density = -1.0f,
+                    const float* rgb = nullptr, int spatter = -1);
+    // Same, but deferred to the start of the next Frame(). Use this from
+    // OUTSIDE the render loop (--shot-drop, tray, settings): Splat() records
+    // into the frame's command list, which is only open during Frame().
+    void QueueDrop(float x, float y, float vy = -1.0f) {
+        m_dropQueued = true; m_dropQx = x; m_dropQy = y; m_dropQvy = vy;
+    }
     void SetResolutions(int simRes, int dyeRes);   // recreates sim textures live
     void Reattach(HWND hwnd);   // new swapchain after Explorer restart; sim state survives
     bool PresentBroken() const { return m_presentBroken; }   // window died mid-frame
@@ -356,7 +498,21 @@ private:
     void BeginFrame();
     void EndFrameAndPresent();
     void SimStep(float dt);
-    void Splat(float x, float y, float dx, float dy, float r, float g, float b);
+    // radiusPct / cap default to cfg.splatRadius / cfg.maxBrightness when < 0,
+    // so every existing call site is unchanged.
+    // which: bit 0 = velocity pass, bit 1 = dye pass, bit 2 = use the
+    // compact (finite-support) dye kernel.
+    void SplatImpl(int which, float x, float y, float dx, float dy,
+                   float r, float g, float b, float radiusPct, float cap);
+    void Splat(float x, float y, float dx, float dy, float r, float g, float b,
+               float radiusPct = -1.0f, float cap = -1.0f);
+    // The two halves of Splat(), separately. The velocity impulse runs on the
+    // SIM grid (256) and the dye stamp on the DYE grid (4096), so a drop can
+    // afford several unequal velocity impulses around one dye stamp - which is
+    // how the drop gets asymmetric lobes without paying extra dye-res passes.
+    void SplatVelocity(float x, float y, float dx, float dy, float radiusPct = -1.0f);
+    void SplatDye(float x, float y, float r, float g, float b,
+                  float radiusPct = -1.0f, float cap = -1.0f, bool compact = false);
     void MultipleSplats(int amount);
     void RenderDisplay();
     void RenderMirror();
@@ -384,11 +540,16 @@ private:
     void UpdateVelocityReadback();  // 64x36 velocity downsample -> CPU (1 frame late)
     void UploadAcidConstants();     // fills this frame's blob + param upload buffers
     void BindAcid();                // root SRV/CBV for the display draw
-    // Which display PSO this frame uses. Identical to m_psoDisplay unless the
-    // Liquid Acid look is on AND its variant compiled.
+    // --- "Ink in water" look (shared with Liquid Acid's ink_mode=water) ---
+    void UploadInkConstants();      // fills this frame's InkCB upload buffer
+    void BindInk();                 // root CBV b2 for the display draw
+    void UpdateDrops(float dt);     // the [drops] scheduler (any style)
+    // Which display PSO this frame uses. Identical to m_psoDisplay unless one
+    // of the extra looks is on AND its variant compiled.
     ID3D12PipelineState* DisplayPso() const {
-        return (m_cfg.acid.enabled && m_psoLiquidAcid) ? m_psoLiquidAcid.Get()
-                                                       : m_psoDisplay.Get();
+        if (m_cfg.acid.enabled && m_psoLiquidAcid) return m_psoLiquidAcid.Get();
+        if (m_cfg.ink.enabled && m_psoInk)         return m_psoInk.Get();
+        return m_psoDisplay.Get();
     }
 
     FluidConfig m_cfg;
@@ -430,6 +591,9 @@ private:
         m_psoCurl, m_psoVorticity, m_psoDivergence, m_psoClearPressure, m_psoPressure,
         m_psoGradSub, m_psoAdvectVel, m_psoAdvectDye, m_psoSplatVel, m_psoSplatDye,
         m_psoDownsample, m_psoDiffuseDye;
+    // CSSplatDye compiled with DROP_COMPACT: finite-support dye stamp, used
+    // only by InjectDrop so a drop leaves nothing parked at the entry.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoSplatDyeCompact;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoDisplay;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoGradient;
 
@@ -520,6 +684,18 @@ private:
     float  m_lastVelTime = -10.0f;
     bool   m_velPending = false;
     std::vector<float> m_velCpu;    // kVelW*kVelH*2, sim texels / s
+
+    // --- "Ink in water" look + drop emitter -----------------------------
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoInk;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_inkParamUpload[kFrames];
+    void*  m_inkParamData[kFrames] = {};
+    float  m_dropTimer = 0.0f;       // s until the next drop
+    bool   m_dropPrimed = false;     // first interval drawn yet?
+    float  m_dropTailLeft = 0.0f;    // s of dye-only tail still to paint
+    float  m_dropTailX = 0, m_dropTailY = 0;
+    float  m_dropTailCol[3] = { 1, 1, 1 };
+    bool   m_dropQueued = false;     // QueueDrop() pending for the next frame
+    float  m_dropQx = 0, m_dropQy = 0, m_dropQvy = -1.0f;
 
     // HDR analyzer
     bool   m_anaEnabled = false;

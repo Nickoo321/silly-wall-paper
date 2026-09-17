@@ -15,7 +15,7 @@ using Microsoft::WRL::ComPtr;
 extern void Fail(const char* what, HRESULT hr);   // main.cpp
 #define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) Fail(#expr, _hr); } while (0)
 
-// Must match cbuffer CB in shaders.h (20 DWORDs).
+// Must match cbuffer CB in shaders.h (22 DWORDs).
 struct SimCB {
     float texelW, texelH;
     float dt;
@@ -32,8 +32,12 @@ struct SimCB {
     float cap;
     int   dimsW, dimsH;
     float baroclinic;
+    float gravity;       // dye-weighted gravity (0 = off; the branch is skipped)
+    float gravityPow;
+    float gravityBlur;
+    float pad0_;
 };
-static_assert(sizeof(SimCB) == 20 * 4, "SimCB must match the HLSL cbuffer layout (20 DWORDs)");
+static_assert(sizeof(SimCB) == 24 * 4, "SimCB must match the HLSL cbuffer layout (24 DWORDs)");
 
 static float RandF() { return (float)rand() / (float)RAND_MAX; }
 static float HalfToFloat(uint16_t h);   // defined below
@@ -252,9 +256,13 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     // Params 2/3 are the Liquid Acid look's blob buffer (t1) and parameter
     // block (b1) as ROOT descriptors — no descriptor-heap slots needed. The
     // fluid display shader references neither, so they cost it nothing.
+    // Param 4 is the shared ink-in-water parameter block (b2), read by the INK
+    // PSO and by LIQUID_ACID when ink_mode=water. Same story: the fluid
+    // display shader does not reference it.
     {
         D3D12_DESCRIPTOR_RANGE rSrv0 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0 };
-        D3D12_ROOT_PARAMETER params[4] = {};
+        D3D12_DESCRIPTOR_RANGE rSrv3 = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 3, 0, 0 };
+        D3D12_ROOT_PARAMETER params[6] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, 32 };
         params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
@@ -267,6 +275,12 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
         params[3].Descriptor = { 1, 0 };            // t1
         params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        params[4].Descriptor = { 2, 0 };            // b2 (InkCB)
+        params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        params[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        params[5].DescriptorTable = { 1, &rSrv3 };  // t3 (low-res velocity)
+        params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -274,7 +288,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 4;
+        rsd.NumParameters = 6;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -306,6 +320,14 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     makeCS("CSAdvectDye", m_psoAdvectDye);
     makeCS("CSSplatVelocity", m_psoSplatVel);
     makeCS("CSSplatDye", m_psoSplatDye);
+    {   // finite-support variant for ink drops (see DROP_COMPACT in shaders.h)
+        const D3D_SHADER_MACRO defs[] = { { "DROP_COMPACT", "1" }, { nullptr, nullptr } };
+        ComPtr<ID3DBlob> cs = Compile(kComputeSrc, "CSSplatDye", "cs_5_0", defs);
+        D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
+        cd.pRootSignature = m_computeRS.Get();
+        cd.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
+        HR(m_device->CreateComputePipelineState(&cd, IID_PPV_ARGS(&m_psoSplatDyeCompact)));
+    }
     makeCS("CSDownsample", m_psoDownsample);
     makeCS("CSDiffuseDye", m_psoDiffuseDye);
 
@@ -336,6 +358,12 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     if (m_cfg.acid.enabled) {
         const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
         makeGfx(kDisplaySrc, m_psoLiquidAcid, defs);
+    }
+    // "Ink in water": the same display source with INK defined. Same rule —
+    // built only when the look is on, so style=fluid keeps its exact shader.
+    if (m_cfg.ink.enabled) {
+        const D3D_SHADER_MACRO defs[] = { { "INK", "1" }, { nullptr, nullptr } };
+        makeGfx(kDisplaySrc, m_psoInk, defs);
     }
     CreateAcidBuffers();
 
@@ -571,6 +599,9 @@ void FluidRenderer::SimStep(float dt) {
     cb.dt = dt;
     cb.curlStrength = m_cfg.curl;
     cb.baroclinic = m_cfg.baroclinic;
+    cb.gravity = m_cfg.gravity;
+    cb.gravityPow = m_cfg.gravityPow;
+    cb.gravityBlur = m_cfg.gravityBlur;
     cb.aspect = (float)m_width / (float)m_height;
 
     // Frame-rate independence: the reference applied its multiplicative decays
@@ -637,12 +668,16 @@ void FluidRenderer::SimStep(float dt) {
     }
 }
 
-void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g, float b) {
+// Shared body of the three splat entry points. `which` selects the passes:
+// 1 = velocity only, 2 = dye only, 3 = both (velocity first, exactly the order
+// the original Splat() used - the fluid look's seeded sequence depends on it).
+void FluidRenderer::SplatImpl(int which, float x, float y, float dx, float dy,
+                              float r, float g, float b, float radiusPct, float cap) {
     SimCB cb = {};
     cb.aspect = (float)m_width / (float)m_height;
     cb.pointX = x / m_width;
     cb.pointY = y / m_height;
-    cb.radius = m_cfg.splatRadius / 100.0f;
+    cb.radius = (radiusPct > 0.0f ? radiusPct : m_cfg.splatRadius) / 100.0f;
 
     m_cmd->SetComputeRootSignature(m_computeRS.Get());
 
@@ -660,17 +695,32 @@ void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g
         m_cmd->Dispatch(Groups(dst->w), Groups(dst->h), 1);
     };
 
-    // velocity: add impulse, never capped
-    cb.colorR = dx * m_cfg.flowSpeed; cb.colorG = dy * m_cfg.flowSpeed; cb.colorB = 0.0f;
-    cb.cap = 1000000.0f;
-    run(m_psoSplatVel.Get(), m_velocity.read, m_velocity.write);
-    m_velocity.Swap();
+    if (which & 1) {   // velocity: add impulse, never capped
+        cb.colorR = dx * m_cfg.flowSpeed; cb.colorG = dy * m_cfg.flowSpeed; cb.colorB = 0.0f;
+        cb.cap = 1000000.0f;
+        run(m_psoSplatVel.Get(), m_velocity.read, m_velocity.write);
+        m_velocity.Swap();
+    }
+    if (which & 2) {   // dye: proportional brightness cap
+        cb.colorR = r; cb.colorG = g; cb.colorB = b;
+        cb.cap = (cap > 0.0f ? cap : m_cfg.maxBrightness);
+        ID3D12PipelineState* pso = ((which & 4) && m_psoSplatDyeCompact)
+                                 ? m_psoSplatDyeCompact.Get() : m_psoSplatDye.Get();
+        run(pso, m_dye.read, m_dye.write);
+        m_dye.Swap();
+    }
+}
 
-    // dye: proportional brightness cap
-    cb.colorR = r; cb.colorG = g; cb.colorB = b;
-    cb.cap = m_cfg.maxBrightness;
-    run(m_psoSplatDye.Get(), m_dye.read, m_dye.write);
-    m_dye.Swap();
+void FluidRenderer::Splat(float x, float y, float dx, float dy, float r, float g, float b,
+                          float radiusPct, float cap) {
+    SplatImpl(3, x, y, dx, dy, r, g, b, radiusPct, cap);
+}
+void FluidRenderer::SplatVelocity(float x, float y, float dx, float dy, float radiusPct) {
+    SplatImpl(1, x, y, dx, dy, 0.0f, 0.0f, 0.0f, radiusPct, -1.0f);
+}
+void FluidRenderer::SplatDye(float x, float y, float r, float g, float b,
+                             float radiusPct, float cap, bool compact) {
+    SplatImpl(compact ? 6 : 2, x, y, 0.0f, 0.0f, r, g, b, radiusPct, cap);
 }
 
 void FluidRenderer::MultipleSplats(int amount) {
@@ -722,6 +772,7 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
+    BindInk();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -761,6 +812,7 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
+    BindInk();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 }
@@ -926,6 +978,7 @@ void FluidRenderer::MaybeRenderAnalyzer() {
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
+    BindInk();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1052,6 +1105,7 @@ void FluidRenderer::RenderMirror() {
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
+    BindInk();
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
@@ -1138,7 +1192,12 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         clear(m_psoClear1.Get(), m_pressure.b);
         clear(m_psoClear1.Get(), m_divergence);
         clear(m_psoClear1.Get(), m_curl);
-        MultipleSplats((int)(RandF() * 20) + 3);
+        // The reference's startup burst. Gated on idle_splats: a look whose
+        // whole premise is CLEAR water (style=ink) cannot open with a
+        // screenful of dye that then takes a minute of decay to clear. Looks
+        // that keep idle splats on (every parity/WE config) are unchanged,
+        // RandF() consumption included.
+        if (m_cfg.idleSplats) MultipleSplats((int)(RandF() * 20) + 3);
         m_firstFrame = false;
     }
 
@@ -1156,6 +1215,10 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     UpdateDart(dt);
     UpdateHueShift(dt);
     HandleInput(input);
+
+    // ink drops (style-agnostic emitter; inert unless [drops] drops=1 and no
+    // tail is still being painted)
+    UpdateDrops(dt);
 
     // idle random splats (project.json: every 9.6 s, 8 splats)
     if (m_cfg.idleSplats) {
@@ -1208,6 +1271,16 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         UpdateVelocityReadback();
         StepAcidBlobs(dt);
         UploadAcidConstants();
+    }
+    // Shared ink-in-water constants: needed by style=ink and by the acid look
+    // when ink_mode=water. 112 bytes; skipped entirely for style=fluid.
+    if (m_cfg.ink.enabled || m_cfg.acid.enabled) {
+        UploadInkConstants();
+        // The ink's motion gate samples the low-res velocity texture. The acid
+        // path already refreshes it for the blob advection; style=ink has to
+        // ask for it (one 64x36 dispatch).
+        if (!m_cfg.acid.enabled && m_cfg.ink.motionHi > m_cfg.ink.motionLo)
+            UpdateVelocityReadback();
     }
 
     if (m_headless) RenderDisplayOffscreen();
@@ -1319,8 +1392,10 @@ void FluidRenderer::Shutdown() {
     for (UINT i = 0; i < kFrames; i++) {
         if (m_acidBlobUpload[i])  { m_acidBlobUpload[i]->Unmap(0, nullptr);  m_acidBlobUpload[i].Reset(); }
         if (m_acidParamUpload[i]) { m_acidParamUpload[i]->Unmap(0, nullptr); m_acidParamUpload[i].Reset(); }
+        if (m_inkParamUpload[i])  { m_inkParamUpload[i]->Unmap(0, nullptr);  m_inkParamUpload[i].Reset(); }
         m_acidBlobData[i] = nullptr;
         m_acidParamData[i] = nullptr;
+        m_inkParamData[i] = nullptr;
     }
     m_velReadback.Reset();
     m_velPending = false;
@@ -1347,10 +1422,15 @@ void FluidRenderer::Shutdown() {
     m_psoCurl.Reset(); m_psoVorticity.Reset(); m_psoDivergence.Reset();
     m_psoClearPressure.Reset(); m_psoPressure.Reset(); m_psoGradSub.Reset();
     m_psoAdvectVel.Reset(); m_psoAdvectDye.Reset();
-    m_psoSplatVel.Reset(); m_psoSplatDye.Reset();
+    m_psoSplatVel.Reset(); m_psoSplatDye.Reset(); m_psoSplatDyeCompact.Reset();
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
     m_psoDisplay.Reset(); m_psoGradient.Reset();
     m_psoLiquidAcid.Reset();
+    m_psoInk.Reset();
+    m_dropTimer = 0.0f;
+    m_dropPrimed = false;
+    m_dropTailLeft = 0.0f;
+    m_dropQueued = false;
     m_computeRS.Reset();
     m_graphicsRS.Reset();
 
@@ -1712,6 +1792,13 @@ struct AcidParamsGPU {
 };
 static_assert(sizeof(AcidParamsGPU) == 336, "AcidCB layout");
 
+// GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
+struct InkParamsGPU {
+    float p0[4], p1[4], p2[4], p3[4], p4[4];
+    float paper[4], tintThin[4], tintThick[4];
+};
+static_assert(sizeof(InkParamsGPU) == 128, "InkCB layout");
+
 // CPU mirror of AcidHueShift in shaders.h: rotate HUE ONLY, holding saturation
 // and value, so a swept colour is exactly as vivid at its new hue as it was at
 // its old one. (A W3C matrix hue-rotate holds luma instead and turns a bright
@@ -1845,11 +1932,18 @@ void FluidRenderer::CreateAcidBuffers() {
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_acidParamUpload[i])));
+        // shared ink-in-water parameter block (b2) — 112 bytes, same ring
+        rd.Width = (sizeof(InkParamsGPU) + 255) & ~255u;
+        HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&m_inkParamUpload[i])));
         D3D12_RANGE none = { 0, 0 };
         HR(m_acidBlobUpload[i]->Map(0, &none, &m_acidBlobData[i]));
         HR(m_acidParamUpload[i]->Map(0, &none, &m_acidParamData[i]));
+        HR(m_inkParamUpload[i]->Map(0, &none, &m_inkParamData[i]));
         memset(m_acidBlobData[i], 0, sizeof(AcidBlobGPU) * kAcidMaxBlobs);
         memset(m_acidParamData[i], 0, sizeof(AcidParamsGPU));
+        memset(m_inkParamData[i], 0, sizeof(InkParamsGPU));
     }
 }
 
@@ -2168,7 +2262,7 @@ void FluidRenderer::UploadAcidConstants() {
     float p9[4] = { a.swarmScaleA, a.swarmScaleB, a.swarmRMin, a.swarmRMax };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
     memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
-    float p10[4] = { a.swarmClump, a.swarmDark, 0.0f, 0.0f };
+    float p10[4] = { a.swarmClump, a.swarmDark, (a.inkMode == 1 ? 1.0f : 0.0f), 0.0f };
     // Target ink hue = the oil family's mean hue, swept, plus 180 degrees.
     float targetHue = fmodf(OilMeanHueDeg(effOil) + 180.0f, 360.0f);
     float p11[4] = { a.inkComplementLock ? 1.0f : 0.0f, a.inkComplementSpan,
@@ -2185,6 +2279,143 @@ void FluidRenderer::BindAcid() {
         m_cmd->SetGraphicsRootConstantBufferView(2, m_acidParamUpload[fi]->GetGPUVirtualAddress());
     if (m_acidBlobUpload[fi])
         m_cmd->SetGraphicsRootShaderResourceView(3, m_acidBlobUpload[fi]->GetGPUVirtualAddress());
+}
+
+// ===========================================================================
+// "Ink in water" — the SHARED render block's constants, and the drop emitter.
+// Both are used by style=ink and (the constants) by liquid_acid ink_mode=water.
+// ===========================================================================
+
+void FluidRenderer::UploadInkConstants() {
+    const InkConfig& k = m_cfg.ink;
+    const UINT fi = m_frameIndex;
+    if (!m_inkParamData[fi]) return;
+    InkParamsGPU p = {};
+    const float p0[4] = { fmaxf(k.density, 0.0f), fmaxf(k.chroma, 0.0f),
+                          k.edgeStrength, fmaxf(k.edgeScale, 0.25f) };
+    const float p1[4] = { k.edgeLo, k.edgeHi, k.inverted ? 1.0f : 0.0f, k.vignette };
+    const float p2[4] = { k.parallax, k.parallaxScale, k.parallaxDrift, m_time };
+    const float p3[4] = { k.coreKnee, k.hdrCore, k.motionLo, k.motionHi };
+    const float p4[4] = { k.motionOpacity, 0.0f, 0.0f, 0.0f };
+    memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16);
+    memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16); memcpy(p.p4, p4, 16);
+    for (int i = 0; i < 3; i++) {
+        p.paper[i]     = k.paper[i];
+        p.tintThin[i]  = k.tintThin[i];
+        p.tintThick[i] = k.tintThick[i];
+    }
+    memcpy(m_inkParamData[fi], &p, sizeof(p));
+}
+
+void FluidRenderer::BindInk() {
+    const UINT fi = m_frameIndex;
+    if (m_inkParamUpload[fi])
+        m_cmd->SetGraphicsRootConstantBufferView(4, m_inkParamUpload[fi]->GetGPUVirtualAddress());
+    if (m_velLow.res) {
+        Transition(m_velLow, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_cmd->SetGraphicsRootDescriptorTable(5, m_velLow.srv);
+    }
+}
+
+void FluidRenderer::InjectDrop(float x, float y, float vx, float vy,
+                               float radiusPct, float density,
+                               const float* rgb, int spatter) {
+    const DropConfig& d = m_cfg.drops;
+    if (vy < 0.0f)        vy = d.speed;
+    if (radiusPct < 0.0f) radiusPct = d.radius;
+    if (density < 0.0f)   density = d.density;
+    if (spatter < 0)      spatter = d.spatter;
+    if (spatter > 12)     spatter = 12;
+
+    float col[3];
+    if (rgb) { col[0] = rgb[0]; col[1] = rgb[1]; col[2] = rgb[2]; }
+    else if (d.colorMode == 1) PickSplatColor(0.0f, col);
+    else { col[0] = d.color[0]; col[1] = d.color[1]; col[2] = d.color[2]; }
+
+    // The head. One Gaussian velocity impulse pointing down: after the
+    // pressure projection it is a vortex dipole, and that dipole is what rolls
+    // the head into the mushroom cap in ref 1. The dye cap is raised to the
+    // drop density so a 1.35 core is not clipped by a lower max_brightness.
+    const float cap = fmaxf(density, m_cfg.maxBrightness);
+    const float asym = d.asymmetry;
+    if (asym > 0.01f) {
+        // Two unequal, off-centre velocity impulses around ONE dye stamp. The
+        // velocity grid is 256 wide, so this is nearly free; a second dye stamp
+        // at 4096 would not be. The result is an unequal vortex pair with one
+        // lobe leading, like the references, instead of the textbook
+        // mirror-symmetric one a single Gaussian impulse produces.
+        const float side = (RandF() < 0.5f) ? -1.0f : 1.0f;
+        const float off  = 0.5f * asym * radiusPct * 0.01f * (float)m_width;
+        const float lead = 1.0f + 0.5f * asym * side;
+        const float sp   = fmaxf(d.impulseSpread, 0.25f);
+        const float vr   = radiusPct * sp * sp;   // radius is a squared scale
+        SplatVelocity(x - off, y, vx - 0.25f * asym * vy * side, vy * lead,
+                      vr * (1.0f - 0.25f * asym));
+        SplatVelocity(x + off, y, vx + 0.25f * asym * vy * side, vy * (2.0f - lead),
+                      vr * (1.0f + 0.25f * asym));
+        SplatDye(x, y, col[0] * density, col[1] * density, col[2] * density,
+                 radiusPct, cap, true);
+    } else {
+        const float sp = fmaxf(d.impulseSpread, 0.25f);
+        SplatVelocity(x, y, vx, vy, radiusPct * sp * sp);
+        SplatDye(x, y, col[0] * density, col[1] * density, col[2] * density,
+                 radiusPct, cap, true);
+    }
+
+    // Splash satellites (ref 2). Not 2D physics — a fake, and a cheap one:
+    // each is a full dye-res pass, so the count is capped at 12.
+    for (int i = 0; i < spatter; i++) {
+        const float ang = RandF() * 6.2831853f;
+        const float rr  = d.spatterSpread * (0.35f + 0.65f * RandF());
+        const float sx  = x + cosf(ang) * rr * (float)m_width;
+        const float sy  = y + sinf(ang) * rr * (float)m_height;
+        Splat(sx, sy, cosf(ang) * d.spatterSpeed * 0.35f,
+              sinf(ang) * d.spatterSpeed * 0.35f + d.spatterSpeed * 0.5f,
+              col[0] * density, col[1] * density, col[2] * density,
+              d.spatterRadius, cap);
+    }
+
+    // The thin trail hanging from the entry point: dye only, no velocity.
+    m_dropTailLeft = d.tailSec;
+    m_dropTailX = x; m_dropTailY = y;
+    m_dropTailCol[0] = col[0]; m_dropTailCol[1] = col[1]; m_dropTailCol[2] = col[2];
+}
+
+void FluidRenderer::UpdateDrops(float dt) {
+    const DropConfig& d = m_cfg.drops;
+    if (m_dropQueued) {              // QueueDrop() from outside the render loop
+        m_dropQueued = false;
+        InjectDrop(m_dropQx, m_dropQy, 0.0f, m_dropQvy);
+    }
+    // The entry trail keeps painting even after the emitter is switched off,
+    // so a half-finished drop is never truncated.
+    if (m_dropTailLeft > 0.0f) {
+        const float amt = d.tailDensity * m_emitScale;
+        const float tr = fmaxf(d.radius * d.tailRadiusFrac, 0.01f);
+        // fps-normalised: this runs every frame for tail_sec, so an un-scaled
+        // impulse would add ~86 kicks at 144 fps and fire the plume into the floor
+        if (d.tailSpeed > 0.001f)
+            SplatVelocity(m_dropTailX, m_dropTailY, 0.0f,
+                          d.speed * d.tailSpeed * m_emitScale * 0.1f, tr * 4.0f);
+        SplatDye(m_dropTailX, m_dropTailY,
+                 m_dropTailCol[0] * amt, m_dropTailCol[1] * amt, m_dropTailCol[2] * amt,
+                 tr, fmaxf(d.density, m_cfg.maxBrightness), true);
+        m_dropTailLeft -= dt;
+    }
+    if (!d.enabled) return;
+    if (!m_dropPrimed) {
+        // Seeded from RandF() AFTER InitWanderers, so --seed replay is stable
+        // and existing seeded sequences are not shifted.
+        m_dropTimer = d.interval * (0.3f + 0.7f * RandF());
+        m_dropPrimed = true;
+    }
+    m_dropTimer -= dt;
+    if (m_dropTimer > 0.0f) return;
+    m_dropTimer = fmaxf(d.interval * (1.0f + (RandF() - 0.5f) * 0.7f), 0.5f);
+    if (d.obeyGovernor && m_screenTooFull) return;   // water already full of ink
+    const float x = (d.xMin + (d.xMax - d.xMin) * RandF()) * (float)m_width;
+    const float y = (d.yMin + (d.yMax - d.yMin) * RandF()) * (float)m_height;
+    InjectDrop(x, y, (RandF() - 0.5f) * 120.0f, d.speed);
 }
 
 void FluidRenderer::UpdateCoverage() {

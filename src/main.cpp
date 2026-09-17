@@ -15,6 +15,9 @@
 //   --shot-size WxH    capture size (default 2560x1440)
 //   --shot-delay N     seconds of wallpaper time to simulate first (default 40)
 //   --shot-series N:S  N captures, S seconds apart, named by elapsed seconds
+//   --shot-pour X,Y,S,D  hold LMB at (X,Y) px from S for D seconds
+//   --shot-drop X,Y,T[,VY]  one ink drop at (X,Y) px at wallpaper time T
+//                      (VY = downward impulse; default [drops] speed)
 //   --seed N           seed every rand() behavior (default 1234) -> determinism
 //   --ini <path>       read config from this file instead of the live ini
 //   --hdr on|off       set the HDR state instead of querying the display
@@ -197,15 +200,88 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     cfg.curveHeight         = getF(L"color", L"curve_height", cfg.curveHeight);
     cfg.shadowFloor         = getF(L"color", L"shadow_floor", cfg.shadowFloor);
     cfg.shadowKnee          = getF(L"color", L"shadow_knee", cfg.shadowKnee);
+    cfg.gravity             = getF(L"sim", L"gravity", cfg.gravity);
+    cfg.gravityPow          = getF(L"sim", L"gravity_pow", cfg.gravityPow);
+    cfg.gravityBlur         = getF(L"sim", L"gravity_blur", cfg.gravityBlur);
     // ---- render look selector + "Liquid Acid" parameters -------------------
-    // [look] style = fluid | liquid_acid   (default fluid — the normal look).
-    // The settings-window checkbox writes the equivalent int key
-    // [look] liquid_acid = 0|1; the string form wins when both are present.
+    // [look] style = fluid | liquid_acid | ink   (default fluid).
+    // The settings-window checkboxes write the equivalent int keys
+    // [look] liquid_acid = 0|1 / [look] ink = 0|1; a key that is actually
+    // PRESENT in the file overrides the string form (so the checkbox still
+    // works on an ini that also carries style=), and ink wins ties.
     {
         wchar_t style[32] = {};
         GetPrivateProfileStringW(L"look", L"style", L"", style, 32, ini);
-        if (style[0]) cfg.acid.enabled = (_wcsicmp(style, L"liquid_acid") == 0);
+        if (style[0]) {
+            cfg.acid.enabled = (_wcsicmp(style, L"liquid_acid") == 0);
+            cfg.ink.enabled  = (_wcsicmp(style, L"ink") == 0);
+        }
         cfg.acid.enabled = getB(L"look", L"liquid_acid", cfg.acid.enabled);
+        cfg.ink.enabled  = getB(L"look", L"ink", cfg.ink.enabled);
+        if (cfg.ink.enabled) cfg.acid.enabled = false;
+    }
+    // ---- "Ink in water" render parameters ([ink]) --------------------------
+    {
+        InkConfig& k = cfg.ink;
+        const wchar_t* S = L"ink";
+        k.inverted     = getB(S, L"inverted", k.inverted);
+        k.density      = getF(S, L"density", k.density);
+        k.chroma       = getF(S, L"chroma", k.chroma);
+        k.edgeStrength = getF(S, L"edge_strength", k.edgeStrength);
+        k.edgeLo       = getF(S, L"edge_lo", k.edgeLo);
+        k.edgeHi       = getF(S, L"edge_hi", k.edgeHi);
+        k.edgeScale    = getF(S, L"edge_scale", k.edgeScale);
+        k.vignette     = getF(S, L"vignette", k.vignette);
+        k.coreKnee     = getF(S, L"core_knee", k.coreKnee);
+        k.hdrCore      = getF(S, L"hdr_core", k.hdrCore);
+        k.motionLo     = getF(S, L"motion_lo", k.motionLo);
+        k.motionHi     = getF(S, L"motion_hi", k.motionHi);
+        k.motionOpacity= getF(S, L"motion_opacity", k.motionOpacity);
+        k.parallax     = getF(S, L"parallax", k.parallax);
+        k.parallaxScale= getF(S, L"parallax_scale", k.parallaxScale);
+        k.parallaxDrift= getF(S, L"parallax_drift", k.parallaxDrift);
+        struct { const wchar_t* key; float* dst; } triples[] = {
+            { L"paper_color", k.paper }, { L"tint_thin", k.tintThin },
+            { L"tint_thick",  k.tintThick },
+        };
+        for (auto& t : triples) {
+            wchar_t buf[64] = {}; float r, g, b;
+            GetPrivateProfileStringW(S, t.key, L"", buf, 64, ini);
+            if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+                t.dst[0] = r; t.dst[1] = g; t.dst[2] = b;
+            }
+        }
+    }
+    // ---- ink drops ([drops]); usable with ANY look --------------------------
+    {
+        DropConfig& d = cfg.drops;
+        const wchar_t* S = L"drops";
+        d.enabled       = getB(S, L"drops", d.enabled);
+        d.interval      = getF(S, L"interval", d.interval);
+        d.xMin          = getF(S, L"x_min", d.xMin);
+        d.xMax          = getF(S, L"x_max", d.xMax);
+        d.yMin          = getF(S, L"y_min", d.yMin);
+        d.yMax          = getF(S, L"y_max", d.yMax);
+        d.speed         = getF(S, L"speed", d.speed);
+        d.radius        = getF(S, L"radius", d.radius);
+        d.density       = getF(S, L"density", d.density);
+        d.tailSec       = getF(S, L"tail_sec", d.tailSec);
+        d.tailDensity   = getF(S, L"tail_density", d.tailDensity);
+        d.spatter       = getI(S, L"spatter", d.spatter);
+        d.spatterRadius = getF(S, L"spatter_radius", d.spatterRadius);
+        d.spatterSpeed  = getF(S, L"spatter_speed", d.spatterSpeed);
+        d.spatterSpread = getF(S, L"spatter_spread", d.spatterSpread);
+        d.colorMode     = getI(S, L"color_mode", d.colorMode);
+        d.obeyGovernor  = getB(S, L"obey_governor", d.obeyGovernor);
+        d.asymmetry     = getF(S, L"asymmetry", d.asymmetry);
+        d.tailRadiusFrac= getF(S, L"tail_radius_frac", d.tailRadiusFrac);
+        d.tailSpeed     = getF(S, L"tail_speed", d.tailSpeed);
+        d.impulseSpread = getF(S, L"impulse_spread", d.impulseSpread);
+        wchar_t buf[64] = {}; float r, g, b;
+        GetPrivateProfileStringW(S, L"color", L"", buf, 64, ini);
+        if (swscanf_s(buf, L"%f %f %f", &r, &g, &b) == 3) {
+            d.color[0] = r; d.color[1] = g; d.color[2] = b;
+        }
     }
     {
         LiquidAcidConfig& a = cfg.acid;
@@ -254,6 +330,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.inkComplementLock = getB(S, L"ink_complement_lock", a.inkComplementLock);
         a.inkComplementSpan = getF(S, L"ink_complement_span", a.inkComplementSpan);
         a.hueSweepPeriod    = getF(S, L"hue_sweep_period", a.hueSweepPeriod);
+        {   // ink_mode = bands | water (string wins); int form ink_water=0|1
+            wchar_t mode[32] = {};
+            GetPrivateProfileStringW(S, L"ink_mode", L"", mode, 32, ini);
+            if (mode[0]) a.inkMode = (_wcsicmp(mode, L"water") == 0) ? 1 : 0;
+            a.inkMode = getB(S, L"ink_water", a.inkMode != 0) ? 1 : 0;
+        }
         a.inkGain      = getF(S, L"ink_gain", a.inkGain);
         a.inkBias      = getF(S, L"ink_bias", a.inkBias);
         a.seamStrength = getF(S, L"seam_strength", a.seamStrength);
@@ -328,7 +410,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
     }
     printf("config loaded: density=%.3f decay_fast=%.2f vorticity=%.0f sim=%d dye=%d look=%s\n",
            cfg.densityDissipation, cfg.decayFast, cfg.curl, cfg.simRes, cfg.dyeRes,
-           cfg.acid.enabled ? "liquid_acid" : "fluid");
+           cfg.ink.enabled ? (cfg.ink.inverted ? "ink (inverted)" : "ink (paper)")
+                           : (cfg.acid.enabled
+                              ? (cfg.acid.inkMode == 1 ? "liquid_acid (ink_mode=water)"
+                                                       : "liquid_acid")
+                              : "fluid"));
 }
 
 static void LoadFullConfig(FluidConfig& cfg) { LoadConfigFromIni(g_configIniPath, cfg); }
@@ -1200,6 +1286,12 @@ struct ShotOpts {
     // with a slow circular drift (radius 40 px, 0.5 rev/s) like a resting hand.
     bool     pour = false;
     float    pourX = 1280, pourY = 720, pourStart = 0, pourDur = 0;
+    // --shot-drop X,Y,T[,VY] : one ink drop at (X,Y) px at wallpaper time T,
+    // with downward impulse VY (default [drops] speed). The reproducible
+    // single-drop test for the ink look.
+    bool     drop = false;
+    float    dropX = 1280, dropY = 200, dropAt = 0, dropVy = -1.0f;
+    bool     dropFired = false;
 };
 
 static void ShotLog(const char* fmt, ...) {
@@ -1355,6 +1447,10 @@ static int RunShotMode() {
             } else if (wcscmp(argv[i], L"--shot-pour") == 0 && i + 1 < argc) {
                 if (swscanf_s(argv[++i], L"%f,%f,%f,%f", &o.pourX, &o.pourY, &o.pourStart, &o.pourDur) == 4)
                     o.pour = true;
+            } else if (wcscmp(argv[i], L"--shot-drop") == 0 && i + 1 < argc) {
+                const wchar_t* v = argv[++i];
+                int got = swscanf_s(v, L"%f,%f,%f,%f", &o.dropX, &o.dropY, &o.dropAt, &o.dropVy);
+                if (got >= 3) { o.drop = true; if (got == 3) o.dropVy = -1.0f; }
             } else if (wcscmp(argv[i], L"--shot-yield") == 0 && i + 1 < argc) {
                 o.yieldMs = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--shot-delay") == 0) {
@@ -1464,6 +1560,14 @@ static int RunShotMode() {
                     lx = px; ly = py; have = true;
                     fin.mouseDown = true; fin.userInteracted = true;
                 }
+            }
+            // --shot-drop: one ink drop, fired on the first frame at or past
+            // its wallpaper time, so the whole run stays reproducible.
+            if (o.drop && !o.dropFired && frames / 144.0f >= o.dropAt) {
+                renderer.QueueDrop(o.dropX, o.dropY, o.dropVy);
+                o.dropFired = true;
+                ShotLog("[shot] drop injected at t=%.2fs (%.0f,%.0f) vy=%.0f\n",
+                        frames / 144.0f, o.dropX, o.dropY, o.dropVy);
             }
             UpdateMoods(renderer, dt);
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max

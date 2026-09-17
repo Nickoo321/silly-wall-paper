@@ -239,6 +239,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         k.motionLo     = getF(S, L"motion_lo", k.motionLo);
         k.motionHi     = getF(S, L"motion_hi", k.motionHi);
         k.motionOpacity= getF(S, L"motion_opacity", k.motionOpacity);
+        k.veilFloor    = getF(S, L"veil_floor", k.veilFloor);
+        k.tintMidDip   = getF(S, L"tint_mid_dip", k.tintMidDip);
         k.pairSweepPeriod = getF(S, L"pair_sweep_period", k.pairSweepPeriod);
         k.parallax     = getF(S, L"parallax", k.parallax);
         k.parallaxScale= getF(S, L"parallax_scale", k.parallaxScale);
@@ -1236,6 +1238,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"motion_lo", k.motionLo, 1);
         putF(S, L"motion_hi", k.motionHi, 1);
         putF(S, L"motion_opacity", k.motionOpacity, 3);
+        putF(S, L"veil_floor", k.veilFloor, 3);
+        putF(S, L"tint_mid_dip", k.tintMidDip, 3);
         putF(S, L"pair_sweep_period", k.pairSweepPeriod, 1);
         putF(S, L"parallax", k.parallax, 3);
         putF(S, L"parallax_scale", k.parallaxScale, 3);

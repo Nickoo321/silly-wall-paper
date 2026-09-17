@@ -255,6 +255,12 @@ struct InkConfig {
     // How much of that gate also applies to the OPTICAL PATH (0 = HDR lift
     // only). 1 = stationary ink is fully transparent.        motion_opacity
     float motionOpacity = 0.0f;
+    // Faint dye below this opacity goes to the background instead of a
+    // semi-transparent wash (inverted). 0 = off.             veil_floor
+    float veilFloor    = 0.0f;
+    // Dip the duotone blend toward black around its midpoint so mid-density
+    // dye reads as dark ink instead of the grey-brown RGB midpoint. tint_mid_dip
+    float tintMidDip   = 0.0f;
     float parallax     = 0.0f;      // cheap 2nd layer: 0 = off               parallax
     float parallaxScale= 0.92f;     //                                        parallax_scale
     float parallaxDrift= 0.004f;    //                                        parallax_drift

@@ -2336,7 +2336,7 @@ void FluidRenderer::UploadInkConstants() {
     const float p1[4] = { k.edgeLo, k.edgeHi, k.inverted ? 1.0f : 0.0f, k.vignette };
     const float p2[4] = { k.parallax, k.parallaxScale, k.parallaxDrift, m_time };
     const float p3[4] = { k.coreKnee, k.hdrCore, k.motionLo, k.motionHi };
-    const float p4[4] = { k.motionOpacity, 0.0f, 0.0f, 0.0f };
+    const float p4[4] = { k.motionOpacity, k.veilFloor, k.tintMidDip, 0.0f };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16);
     memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16); memcpy(p.p4, p4, 16);
 

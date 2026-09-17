@@ -780,3 +780,9 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
   only readable zoomed), acid-polish-refsheet.png.
 - `style=fluid` regression: we-look-live 60 s 2560x1440 md5
   **10E36EBF1A74EDFE609065D757300054** (-hdr 414B4321…), unchanged.
+- User marked two flat patches on the teal duotone pour (a smooth fresh plume, a fading haze):
+  both are the RGB midpoint of complementary tints = grey-brown "mud". New `[ink]` keys
+  (default off): `veil_floor` (faint dye -> background) and `tint_mid_dip` (blend dips toward
+  dark around its midpoint, like real ink). A hue-arc blend was tried first and rejected (the
+  midpoint became lime, a third colour). A/B: build2/shots/mud/mud-ab2.png (0.12 / 0.7).
+  Fluid md5 unchanged. Also: build2.cmd (vswhere + vcvars + cmake) — run it from PowerShell.

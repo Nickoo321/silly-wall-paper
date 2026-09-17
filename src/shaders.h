@@ -469,7 +469,7 @@ cbuffer InkCB : register(b2) {
     float4 ikP1;        // x edgeLo,   y edgeHi,  z inverted,     w vignette
     float4 ikP2;        // x parallax, y parallaxScale, z parallaxDrift, w time
     float4 ikP3;        // x coreKnee, y hdrCore, z motionLo, w motionHi
-    float4 ikP4;        // x motionOpacity, y -, z -, w -
+    float4 ikP4;        // x motionOpacity, y veilFloor, z tintMidDip, w -
     float4 ikPaper;     // paper / background colour
     float4 ikTintThin;  // inverted: light through a thin veil
     float4 ikTintThick; // inverted: light out of an opaque core
@@ -553,8 +553,15 @@ float3 InkWater(float3 C, float2 uv, float2 texel, float2 pos, out float hdrM) {
     }
     // ---- INVERTED: pale ink on black (the OLED-friendly one) -------------
     float  op = 1.0 - exp(-ikP0.x * thick);
-    float3 tint = lerp(ikTintThin.rgb, ikTintThick.rgb,
-                       smoothstep(min(ikP3.x, 0.99), 1.0, op));
+    // veil floor: faint dye (old, diffused wash) goes to the background
+    // instead of a semi-transparent haze
+    if (ikP4.y > 0.001) op = saturate((op - ikP4.y) / max(1.0 - ikP4.y, 1e-3));
+    float  tk = smoothstep(min(ikP3.x, 0.99), 1.0, op);
+    float3 tint = lerp(ikTintThin.rgb, ikTintThick.rgb, tk);
+    // Complementary tints blend to grey-brown at the midpoint (the flat "mud"
+    // on smooth mid-density plumes). Real ink goes DARK where it is neither
+    // thin nor saturated, so dip the blend toward black around the midpoint.
+    tint *= 1.0 - ikP4.z * pow(4.0 * tk * (1.0 - tk), 2.0);
     hdrM = d * ikP3.y * InkMotion(uv);    // hot cores expand, veils stay SDR
     return lerp(ikPaper.rgb, tint * lerp(float3(1.0, 1.0, 1.0), chroma,
                                          saturate(ikP0.y)), op);

@@ -356,6 +356,18 @@ struct LiquidAcidConfig {
     float dropletMerge  = 0.30f;    // overlap fraction that coalesces droplet_merge
     float dropletRise   = 0.30f;    // trapped water lags the oil, x rise_speed
 
+    // How the oil's EDGE is drawn (the body -- transparency, absorption,
+    // bump, refraction -- is the same either way).            oil_edge_mode
+    //   0 the shipped soft film edge: the thickness band is proportional to
+    //     the local lens radius, so a big disc fades out over a wide
+    //     translucent gradient and a droplet over a couple of pixels.
+    //   1 CRISP: one narrow, size-independent band a few rim-widths across,
+    //     so a big hole ends on the same hard isoline a droplet does and
+    //     carries only its meniscus.
+    // The user, shown stills of both: "hard to say in stills, apply all" --
+    // so both ship and the choice is made live from the tray.
+    int   oilEdgeMode   = 0;
+
     // --- grain / speckle ---
     float grainAmt    = 0.030f;     // coarse animated film grain
     float grainScale  = 3.0f;       // px per grain cell (>1 = coarse)

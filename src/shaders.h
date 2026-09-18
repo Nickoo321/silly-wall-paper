@@ -566,7 +566,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
     float4 laP16;        // x oilInkBlur y - z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
-    float4 laP18;        // x dropsOn    y gridW      z gridH      w -
+    float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
     float4 laMen;        // meniscus halo colour, rgb
 };
@@ -942,6 +942,7 @@ float4 PSMain(VSOut i) : SV_Target {
     // same relative depth everywhere. Its own spatial derivative is ignored
     // in `grad` on purpose: the blob field varies over ~0.1 p-units and a
     // droplet over ~0.01, so the droplet term dominates the edge anyway.
+    float2 gradB = grad;      // blobs only -- the surface the LENS belongs to
     if (laP18.x > 0.5) {
         const int gw = (int)laP18.y, gh = (int)laP18.z;
         const int cx = clamp((int)floor(uv.x * gw), 0, gw - 1);
@@ -1032,14 +1033,37 @@ float4 PSMain(VSOut i) : SV_Target {
     // and a narrow band put a hard bright seam around the plume it was meant
     // to clean up. Wide = gradual = invisible.
     float isoOk   = 1.0 - smoothstep(1.35, 6.00, sdfWarp);
-    // NOTE (2026-09-17): lensR must come from the SAME gradient as sdf. Taking
-    // it from the blob-only gradient to stop droplets jittering the soft band
-    // was tried and is wrong: sdf still divided by the full |grad|, the ratio
-    // sdf/edgeW that the thin-film model rests on came apart, and the oil went
-    // black. Decoupling the two is a change to the film-edge design, which is
-    // parked until the user decides between the wide soft edge and a crisp one.
-    float  lensR = clamp(0.78 / max(gl, 1e-3), 0.02, 0.35);
+    // ---- the lens radius that sets the soft band's width -----------------
+    // A droplet's kernel is tiny and therefore very steep, so a droplet merely
+    // PASSING THROUGH the wide band around a big hole spikes |grad| there and
+    // makes the band width jump frame to frame -- the user's "individual dots"
+    // flickering, "usually the blur around the dark spots".
+    //
+    // The blob-only gradient cannot simply be substituted: sdf still divides by
+    // the FULL |grad|, and deep inside a merged mass the blob gradient goes to
+    // zero, so lensR pinned to its ceiling, edgeW to 0.060, and the oil went
+    // black (tried, reverted). Use it only where it is a credible surface
+    // gradient -- i.e. near a blob isoline, which is exactly where the band
+    // lives and exactly where droplets were modulating it. Deep inside, where
+    // gradB is meaningless, fall back to the full gradient, which is what this
+    // line always did. With the droplet sim off gradB == grad and both branches
+    // are the same number.
+    float  glB = length(gradB) + 1e-6;
+    float  glLens = lerp(gl, glB, smoothstep(0.35, 0.90, glB));
+    float  lensR = clamp(0.78 / max(glLens, 1e-3), 0.02, 0.35);
+    // ---- oil_edge_mode ---------------------------------------------------
+    // 0 (default, every existing ini): the film thins over a band proportional
+    // to the LENS radius, so a big disc fades out over a wide translucent
+    // gradient and a droplet over a couple of pixels.
+    // 1 CRISP: every surface gets the droplets' treatment -- one narrow,
+    // SIZE-INDEPENDENT band a few rim-widths across, so a big hole ends on the
+    // same hard isoline a droplet does and carries only its meniscus. The film
+    // BODY (oil_transparency, absorption, bump, refraction) is untouched in
+    // both: this is the edge and nothing else.
+    // The user, on stills of the two: "hard to say in stills, apply all" --
+    // hence a key and both shipped, to be judged live from the tray.
     float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
+    if (laP18.w > 0.5) edgeW = max(laP1.x * 2.5, 1e-5);
     float  thk   = 1.0;                       // 1 = full-thickness oil
     // oil_transparency needs the same thickness proxy even when the soft
     // thin edge itself is off: a transparent film MUST be clearest where it
@@ -1426,7 +1450,11 @@ R"hlsl(
         hs.z = saturate(hs.z * 1.55 + 0.05);
         menC   = lerp(menC, AcidHsv2Rgb(hs), k);
         // a few percent of the LOCAL lens radius, never a 1-2 px line
-        menHWx = lerp(1.0, max(1.0, (0.055 * lensR) / max(laP2.y, 1e-5)), k);
+        // ...but in CRISP mode the halo keeps its authored width: scaling it by
+        // the local lens radius is what made a big hole's halo wide, and a
+        // crisp edge wants the same thin meniscus at every size.
+        menHWx = (laP18.w > 0.5) ? 1.0
+               : lerp(1.0, max(1.0, (0.055 * lensR) / max(laP2.y, 1e-5)), k);
     }
     float rimHW = max(laP1.x * rimMul, 1e-5);
     float menHW = clamp(laP2.y * rimMul * menHWx, 1e-5, 0.024);

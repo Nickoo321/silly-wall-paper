@@ -482,6 +482,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletAttract = getF(S, L"droplet_attract", a.dropletAttract);
         a.dropletMerge   = getF(S, L"droplet_merge", a.dropletMerge);
         a.dropletRise    = getF(S, L"droplet_rise", a.dropletRise);
+        a.oilEdgeMode    = getI(S, L"oil_edge_mode", a.oilEdgeMode);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1545,6 +1546,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_attract", a.dropletAttract, 3);
         putF(S, L"droplet_merge", a.dropletMerge, 3);
         putF(S, L"droplet_rise", a.dropletRise, 3);
+        putI(S, L"oil_edge_mode", a.oilEdgeMode);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

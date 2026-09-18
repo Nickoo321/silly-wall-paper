@@ -3435,7 +3435,8 @@ void FluidRenderer::UploadAcidConstants() {
     float p16[4] = { fmaxf(a.oilInkBlur, 0.0f), 0.0f, 0.0f, 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
-    float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH, 0.0f };
+    float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
+                     (a.oilEdgeMode == 1) ? 1.0f : 0.0f };
     float p19[4] = { fmaxf(a.dropletSupport, 0.5f), fmaxf(a.dropletWeight, 0.0f),
                      fmaxf(a.dropletOilW, 0.0f), 0.0f };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);

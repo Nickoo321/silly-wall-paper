@@ -200,3 +200,8 @@ T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's B
    texture/grain detail), so the global post_blur_px should drop to ~0 once N+R's per-element depth of
    field lands, and all blur comes from depth (out-of-focus elements very soft, in-focus ones sharper
    than today). Sharp + bloom, not soft + bloom.
+   T note 2 (user 19:10): the Denabase tube shot (endgoal-ref-8) is NOT an aesthetic target -- it is the
+   FOCUS reference only: "extreme contrast in focus level": the focused plane is tack sharp with fine
+   texture resolved, everything off it falls away fast into a very soft blur (a shallow, macro-lens
+   depth of field with a steep falloff, not a gentle one). Aesthetic targets = the bioluminescence and
+   red-dish boards equally (endgoal-ref-6/-7/-10).

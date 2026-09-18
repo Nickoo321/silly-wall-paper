@@ -310,3 +310,19 @@ Y. RACING MICRO-BUBBLES (user 2026-09-18 19:50): "I just saw racing small bubble
    rules), never popping in view. Keys [liquid_acid] droplet_racer_frac (default 0; ship ~0.12),
    droplet_racer_speed (x, ship ~2.5), droplet_racer_wobble (ship ~0.5), droplet_racer_r_max (only
    droplets below this radius qualify). The existing depth_rise back-layer bonus stays as is.
+
+PLAN (Fable, 2026-09-18 19:55, user: "think about all of them first, then 2 executors, maybe 3"):
+  Executor CAM (post pass + rig, worktree fw-cam), in this order, one commit each:
+    V0 dither: blue-noise ~0.5 LSB on the final output (10-bit banding on saturated flats), key
+       [post] dither (default 0, ship 1).
+    V1 halation: tight warm bloom from only the brightest pixels ([post] halation, halation_px),
+       drifting with the rig lamp.
+    V2 lid + internal artefacts (LAPD sheet, T note 3, V key ref): coloured ring ghosts offset by
+       the rig, soft rainbow fringe, veiling flare, curved glass-edge streaks, faint iridescent
+       sweeps -- full-frame, no mask, no dark corners; presets subtle/medium/strong.
+    V3 motion: thermal shimmer (U7), wandering vignette (U11), pixel-shift orbit (U12), all off the
+       rig; and the rig's own model = slight slow drift + occasional all-at-once readjustments.
+  Executor SIM (worktree fw-cons): Y racers (running) -> U9 bubble weather (slow seasons in the
+    droplet population) -> S residue (blob_count reseed, y-respawn mass).
+  Then J accent-by-size (display palette) as a third executor when a slot is free; Sonnet rote
+    (md5, sheets, docs) at the end. Fable asks before every swap.

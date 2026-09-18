@@ -205,3 +205,10 @@ T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's B
    texture resolved, everything off it falls away fast into a very soft blur (a shallow, macro-lens
    depth of field with a steep falloff, not a gentle one). Aesthetic targets = the bioluminescence and
    red-dish boards equally (endgoal-ref-6/-7/-10).
+   T note 3 (user 19:15): NO visible instrument, NO petri-dish rim, NO grid, NO UI marks, and NO dark
+   corners / black areas at the left and right of the screen (the frame stays full-bleed oil edge to
+   edge). What may be simulated instead: a plastic or glass CAP/LID over the dish -- i.e. the picture
+   seen THROUGH a transparent cover: faint reflections/ghosts of the bright film, a soft sheen or
+   smear that drifts, slight refraction, a subtle highlight from the lamp, maybe a faint fingerprint
+   or condensation haze -- all full-frame, never a mask or a border. The vignette stays as it is
+   (gentle), nothing that reads as a hole in the display.

@@ -378,6 +378,25 @@ struct LiquidAcidConfig {
     float dropletRingWidth = 0.08f; // rim width / radius        droplet_ring_width
     float dropletRingLift  = 0.10f; // interior lightening 0..1   droplet_ring_lift
     float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
+    // --- BIG HOLLOW BUBBLES (user 2026-09-18, panel photo
+    // --- 2026-09-18-big-hollow-bubble-liked.jpg: the big faint transparent
+    // --- lens in the middle-left is "exactly what I want more of") ---------
+    // Rings were drawn from the same radius range as the solid droplets, and
+    // that range is itself clamped by the shader's 3x3 cell walk (a droplet's
+    // support may not exceed one grid cell), so a hollow bubble could never be
+    // more than a small ring. A ring that is bigger than a cell is instead
+    // registered in EVERY cell its support disc overlaps, which restores the
+    // walk's invariant at a cost of a few hundred extra table entries -- and
+    // nothing per pixel, because the cells it lands in are the ones its own
+    // pixels are in.
+    //   droplet_ring_r_mul    1 = today. Up to this multiple of droplet_r_max
+    //                         for a BIG ring (2-4 is the look the user asked
+    //                         for); the wall stays droplet_ring_width of the
+    //                         radius and the wobble scales with it.
+    //   droplet_ring_big_frac share of NEW rings that are big. Keep it small:
+    //                         a couple visible at any moment is the point.
+    float dropletRingRMul   = 1.0f;  // 1..6              droplet_ring_r_mul
+    float dropletRingBigFrac= 0.0f;  // 0..1           droplet_ring_big_frac
 
     // --- CONSERVATION OF MASS (brief S, 2026-09-18) ---------------------
     // "matter cannot be created or destroyed": nothing may appear at a

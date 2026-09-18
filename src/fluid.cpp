@@ -3027,6 +3027,11 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     const float rCap  = cellP / fmaxf(a.dropletSupport, 0.5f);
     const float rMax  = fminf(fmaxf(a.dropletRMax, 1e-4f), rCap);
     const float rMin  = fminf(fmaxf(a.dropletRMin, 1e-5f), rMax * 0.5f);
+    // BIG HOLLOW BUBBLES: rCap exists because the shader walks the 3x3 cells
+    // around a pixel, so a droplet's support may not exceed one cell. A big
+    // ring breaks that on purpose and buys the invariant back by being
+    // registered in every cell its support covers (see buildGrid's `spread`).
+    const float ringMul  = fminf(fmaxf(a.dropletRingRMul, 1.0f), 6.0f);
     const float thresh = a.threshold;
     // ONE relaxation time for birth, coalescence and dissolution: nothing in
     // this sim changes size or membership discontinuously.
@@ -3134,6 +3139,25 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // stream, so the population is identical whatever the shape keys
             // say, and fixed for life, so a ring never morphs into another.
             out.seed = hash01(x, y, 0x85EBCA6Bu);
+            // ---- BIG HOLLOW BUBBLE ---------------------------------------
+            // Drawn from the position HASH, never from the sim's own stream,
+            // for the same reason the ring flag is: switching these keys on
+            // must not move the rest of the population. A big bubble also
+            // needs ROOM -- the confinement term keeps a droplet's centre at
+            // least 0.6 of its radius inside the oil, so one nucleated near a
+            // film edge would be shoved out and dissolve before it had grown.
+            if (out.ring && ringMul > 1.001f) {
+                if (hash01(x, y, 0xC2B2AE35u) < a.dropletRingBigFrac) {
+                    const float hs = hash01(x, y, 0x27D4EB2Fu);
+                    out.rt = rMax * (1.0f + (ringMul - 1.0f) * (0.35f + 0.65f * hs));
+                    // Enough room to grow into, but not a deep-interior
+                    // test: the droplet is born at nothing and swells over
+                    // spawn_grow_s, and the confinement term steers it
+                    // further inside as its radius grows, so demanding the
+                    // full final margin up front rejected every candidate.
+                    if (sdf < out.rt * 0.30f) continue;
+                }
+            }
             return true;
         }
         return false;
@@ -3368,35 +3392,85 @@ void FluidRenderer::StepAcidDroplets(float dt) {
 
     // ---- 2. uniform grid (neighbour search AND the shader's cell table) ---
     const int NC = kDropGridW * kDropGridH;
-    auto buildGrid = [&]() {
+    // `spread`: the table the SHADER reads registers a droplet in every cell
+    // its support disc reaches, MINUS one ring of cells, because the shader
+    // already walks the 3x3 around each pixel. For everything inside rCap
+    // (support <= one cell) that reduces to the home cell and this is exactly
+    // the original build; only a BIG HOLLOW BUBBLE takes extra entries, and
+    // only a few hundred of them. The table used for the CPU neighbour search
+    // is built without it, so a pair is still visited once.
+    auto buildGrid = [&](bool spread) {
         const int m = (int)m_acidDrops.size();
         m_dropletCellCount.assign((size_t)NC, 0);
         m_dropletCellStart.assign((size_t)NC + 1, 0);
-        std::vector<int> cellOf((size_t)m, 0);
+        const float cwx = 1.0f / (float)kDropGridW;      // cell size, uv
+        const float cwy = 1.0f / (float)kDropGridH;
+        std::vector<int> cellOf;                 // home-cell build (spread off)
+        std::vector<std::pair<int, int>> ins;    // (cell, droplet), spread on
+        if (!spread) cellOf.assign((size_t)m, 0);
+        else         ins.reserve((size_t)m + 256);
+        int placed = 0;
         for (int i = 0; i < m; i++) {
             const AcidDrop& d = m_acidDrops[i];
             int cx = (int)floorf(d.x * kDropGridW);
             int cy = (int)floorf(d.y * kDropGridH);
             cx = cx < 0 ? 0 : (cx >= kDropGridW ? kDropGridW - 1 : cx);
             cy = cy < 0 ? 0 : (cy >= kDropGridH ? kDropGridH - 1 : cy);
-            const int c = cy * kDropGridW + cx;
-            cellOf[i] = c;
-            if (m_dropletCellCount[c] < kDropCellCap) m_dropletCellCount[c]++;
-            else cellOf[i] = -1;                    // over the per-cell cap
+            if (!spread) {
+                const int c = cy * kDropGridW + cx;
+                cellOf[i] = c;
+                if (m_dropletCellCount[c] < kDropCellCap) m_dropletCellCount[c]++;
+                else cellOf[i] = -1;                    // over the per-cell cap
+                continue;
+            }
+            // support disc, uv. The shader culls at exactly this radius.
+            const float sup = d.r * fmaxf(a.dropletSupport, 0.5f);
+            // ceil(S / cell) - 1, with a hair of slack: a droplet at exactly
+            // rCap has S == one cell, and rounding that to 2 cells would
+            // spread EVERY droplet over 3x3 and change the shipped look.
+            int rx = (int)ceilf((sup / fmaxf(aspect, 1e-4f)) / cwx - 1.0001f);
+            int ry = (int)ceilf(sup / cwy - 1.0001f);
+            if (rx < 0 || placed + 1 >= kAcidMaxDrops) rx = 0;
+            if (ry < 0 || placed + 1 >= kAcidMaxDrops) ry = 0;
+            if (rx > 8) rx = 8;
+            if (ry > 8) ry = 8;
+            // ...and never at the cost of dropping ordinary droplets.
+            if ((placed + (2 * rx + 1) * (2 * ry + 1)) > kAcidMaxDrops) { rx = 0; ry = 0; }
+            for (int oy = -ry; oy <= ry; oy++) {
+                const int yy = cy + oy;
+                if (yy < 0 || yy >= kDropGridH) continue;
+                for (int ox = -rx; ox <= rx; ox++) {
+                    const int xx = cx + ox;
+                    if (xx < 0 || xx >= kDropGridW) continue;
+                    const int c = yy * kDropGridW + xx;
+                    if (m_dropletCellCount[c] >= kDropCellCap) continue;
+                    m_dropletCellCount[c]++;
+                    ins.push_back(std::make_pair(c, i));
+                    placed++;
+                }
+            }
         }
         int acc = 0;
         for (int c = 0; c < NC; c++) { m_dropletCellStart[c] = acc; acc += m_dropletCellCount[c]; }
         m_dropletCellStart[NC] = acc;
         std::vector<int> fill((size_t)NC, 0);
         m_dropletOrder.assign((size_t)acc, 0);
-        for (int i = 0; i < m; i++) {
-            const int c = cellOf[i];
-            if (c < 0) continue;
-            m_dropletOrder[(size_t)m_dropletCellStart[c] + fill[c]] = i;
-            fill[c]++;
+        if (!spread) {
+            for (int i = 0; i < m; i++) {
+                const int c = cellOf[i];
+                if (c < 0) continue;
+                m_dropletOrder[(size_t)m_dropletCellStart[c] + fill[c]] = i;
+                fill[c]++;
+            }
+        } else {
+            for (size_t k = 0; k < ins.size(); k++) {
+                const int c = ins[k].first;
+                m_dropletOrder[(size_t)m_dropletCellStart[c] + fill[c]] = ins[k].second;
+                fill[c]++;
+            }
         }
     };
-    buildGrid();
+    buildGrid(false);
 
     // ---- 3. surface tension: attraction, contact repulsion, coalescence ---
     const float mergeF = 1.0f - fminf(fmaxf(a.dropletMerge, 0.05f), 0.90f);
@@ -3467,7 +3541,14 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                         // area-conserving, so the solid survives and the ring
                         // pours into it exactly as a small drop pours into a
                         // big one -- the survivor choice is the only change.
-                        // ...or TOUCHING, when droplet_coalesce is on. The
+                        // ...or TOUCHING, when droplet_coalesce is on --
+                        // SOLIDS ONLY. A ring that merely touches a solid must
+                        // not be swallowed: rings are rare and the contact
+                        // rule fires within a tenth of a second, so including
+                        // them emptied the frame of hollow bubbles (measured:
+                        // 14-25 rings alive instead of ~200). The original
+                        // deep-overlap absorption still applies to them.
+                        // The
                         // || short-circuits, so rf() is reached only when the
                         // key is on and the pair is in contact: with the key
                         // at 0 the random stream is untouched and the whole
@@ -3476,7 +3557,8 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                             && di.mergeTo < 0 && dj.mergeTo < 0
                             && di.rt > 0.0f && dj.rt > 0.0f
                             && (dd < sum * mergeF
-                                || (coalP > 0.0f && dd < sum && rf() < coalP))) {
+                                || (coalP > 0.0f && !di.ring && !dj.ring
+                                    && dd < sum && rf() < coalP))) {
                             // COALESCE, area-conserving. The survivor is the
                             // larger one; the other pours into it (rt -> 0,
                             // centre pulled in) instead of being deleted, so
@@ -3603,7 +3685,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     }
 
     // ---- 6. final bin, the one the shader reads --------------------------
-    buildGrid();
+    buildGrid(true);
 }
 
 // ===========================================================================

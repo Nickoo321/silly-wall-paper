@@ -219,3 +219,29 @@ T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's B
    pushes the haze ("heat" moving it). Rule for every post effect: position = slow idle drift + an
    advection/warp term from the fluid velocity, and long-period wander so no pixel is bright for
    minutes. Applies to the lamp (Q), the lid (T note 3), the leak (P), the bloom centre.
+
+U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen permanently). Each with its
+   motion source:
+   1. Convection haze: the fog is a field advected by the sim velocity + a slow buoyant drift upward
+      from the lamp side, thinning as it rises; a burst pushes a plume of haze ahead of it.
+   2. Breathing focus: the focal plane drifts slowly through the depth range between the occasional
+      hand readjustments, so which droplets are sharp changes continuously (nothing stays sharp).
+   3. Lid condensation: droplets of condensation on the lid that grow, run, merge and clear in cycles
+      (minutes), refracting the film; the clear patch wanders.
+   4. Lamp on a gimbal: the light position does a slow Lissajous wander plus a rare re-aim; the bloom,
+      fog and lamp-side shading all follow it (already in Q, formalised).
+   5. Ghost of the frame: a dim, mirrored/offset internal reflection of the bright film in the lid
+      glass whose offset vector rotates slowly (lid tilt), so it never overlays the same spot.
+   6. Lens breathing: the whole picture's scale pulses a fraction of a percent with the focus moves
+      (real lenses breathe), which also shifts every static pixel.
+   7. Thermal shimmer: a very fine, slow refractive wobble (heat above the lamp) warping the picture
+      by a pixel or two, strongest near the lamp, moving with the fluid.
+   8. Grain that walks: the grain/noise pattern's cell grid slides slowly (sub-pixel per second) as
+      well as re-rolling, so film grain never re-lands on one pixel lattice.
+   9. Bubble weather: the droplet population has slow "seasons" -- more rings, then more solids,
+      then sparse -- driven by a minutes-long clock, so the frame's density never settles.
+  10. Hue tide: the palette sweep gets a spatial component (hue varies slightly across the frame and
+      that gradient rotates), so no region keeps one colour.
+  11. Wandering vignette: the vignette centre drifts with the lamp so the darkest corner rotates.
+  12. Pixel-shift safety net: the entire final image translates by up to a few px on a many-minute
+      orbit (classic OLED pixel shift) as the last guarantee, sub-pixel steps so it is invisible.

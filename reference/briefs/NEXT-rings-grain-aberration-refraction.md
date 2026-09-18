@@ -137,3 +137,10 @@ R. (user 2026-09-18 18:50, sketch reference/shots/photos/sketch-perspective-came
    today), camera_focus (depth of the focal plane), camera_field_curve, camera_axis_x/y (where the
    optical axis meets the dish; default centre, may drift slowly with the lamp). Implement together
    with N (depth) as ONE task: "perspective camera + depth of field".
+   R addendum (user 18:55): TILT-SHIFT / freelensing (Lensbaby): the lens tilted off the sensor plane
+   so the plane of focus cuts the dish at an angle -- a band of sharpness (a "sweet spot" or a slanted
+   strip) with focus falling off smoothly to either side, and the axis of that band slowly turning and
+   drifting (the same idle motion as the lamp). Keys: focus_tilt (0..1 amount), focus_tilt_angle
+   (deg, drifts when focus_tilt_drift > 0), focus_band_px (width of the sharp strip). This is the
+   same per-pixel circle-of-confusion machinery as the perspective camera: CoC = f(element depth,
+   field curvature, tilt-plane distance); implement all three in the one N+R task.

@@ -245,3 +245,10 @@ U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen per
   11. Wandering vignette: the vignette centre drifts with the lamp so the darkest corner rotates.
   12. Pixel-shift safety net: the entire final image translates by up to a few px on a many-minute
       orbit (classic OLED pixel shift) as the last guarantee, sub-pixel steps so it is invisible.
+   U decision (user 19:35): DO ideas 4 (lamp on a gimbal), 5 (ghost of the frame in the lid), 7 (thermal
+   shimmer), 9 (bubble weather), 11 (wandering vignette), 12 (pixel-shift safety net). NOT 1, 2, 3, 6,
+   8, 10. Together with T note 3 (transparent lid: sheen/ghost/refraction/lamp highlight, full-frame,
+   no mask) these form the next post/sim task "V: lid + motion". More refs: endgoal-ref-11..14
+   (BR2049 scope cell, bone scan, LAPD optics sheet with coloured lens flares/ring ghosts and
+   rainbow fringes on a warm field, brain) -- note the LAPD sheet's coloured ring ghosts and soft
+   rainbow flare are exactly idea 5's ghosts + the halation bloom; full-frame versions only.

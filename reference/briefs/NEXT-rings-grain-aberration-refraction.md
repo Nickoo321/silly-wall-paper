@@ -58,3 +58,5 @@ N. (user 2026-09-18 17:35, on the live post-pass build) DEPTH per droplet: give 
    pass needs a depth/CoC channel written by the display pass -- the FP16 target's alpha is free for
    it) instead of one global defocus. Ties to G (dof/bokeh) and M2 (depth). Also: "slightly slightly
    too much blur" on post_blur_px 1.5 -> 1.2 applied live.
+
+   Refs for N/G (user 17:40, Requiem-for-a-Dream microscope frame): reference/shots/photos/microscope-ref-9-requiem-strip.jpg, -10-requiem-cell.jpg -- ONE cell in focus (grainy body, thin pale wall with a warm/cool fringe, soft halo) while the background rings are out-of-focus ghosts: that is the depth-of-field target, plus the film grain sitting on everything.

@@ -366,10 +366,19 @@ struct LiquidAcidConfig {
     // Rings behave like BUBBLES: they attract each other and pack into rafts
     // with a shared dark wall (two touching rings do NOT merge), while a
     // SOLID droplet meeting a ring absorbs it, area-conserving.
+    // The user, on the first shipped rings: "these are pixel perfect circles."
+    // They were: a thick wall of uniform width on a mathematically round
+    // band, which reads as a stamped "O" glyph next to the soft, lopsided
+    // bubbles they liked. So the wall is THIN by default and the radius is
+    // never constant -- dropletRingWobble drives a per-ring seeded ellipse
+    // (1.02..1.25) whose axis turns over a minute or two, plus a breathing
+    // 3-lobe wobble of a few percent, and the wall thins where the ring
+    // bulges the way a stretched film does.
     float dropletRingFrac  = 0.0f;  // 0..1 of new kind-0 droplets  droplet_ring_frac
-    float dropletRingWidth = 0.18f; // rim width / radius        droplet_ring_width
-    float dropletRingLift  = 0.15f; // interior lightening 0..1   droplet_ring_lift
+    float dropletRingWidth = 0.08f; // rim width / radius        droplet_ring_width
+    float dropletRingLift  = 0.10f; // interior lightening 0..1   droplet_ring_lift
     float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
+    float dropletRingWobble= 1.0f;  // out-of-round 0..1        droplet_ring_wobble
 
     // --- BACKLIGHT PENUMBRA (oil_penumbra) --------------------------------
     // The user's diagram: the lamp is under the middle of the dish, so the
@@ -596,6 +605,16 @@ struct PostConfig {
     // look has an isoline to hang them on, so only it implements them.
     float halo    = 0.0f;           // 0..1 lift toward oil/white     halo
     float haloPx  = 12.0f;          // band width in px at 1440p      halo_px
+    // --- MINIMUM BAND WIDTHS (the user: "the bubbles got a solid outline";
+    // "whatever shading is in this photo needs to be everywhere") ----------
+    // Every optical band around an isoline -- the film edge, the dark rim,
+    // the meniscus, the halo, the penumbra -- was authored as a fraction of
+    // the LENS radius, so a big mass got a wide soft gradient and a small
+    // droplet got the same shading squeezed into a sub-pixel line, i.e. a
+    // hard bright outline. This gives each band a floor in px at 1440p
+    // (scaled with the frame), so the small elements are shaded like the big
+    // ones. 1 = the floors as authored, 0 = the old size-proportional bands.
+    float bandMin = 1.0f;           // 0..1 scale on the floors      band_min
 
 };
 
@@ -1113,6 +1132,9 @@ private:
         int   kind;      // 0 = water trapped in oil (hole), 1 = oil on ink
         int   mergeTo;   // index of the droplet this one is pouring into, else -1
         int   ring;      // 1 = hollow "lens" droplet (drawn as an annulus)
+        float seed;      // 0..1, hashed from the birth position; fixed for
+                         // life. Drives the ring's out-of-round shape, so a
+                         // ring never changes its identity frame to frame.
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
     };
     std::vector<AcidDrop> m_acidDrops;

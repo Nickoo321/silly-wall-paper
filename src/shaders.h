@@ -584,7 +584,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
     float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w -
-    float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w -
+    float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w bandMin
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
     float4 laMen;        // meniscus halo colour, rgb
 };
@@ -1006,23 +1006,48 @@ float4 PSMain(VSOut i) : SV_Target {
                         // thickness ramp all wrap the annulus exactly as they
                         // wrap a disc: no special-case shading anywhere.
                         float  dd = sqrt(dd2);
+                        float2 un = dq / max(dd, 1e-6);
+                        // ---- never a perfect circle -----------------------
+                        // The user, on the first rings: "these are pixel
+                        // perfect circles." The band's radius is a Fourier
+                        // series in the polar angle (see UploadAcidConstants),
+                        // and cos/sin of 2*phi and 3*phi come straight out of
+                        // the radial unit vector -- no atan2, no trig at all.
+                        float4 S  = AcidDrops[(uint)laP19.w + cell.x + di];
+                        float  c2 = un.x * un.x - un.y * un.y;
+                        float  s2 = 2.0 * un.x * un.y;
+                        float  c3 = un.x * (4.0 * un.x * un.x - 3.0);
+                        float  s3 = un.y * (3.0 - 4.0 * un.y * un.y);
+                        float  wv = S.x * c2 + S.y * s2 + S.z * c3 + S.w * s3;
+                        float  wd = 2.0 * (S.y * c2 - S.x * s2)
+                                  + 3.0 * (S.w * c3 - S.z * s3);   // d/d(phi)
+                        float  Rp = R * (1.0 + wv);
                         float  bw = max(saturate(laP20.x) * ds, 1e-6);
-                        float  sgn = dd - R;
+                        // a stretched film THINS: the wall is narrower where
+                        // the ring bulges out and thicker where it pinches in,
+                        // so the wall is not a uniform stroke either.
+                        bw *= clamp(1.0 - 1.6 * wv, 0.55, 1.7);
+                        float  sgn = dd - Rp;
                         float  su = 1.0 - (sgn * sgn) / (bw * bw);
                         if (su > 0.0) {
                             float  su2 = su * su;
                             float  dw  = su2 * su * gate;
-                            // d/d(dd) of the profile, carried onto the radial
-                            // unit vector: (-6 u^2 / b^2) * sgn * dq/dd.
-                            float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gate)
-                                       * (dq / max(dd, 1e-6));
+                            // d/d(dd) of the profile, carried onto grad(sgn).
+                            // grad(phi) = (-un.y, un.x)/dd, so an out-of-round
+                            // band's normal leans off the radius exactly as
+                            // much as its radius is changing with the angle --
+                            // which is what keeps the rim, the meniscus and
+                            // the halo wrapped square on the wall.
+                            float2 gs = un - (R * wd / max(dd, 1e-6))
+                                             * float2(-un.y, un.x);
+                            float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gate) * gs;
                             dNeg += dw; gNeg += dg;
                         }
                         // droplet_ring_lift: the interior is a little lens, so
                         // it reads slightly brighter than the film around it.
                         // max(), not a sum, so a raft of touching rings does
                         // not stack into a glowing patch.
-                        float li = saturate((R - 0.5 * bw - dd) / max(0.5 * R, 1e-5));
+                        float li = saturate((Rp - 0.5 * bw - dd) / max(0.5 * Rp, 1e-5));
                         ringIn = max(ringIn, li * gate);
                         continue;
                     }
@@ -1088,6 +1113,18 @@ R"hlsl(
     // laP21.z is the radius in uv-y (authored in px at 1440p), and the field
     // units it takes here are that distance times the local |grad|.
     float  soft = laP21.z;
+    // ---- MINIMUM BAND WIDTHS (band_min) ----------------------------------
+    // The user, photographing a big mass beside a medium droplet: "what
+    // happened that the bubbles got a solid outline -- whatever shading is in
+    // this photo needs to be everywhere." Every band below (film edge, dark
+    // rim, meniscus, halo, penumbra) is a fraction of the LENS radius, which
+    // is right for a big mass and wrong for a small droplet: the same shading
+    // squeezed into a sub-pixel line is a hard outline, not a soft glow. Each
+    // one now has a floor authored in px at 1440p and carried as a fraction
+    // of the frame, so a 3-px droplet is shaded like a 300-px mass and the
+    // preview and the panel agree. band_min = 0 restores the old widths.
+    const float PX1440 = 1.0 / 1440.0;
+    float  bmin = saturate(laP21.w);
     float  aaF  = fwidth(field) * laP0.w + 1e-4;
     if (soft > 1e-6) aaF += soft * gl;
     float  cov  = smoothstep(thresh - aaF, thresh + aaF, field);
@@ -1153,6 +1190,9 @@ R"hlsl(
     if (laP18.w > 0.5) edgeW = max(laP1.x * 2.5, 1e-5);
     // ...and no film edge may be tighter than the lens's own blur circle.
     if (soft > 1e-6) edgeW = max(edgeW, soft * 2.0);
+    // ...nor than the floor: a droplet's film has to thin over the same few
+    // px a mass's does, or its edge is a cut.
+    edgeW = max(edgeW, bmin * 3.0 * PX1440);
     float  thk   = 1.0;                       // 1 = full-thickness oil
     // oil_transparency needs the same thickness proxy even when the soft
     // thin edge itself is off: a transparent film MUST be clearest where it
@@ -1558,8 +1598,11 @@ R"hlsl(
         menHWx = (laP18.w > 0.5) ? 1.0
                : lerp(1.0, max(1.0, (0.055 * lensR) / max(laP2.y, 1e-5)), k);
     }
-    float rimHW = max(laP1.x * rimMul, 1e-5);
-    float menHW = clamp(laP2.y * rimMul * menHWx, 1e-5, 0.024);
+    // ...both floored in px (band_min): the meniscus scaled by the lens
+    // radius is exactly the "solid outline" the user photographed on a
+    // medium droplet, and the dark rim is its twin.
+    float rimHW = max(laP1.x * rimMul, bmin * 1.5 * PX1440);
+    float menHW = clamp(laP2.y * rimMul * menHWx, bmin * 3.5 * PX1440, 0.024);
     // A defocused hairline is a wider, fainter hairline: widths add in
     // quadrature, the way a Gaussian convolves with a Gaussian.
     if (soft > 1e-6) {
@@ -1614,7 +1657,7 @@ R"hlsl(
     // of the isoline only -- it can never touch the black, because it is
     // multiplied by the coverage it sits on.
     [branch] if (laP22.x > 0.0005) {
-        float u = saturate(sdf / max(laP22.y, 1e-5));
+        float u = saturate(sdf / max(max(laP22.y, bmin * 4.0 * PX1440), 1e-5));
         float b = 1.0 - u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
         float k = saturate(laP22.x) * b * cov * isoOk;
         float3 lit = CssHueRotate(col, laP22.z) * (1.0 - saturate(laP22.w));
@@ -1636,8 +1679,11 @@ R"hlsl(
     // no surface under it.
     [branch] if (laP21.x > 0.0005) {
         float hw = max(laP21.y, 1e-5);
-        // a bigger shape carries a slightly wider halo, as a lens does
+        // a bigger shape carries a slightly wider halo, as a lens does...
         hw *= lerp(1.0, clamp(lensR / 0.12, 0.6, 2.0), 0.5);
+        // ...but never below the floor, and never wider than the frame can
+        // read as a glow rather than a wash (band_min).
+        hw = clamp(hw, bmin * 6.0 * PX1440, 24.0 * PX1440);
         float lo = dot(oilC, float3(0.2126, 0.7152, 0.0722));
         float li = dot(inkC, float3(0.2126, 0.7152, 0.0722));
         float sgnB = (lo >= li) ? 1.0 : -1.0;       // +1: the oil is the bright side

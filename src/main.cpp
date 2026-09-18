@@ -372,6 +372,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.softness       = getF(S, L"softness", po.softness);
         po.halo           = getF(S, L"halo", po.halo);
         po.haloPx         = getF(S, L"halo_px", po.haloPx);
+        po.bandMin        = getF(S, L"band_min", po.bandMin);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -511,6 +512,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingWidth = getF(S, L"droplet_ring_width", a.dropletRingWidth);
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
+        a.dropletRingWobble= getF(S, L"droplet_ring_wobble", a.dropletRingWobble);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1474,6 +1476,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"softness", po.softness, 2);
         putF(S, L"halo", po.halo, 3);
         putF(S, L"halo_px", po.haloPx, 1);
+        putF(S, L"band_min", po.bandMin, 2);
     }
     {
         const DropConfig& d = c.drops;
@@ -1599,6 +1602,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
+        putF(S, L"droplet_ring_wobble", a.dropletRingWobble, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

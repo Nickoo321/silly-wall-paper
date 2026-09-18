@@ -2097,6 +2097,17 @@ static_assert(sizeof(AcidParamsGPU) == 512, "AcidCB layout");
 // = a water droplet trapped in the oil, positive = an oil droplet on the open
 // ink), w = reserved.
 struct AcidDropGPU { float a[4]; };
+// The same integer hash the nucleation code uses, as a free function: the
+// ring shapes are re-derived from a droplet's seed every frame and must land
+// on exactly the values that seed drew at birth.
+static float DropHash(float hx, float hy, uint32_t salt) {
+    uint32_t a1, b1;
+    memcpy(&a1, &hx, 4); memcpy(&b1, &hy, 4);
+    uint32_t h = (a1 * 2654435761u) ^ (b1 * 2246822519u) ^ salt;
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    h *= 3266489917u; h ^= h >> 16;
+    return (h >> 8) * (1.0f / 16777216.0f);
+}
 // Must match StructuredBuffer<uint2> DropCells: (first index, count).
 struct DropCellGPU { uint32_t first, count; };
 
@@ -2245,11 +2256,16 @@ void FluidRenderer::CreateAcidBuffers() {
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_inkParamUpload[i])));
-        // droplet particle sim: 64 KB of particles + 18 KB of cell table per
+        // droplet particle sim: 128 KB of particles + 18 KB of cell table per
         // frame. Created unconditionally, like the blob ring, so the display
         // draw can always bind root params 7/8 whichever PSO is selected —
         // and zeroed, so with the sim off every cell reports a count of 0.
-        rd.Width = sizeof(AcidDropGPU) * kAcidMaxDrops;
+        // TWO records per droplet: [k] is the particle itself and
+        // [kAcidMaxDrops + k] the RING SHAPE (see UploadAcidConstants). Split
+        // that way rather than interleaved so the hot loop, which reads only
+        // the first half, keeps four droplets to a cache line; the second
+        // fetch happens inside the ring branch alone.
+        rd.Width = sizeof(AcidDropGPU) * kAcidMaxDrops * 2;
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_dropletUpload[i])));
@@ -2266,7 +2282,7 @@ void FluidRenderer::CreateAcidBuffers() {
         memset(m_acidBlobData[i], 0, sizeof(AcidBlobGPU) * kAcidMaxBlobs);
         memset(m_acidParamData[i], 0, sizeof(AcidParamsGPU));
         memset(m_inkParamData[i], 0, sizeof(InkParamsGPU));
-        memset(m_dropletData[i], 0, sizeof(AcidDropGPU) * kAcidMaxDrops);
+        memset(m_dropletData[i], 0, sizeof(AcidDropGPU) * kAcidMaxDrops * 2);
         memset(m_dropletCellData[i], 0, sizeof(DropCellGPU) * kDropGridW * kDropGridH);
     }
 }
@@ -2888,6 +2904,12 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             };
             out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < a.dropletRingFrac)
                      ? 1 : 0;
+            // ...and one more draw from the same place: the seed that makes
+            // this ring's own out-of-round shape (ellipse axis, wobble phase,
+            // breathing rate). Same reasoning -- hashed, not drawn from the
+            // stream, so the population is identical whatever the shape keys
+            // say, and fixed for life, so a ring never morphs into another.
+            out.seed = hash01(x, y, 0x85EBCA6Bu);
             return true;
         }
         return false;
@@ -3524,8 +3546,10 @@ void FluidRenderer::UploadAcidConstants() {
                      fmaxf(a.postLift, 0.0f), 0.0f };
     float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
                      (a.oilEdgeMode == 1) ? 1.0f : 0.0f };
+    // .w = the index the RING SHAPE records start at, so the shader can find
+    // a droplet's second float4 without a second SRV.
     float p19[4] = { fmaxf(a.dropletSupport, 0.5f), fmaxf(a.dropletWeight, 0.0f),
-                     fmaxf(a.dropletOilW, 0.0f), 0.0f };
+                     fmaxf(a.dropletOilW, 0.0f), (float)kAcidMaxDrops };
     // ring band half-width as a fraction of the droplet's SUPPORT radius, so
     // the shader can build the annulus without a per-droplet size; the visible
     // ring is about this fraction of the droplet across.
@@ -3538,7 +3562,8 @@ void FluidRenderer::UploadAcidConstants() {
     const PostConfig& po = m_cfg.post;
     float p21[4] = { fminf(fmaxf(po.halo, 0.0f), 1.0f),
                      fmaxf(po.haloPx, 0.5f) / 1440.0f,
-                     fmaxf(po.softness, 0.0f) / 1440.0f, 0.0f };
+                     fmaxf(po.softness, 0.0f) / 1440.0f,
+                     fminf(fmaxf(po.bandMin, 0.0f), 1.0f) };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
     memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
     memcpy(p.p18, p18, 16); memcpy(p.p19, p19, 16);
@@ -3576,6 +3601,43 @@ void FluidRenderer::UploadAcidConstants() {
                 // A flag rather than a size, so the particle stays one float4:
                 // the ring's width is a global key.
                 dd[k].a[3] = d.gate + (d.ring ? 2.0f : 0.0f);
+                if (!d.ring) continue;
+                // ---- the ring's SHAPE, in the second half of the buffer ---
+                // "These are pixel perfect circles." A ring's radius is a
+                // Fourier series in the polar angle rather than a constant:
+                //   R(phi) = R * (1 + A2*cos(2(phi-t2)) + A3*cos(3(phi-t3)))
+                // -- a slowly turning ELLIPSE (the 2-lobe term; A2 = 0.01 is
+                // an axis ratio of 1.02, A2 = 0.111 is 1.25) plus a breathing
+                // 3-lobe WOBBLE of a few percent. The shader needs no trig
+                // and no per-pixel angle for this: cos/sin of 2phi and 3phi
+                // come out of the radial unit vector by the double- and
+                // triple-angle identities, so all it wants is the four
+                // coefficients A*cos(n*t), A*sin(n*t), which is one float4.
+                // Everything that MOVES (the axis turning, the wobble
+                // breathing) is therefore evaluated here, on the CPU, once
+                // per ring per frame, where it can be read.
+                const float TAU = 6.28318531f;
+                const float wob = fminf(fmaxf(a.dropletRingWobble, 0.0f), 1.0f);
+                const float h1 = DropHash(d.seed, 1.0f, 0xA511E9B3u);
+                const float h2 = DropHash(d.seed, 2.0f, 0x2545F491u);
+                const float h3 = DropHash(d.seed, 3.0f, 0x9E3779B1u);
+                const float h4 = DropHash(d.seed, 4.0f, 0xC2B2AE35u);
+                const float h5 = DropHash(d.seed, 5.0f, 0x27D4EB2Fu);
+                const float h6 = DropHash(d.seed, 6.0f, 0x165667B1u);
+                const float ecc = 1.02f + 0.23f * h1;          // 1.02 .. 1.25
+                const float A2  = wob * (ecc - 1.0f) / (ecc + 1.0f);
+                // 38 s to 115 s for a full turn of the long axis, either way
+                const float t2  = TAU * h2 + m_time * (0.055f + 0.11f * h3)
+                                           * (h3 < 0.5f ? -1.0f : 1.0f);
+                // 1.5..4% of the radius, breathing over 12..31 s
+                const float br  = 0.62f + 0.38f * sinf(m_time * (0.20f + 0.30f * h6)
+                                                       + TAU * h5);
+                const float A3  = wob * (0.015f + 0.025f * h4) * br;
+                const float t3  = TAU * h5 + m_time * 0.035f
+                                           * (h6 < 0.5f ? -1.0f : 1.0f);
+                AcidDropGPU& sh = dd[kAcidMaxDrops + k];
+                sh.a[0] = A2 * cosf(2.0f * t2); sh.a[1] = A2 * sinf(2.0f * t2);
+                sh.a[2] = A3 * cosf(3.0f * t3); sh.a[3] = A3 * sinf(3.0f * t3);
             }
             for (int c = 0; c < NC; c++) {
                 int first = m_dropletCellStart[c], cnt = m_dropletCellCount[c];

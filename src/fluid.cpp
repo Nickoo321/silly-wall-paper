@@ -241,7 +241,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
 
     D3D12_DESCRIPTOR_HEAP_DESC hd = {};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    hd.NumDescriptors = kFrames * 2 + 1;   // backbuffers + analyzer + mirror buffers
+    hd.NumDescriptors = kFrames * 2 + 2;   // backbuffers + analyzer + mirror buffers + post
     HR(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_rtvHeap)));
     m_rtvStride = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
@@ -420,6 +420,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     };
     makeGfx(kDisplaySrc, m_psoDisplay);
     makeGfx(kGradientSrc, m_psoGradient);
+    makeGfx(kPostSrc, m_psoPost);          // [post] image-space camera pass
     // Liquid Acid: the SAME display source compiled with LIQUID_ACID defined.
     // Built only when the look is on, so the normal path pays no compile cost
     // and, more importantly, its own shader has none of this code in it.
@@ -881,7 +882,11 @@ void FluidRenderer::RenderDisplay() {
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += (SIZE_T)i * m_rtvStride;
-    m_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    // [post]: the display pass goes to m_postTex first and the camera pass
+    // brings it to the back buffer; without it, straight to the back buffer.
+    const bool post = PostActive();
+    D3D12_CPU_DESCRIPTOR_HANDLE target = post ? BeginPostTarget() : rtv;
+    m_cmd->OMSetRenderTargets(1, &target, FALSE, nullptr);
     D3D12_VIEWPORT vp = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
     D3D12_RECT sc = { 0, 0, m_width, m_height };
     m_cmd->RSSetViewports(1, &vp);
@@ -895,13 +900,115 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    m_postGrainDeferred = post;
     BindMirrorFold();
+    m_postGrainDeferred = false;
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
+    if (post) RunPostPass(rtv);
 
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
     m_cmd->ResourceBarrier(1, &b);
+}
+
+// ---- [post] image-space camera pass (kPostSrc) ----------------------------
+bool FluidRenderer::PostActive() const {
+    const PostConfig& po = m_cfg.post;
+    return m_psoPost && (po.postBlurPx > 0.01f || po.postGlow > 0.0005f);
+}
+
+// One FP16 frame-sized texture: RTV slot kFrames*2+1 (after the back buffers,
+// the analyzer and the mirror buffers), SRV heap slot 15 (the sim textures
+// use 0..10). Created on first use; Shutdown() drops it with the device.
+void FluidRenderer::EnsurePostTex() {
+    if (m_postTex && m_postW == m_width && m_postH == m_height) return;
+    if (m_postTex) { WaitForGpuIdle(); m_postTex.Reset(); }
+    D3D12_HEAP_PROPERTIES hp = {};
+    hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC rd = {};
+    rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    rd.Width = (UINT64)m_width;
+    rd.Height = (UINT)m_height;
+    rd.DepthOrArraySize = 1;
+    rd.MipLevels = 1;
+    rd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    rd.SampleDesc.Count = 1;
+    rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, m_postState,
+                                         nullptr, IID_PPV_ARGS(&m_postTex)));
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)(kFrames * 2 + 1) * m_rtvStride;
+    m_device->CreateRenderTargetView(m_postTex.Get(), nullptr, rtv);
+
+    const UINT srvSlot = 15 * 2;
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+    sv.Format = rd.Format;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE sc = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    sc.ptr += (SIZE_T)srvSlot * m_srvStride;
+    m_device->CreateShaderResourceView(m_postTex.Get(), &sv, sc);
+    m_postSrv = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    m_postSrv.ptr += (SIZE_T)srvSlot * m_srvStride;
+    m_postW = m_width; m_postH = m_height;
+    printf("post: image-space pass target %dx%d\n", m_width, m_height);
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE FluidRenderer::BeginPostTarget() {
+    EnsurePostTex();
+    if (m_postState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+        D3D12_RESOURCE_BARRIER b = {};
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.pResource = m_postTex.Get();
+        b.Transition.StateBefore = m_postState;
+        b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_cmd->ResourceBarrier(1, &b);
+        m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    }
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)(kFrames * 2 + 1) * m_rtvStride;
+    return rtv;
+}
+
+// The finished frame -> defocus disc -> veiling glare -> film grain -> dst.
+// Radii are authored in px at 1440p and scaled with the frame height, so the
+// preview and the panel agree; the shader takes them in texels of this frame.
+void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = m_postTex.Get();
+    b.Transition.StateBefore = m_postState;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_cmd->ResourceBarrier(1, &b);
+    m_postState = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
+    const PostConfig& po = m_cfg.post;
+    const float scale = (float)m_height / 1440.0f;
+    float c[32] = {};
+    c[0]  = 1.0f / (float)(m_width  > 0 ? m_width  : 1);
+    c[1]  = 1.0f / (float)(m_height > 0 ? m_height : 1);
+    c[2]  = fmaxf(po.postBlurPx, 0.0f) * scale;
+    c[3]  = fminf(fmaxf(po.postGlow, 0.0f), 1.0f);
+    c[4]  = fmaxf(po.postGlowPx, 1.0f) * scale;
+    c[5]  = fminf(fmaxf(po.filmGrain, 0.0f), 1.0f);
+    c[6]  = fmaxf(po.filmGrainSize, 0.25f);
+    c[7]  = fmaxf(po.filmGrainSpeed, 0.0f);
+    c[8]  = fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f);
+    c[9]  = m_time;
+    c[10] = m_sdrScale;
+    c[11] = fminf(fmaxf(po.postGlowDark, 0.0f), 1.0f);
+
+    m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
+    m_cmd->SetPipelineState(m_psoPost.Get());
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
+    m_cmd->SetGraphicsRootDescriptorTable(1, m_postSrv);
+    m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_cmd->DrawInstanced(3, 1, 0, 0);
 }
 
 // Same display pass as RenderDisplay(), aimed at the offscreen FP16 target.
@@ -922,7 +1029,9 @@ void FluidRenderer::RenderDisplayOffscreen() {
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    const bool post = PostActive();
+    D3D12_CPU_DESCRIPTOR_HANDLE target = post ? BeginPostTarget() : rtv;
+    m_cmd->OMSetRenderTargets(1, &target, FALSE, nullptr);
     D3D12_VIEWPORT vp = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
     D3D12_RECT sc = { 0, 0, m_width, m_height };
     m_cmd->RSSetViewports(1, &vp);
@@ -936,9 +1045,12 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
     BindInk();
+    m_postGrainDeferred = post;
     BindMirrorFold();
+    m_postGrainDeferred = false;
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
+    if (post) RunPostPass(rtv);
 }
 
 // Copy the offscreen target back to the CPU as linear scRGB floats. Runs its
@@ -1059,7 +1171,9 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
         fminf(fmaxf(mr.drift, 0.0f), 1.0f),
         fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
-        fminf(fmaxf(po.filmGrain, 0.0f), 1.0f), fmaxf(po.filmGrainSize, 0.25f),
+        // grain moves to the post pass on the draws it follows (see kPostSrc)
+        m_postGrainDeferred ? 0.0f : fminf(fmaxf(po.filmGrain, 0.0f), 1.0f),
+        fmaxf(po.filmGrainSize, 0.25f),
         fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
         fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationPx, 0.0f),
         fminf(fmaxf(po.aberrationField, 0.0f), 2.0f),
@@ -1648,6 +1762,10 @@ void FluidRenderer::Shutdown() {
     m_shotTex.Reset();
     m_shotReadback.Reset();
     m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    // [post] pass target (its PSO goes with the graphics PSOs below)
+    m_postTex.Reset();
+    m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    m_postW = m_postH = 0;
 
     // stats + coverage readbacks
     m_readback.Reset();
@@ -1703,7 +1821,7 @@ void FluidRenderer::Shutdown() {
     m_psoAdvectVel.Reset(); m_psoAdvectDye.Reset();
     m_psoSplatVel.Reset(); m_psoSplatDye.Reset(); m_psoSplatDyeCompact.Reset();
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
-    m_psoDisplay.Reset(); m_psoGradient.Reset();
+    m_psoDisplay.Reset(); m_psoGradient.Reset(); m_psoPost.Reset();
     m_psoLiquidAcid.Reset();
     m_psoOilMask.Reset(); m_psoOilDrag.Reset(); m_psoOilDyeBlock.Reset();
     m_oilMaskMade = false;

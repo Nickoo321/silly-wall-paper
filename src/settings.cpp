@@ -369,6 +369,10 @@ static void BuildDefs() {
         { L"Bright-field halo",                 0,     1,   0.01f, 3, &c.post.halo,          nullptr, L"post", L"halo", false, nullptr, 3, L"A soft bright glow hugging the outside of every dark shape, with a faint darker echo beyond it -- the microscope double contour (liquid_acid only)" },
         { L"Halo width (px at 1440p)",          1,    40,   1,     0, &c.post.haloPx,        nullptr, L"post", L"halo_px", false, nullptr, 3, L"How wide that glow is. Wide and weak is the look; narrow and strong is a stroked line" },
         { L"Minimum band widths",               0,     1,   0.05f, 2, &c.post.bandMin,       nullptr, L"post", L"band_min", false, nullptr, 3, L"Floors every band around an edge (film edge, rim, meniscus, halo, penumbra) at a few px, so a small droplet is shaded like a big mass instead of getting a solid outline. 0 = bands proportional to each element's size" },
+        { L"Camera defocus (px at 1440p)",      0,     4,   0.1f,  2, &c.post.postBlurPx,    nullptr, L"post", L"post_blur_px", false, nullptr, 3, L"Image-space disc blur of the finished frame: every feature, whatever its size, gets the same lens defocus. 0 = off" },
+        { L"Camera glare",                     0,     1,   0.02f, 2, &c.post.postGlow,      nullptr, L"post", L"post_glow", false, nullptr, 3, L"Weak wide veiling glare: the frame mixed with a wide blur of itself, so dark bleeds a little into bright and bright into dark around every edge, including a thin ring wall. 0 = off" },
+        { L"Camera glare radius (px at 1440p)", 2,    40,   0.5f,  1, &c.post.postGlowPx,    nullptr, L"post", L"post_glow_px", false, nullptr, 3, L"How far the glare spreads" },
+        { L"Camera glare, dark bias",          0,     1,   0.05f, 2, &c.post.postGlowDark,  nullptr, L"post", L"post_glow_dark", false, nullptr, 3, L"Leans the glare toward the dark side: shadows of dark features bleed into the bright film more than the film's light bleeds into the black" },
     };
     s_checks = {
         { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0, L"Autonomous roaming emitters" },

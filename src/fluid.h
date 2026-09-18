@@ -615,6 +615,18 @@ struct PostConfig {
     // (scaled with the frame), so the small elements are shaded like the big
     // ones. 1 = the floors as authored, 0 = the old size-proportional bands.
     float bandMin = 1.0f;           // 0..1 scale on the floors      band_min
+    // --- IMAGE-SPACE camera pass (kPostSrc) -------------------------------
+    // Everything above shades edges analytically off their isoline, which is
+    // exact on a big mass and collapses on anything narrower than the band
+    // (a 2-px ring wall rendered as a hard stroked line beside softly shaded
+    // droplets). These run on the FINISHED frame, so every feature gets the
+    // same optics whatever its size, and the film grain moves after them so
+    // it stays crisp. Either non-zero turns the pass on; style=fluid never
+    // names them, so it never enters it.
+    float postBlurPx = 0.0f;        // defocus disc radius, px at 1440p  post_blur_px
+    float postGlow   = 0.0f;        // 0..1 veiling glare weight          post_glow
+    float postGlowPx = 10.0f;       // its radius, px at 1440p            post_glow_px
+    float postGlowDark = 0.5f;      // 0..1 lean the glare to the dark side post_glow_dark
 
 };
 
@@ -891,6 +903,14 @@ private:
                          Microsoft::WRL::ComPtr<ID3D12PipelineState>& pso,
                          const D3D_SHADER_MACRO* defines = nullptr);
     void RenderDisplayOffscreen();     // display pass -> m_shotTex
+    // [post] image-space camera pass (kPostSrc). PostActive() says whether
+    // this frame routes the display pass through m_postTex; BeginPostTarget()
+    // makes that texture the render target and returns its RTV; RunPostPass()
+    // then draws the finished frame through the post shader into `dst`.
+    bool PostActive() const;
+    void EnsurePostTex();
+    D3D12_CPU_DESCRIPTOR_HANDLE BeginPostTarget();
+    void RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst);
     void CreateSimResources();
     Tex  CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot);
     void Transition(Tex& t, D3D12_RESOURCE_STATES to);
@@ -1028,6 +1048,18 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_shotReadback;
     D3D12_RESOURCE_STATES m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     UINT m_shotPitch = 0;
+
+    // [post] image-space pass: the display pass renders into m_postTex (RTV
+    // slot kFrames*2+1, SRV heap slot 15) and kPostSrc draws it into the real
+    // target. m_postGrainDeferred zeroes the display pass's own film grain on
+    // exactly the draws the post pass follows, so the grain is applied once,
+    // after the blur.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPost;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_postTex;
+    D3D12_RESOURCE_STATES m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_postSrv = {};
+    int  m_postW = 0, m_postH = 0;
+    bool m_postGrainDeferred = false;
 
     // --- M3 state ---
     bool m_prevMouseDown = false;

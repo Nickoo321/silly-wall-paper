@@ -1975,6 +1975,160 @@ R"hlsl(
 }
 )hlsl";
 
+// ===========================================================================
+// [post] IMAGE-SPACE pass: the camera in front of the dish.
+// The display pass above shades every edge analytically off a signed distance
+// to its isoline, which is exact on a big mass and breaks on anything narrower
+// than the band itself: a 2-px ring wall has no gradient at its centre, so the
+// rim, meniscus and halo all gate themselves off within a pixel of it and the
+// wall renders as a hard stroked line beside softly shaded droplets (the user:
+// "these are pixel perfect circles", "whatever shading is in this photo needs
+// to be everywhere"). A lens does not know what it is looking at. This pass
+// takes the finished frame (linear scRGB, HDR gain and gamut already applied)
+// and gives every feature, whatever its size, the same optics:
+//   post_blur_px  a small disc defocus (the circle of confusion),
+//   post_glow     a weak, wide veiling glare: the picture mixed with a wide
+//                 blur of itself, so dark bleeds a little into bright and
+//                 bright into dark around every edge -- the soft dark
+//                 gradient the user liked on the medium droplet, everywhere,
+//   film grain    re-applied here, AFTER the blur, so it stays crisp: the
+//                 grain is in the emulsion, the blur is in the glass (the
+//                 display pass zeroes its own grain when this pass runs).
+// Runs only when blur or glow is non-zero, so style=fluid never enters it.
+// Bound with the graphics root signature: b0 = 32 root constants, t0 = the
+// display pass's target, s0 = the static linear clamp sampler.
+// ===========================================================================
+static const char* kPostSrc = R"hlsl(
+cbuffer PostPassCB : register(b0) {
+    float4 pp0;   // x 1/W        y 1/H        z blurPx (this res) w glow
+    float4 pp1;   // x glowPx     y grain      z grainSize          w grainSpeed
+    float4 pp2;   // x grainColor y time       z sdrScale           w glowDark
+    float4 pp3;   // spare
+    float4 pp4, pp5, pp6, pp7;
+};
+Texture2D Src : register(t0);
+SamplerState linearClamp : register(s0);
+
+struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+VSOut VSMain(uint id : SV_VertexID) {
+    VSOut o;
+    float2 uv = float2((id << 1) & 2, id & 2);
+    o.pos = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+
+// same hash as the display pass's PostHash21, so the grain pattern is the one
+// the user already approved
+float PHash21(float2 p) {
+    p = frac(p * float2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return frac(p.x * p.y);
+}
+float3 ToSRGB(float3 c) {
+    c = saturate(c);
+    float3 lo = c * 12.92;
+    float3 hi = 1.055 * pow(max(c, 1e-6), 1.0 / 2.4) - 0.055;
+    return lerp(lo, hi, step(0.0031308, c));
+}
+float3 ToLinear(float3 c) {
+    float3 lo = c / 12.92;
+    float3 hi = pow((c + 0.055) / 1.055, 2.4);
+    return lerp(lo, hi, step(0.04045, c));
+}
+
+// Uniform disc, 19 taps (centre + 6 at r/2 + 12 at r): the circle of confusion
+// of a defocused lens is a flat disc, not a Gaussian, which is why a defocused
+// hairline becomes a soft band of the same darkness spread wider rather than
+// a faint smear. Bilinear taps between texels make it smoother than its count.
+float3 Disc(float2 uv, float2 r) {
+    float3 s = Src.SampleLevel(linearClamp, uv, 0).rgb;
+    [unroll] for (int k = 0; k < 6; k++) {
+        float a = (float)k * 1.0471976 + 0.35;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.5 * r), 0).rgb;
+    }
+    [unroll] for (int j = 0; j < 12; j++) {
+        float a = (float)j * 0.5235988;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * r, 0).rgb;
+    }
+    return s / 19.0;
+}
+// Wide, soft-shouldered blur, 37 taps on three rings with falling weights:
+// the veiling glare of a real lens (scatter in the glass and the film base),
+// which is what makes every edge in a macro photograph carry a faint wide
+// gradient on both sides.
+float3 Wide(float2 uv, float2 r) {
+    float3 s = Src.SampleLevel(linearClamp, uv, 0).rgb;
+    float  w = 1.0;
+    [unroll] for (int k = 0; k < 8; k++) {
+        float a = (float)k * 0.7853982 + 0.2;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.33 * r), 0).rgb * 0.9;
+        w += 0.9;
+    }
+    [unroll] for (int j = 0; j < 12; j++) {
+        float a = (float)j * 0.5235988 + 0.1;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.66 * r), 0).rgb * 0.55;
+        w += 0.55;
+    }
+    [unroll] for (int m = 0; m < 16; m++) {
+        float a = (float)m * 0.3926991;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * r, 0).rgb * 0.25;
+        w += 0.25;
+    }
+    return s / w;
+}
+
+float4 PSMain(VSOut i) : SV_Target {
+    const float3 W = float3(0.2126, 0.7152, 0.0722);
+    float2 uv = i.uv;
+    float3 c  = Src.SampleLevel(linearClamp, uv, 0).rgb;
+    float3 d  = c;
+    [branch] if (pp0.z > 0.01) d = Disc(uv, pp0.z * pp0.xy);
+    [branch] if (pp0.w > 0.0005) {
+        float3 g = Wide(uv, pp1.x * pp0.xy);
+        // glowDark > 0 leans the glare toward the DARK side: dark features
+        // bleed into the bright film more than the bright film bleeds into
+        // the black (the backlit dish: a droplet's shadow is a real thing,
+        // the film's light scattering into the ink is fainter).
+        float wg = pp0.w;
+        if (pp2.w > 0.0005) {
+            float darker = saturate(dot(d, W) - dot(g, W));   // this pixel is brighter than its surround
+            wg *= lerp(1.0, 1.0 + 1.5 * step(1e-5, darker), saturate(pp2.w));
+        }
+        d = lerp(d, g, saturate(wg));
+    }
+    // ---- film grain, after the glass ------------------------------------
+    // The display pass's grain lives in the sRGB-encoded domain before the HDR
+    // gain; the frame here is linear scRGB with the gain applied. The same
+    // luminance weighting and amplitude are reproduced on an sRGB proxy of
+    // the pixel and the resulting linear delta is scaled by whatever gain the
+    // pixel carries, so the grain reads the same in the SDR mids and never
+    // fizzes on a hot HDR core.
+    [branch] if (pp1.y > 0.0005) {
+        float2 gc  = floor(i.pos.xy / max(pp1.z, 0.25));
+        float  tq  = floor(pp2.y * 144.0 * max(pp1.w, 0.0));
+        float2 tj  = frac(tq * float2(0.1031, 0.0973)) * 733.0;
+        float  n0  = PHash21(gc + tj);
+        float3 nz  = float3(n0, n0, n0);
+        [branch] if (pp2.x > 0.0005) {
+            nz = lerp(nz, float3(n0, PHash21(gc + tj + 37.71),
+                                     PHash21(gc + tj + 91.37)), saturate(pp2.x));
+        }
+        float  sdr  = max(pp2.z, 1e-3);
+        float3 base = d / sdr;                     // 1.0 = SDR white
+        float3 e    = ToSRGB(base);
+        float  lum  = dot(e, W);
+        float  w    = (1.0 - smoothstep(0.55, 1.00, lum))
+                    * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
+        float3 e2   = max(e + (nz - 0.5) * (pp1.y * 0.5 * w), 0.0);
+        float3 l0   = ToLinear(e), l2 = ToLinear(e2);
+        float  gain = clamp(dot(base, W) / max(dot(l0, W), 1e-4), 1.0, 16.0);
+        d = max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
+    }
+    return float4(d, 1.0);
+}
+)hlsl";
+
 // The M1 HDR diagnostic gradient, kept behind the --gradient flag.
 static const char* kGradientSrc = R"hlsl(
 cbuffer Consts : register(b0) {

@@ -373,6 +373,10 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.halo           = getF(S, L"halo", po.halo);
         po.haloPx         = getF(S, L"halo_px", po.haloPx);
         po.bandMin        = getF(S, L"band_min", po.bandMin);
+        po.postBlurPx     = getF(S, L"post_blur_px", po.postBlurPx);
+        po.postGlow       = getF(S, L"post_glow", po.postGlow);
+        po.postGlowPx     = getF(S, L"post_glow_px", po.postGlowPx);
+        po.postGlowDark   = getF(S, L"post_glow_dark", po.postGlowDark);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1477,6 +1481,10 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"halo", po.halo, 3);
         putF(S, L"halo_px", po.haloPx, 1);
         putF(S, L"band_min", po.bandMin, 2);
+        putF(S, L"post_blur_px", po.postBlurPx, 2);
+        putF(S, L"post_glow", po.postGlow, 3);
+        putF(S, L"post_glow_px", po.postGlowPx, 1);
+        putF(S, L"post_glow_dark", po.postGlowDark, 2);
     }
     {
         const DropConfig& d = c.drops;

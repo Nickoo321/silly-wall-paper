@@ -259,3 +259,12 @@ U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen per
    spot with a wide amber glow, faint iridescent (oil-film) colour sweeps on the surface. All of it
    drifts and reorients (idea 4/5: the ghosts' offset vector follows the lamp), full-frame, no
    circular mask. This sheet defines task V's look; the lid (T note 3) is the physical excuse for it.
+   V ARCHITECTURE (user 19:45): the light source, the lid ghosts/flare, the idle motion, the depth-of-
+   field readjustments and (maybe) some fluid mixing are ONE MOVEMENT: a single shared "rig" state
+   (lamp position, camera axis/tilt, focus distance, lid tilt) with one slow idle drift plus the
+   occasional eased readjustment; EVERY effect reads from it -- ghost offset vector, flare position,
+   vignette centre, shimmer origin, focus plane, lamp-side haze -- so when the rig moves, everything
+   moves together coherently, as one physical thing. Optional: a readjustment also gives the fluid a
+   tiny impulse (a bump of the dish -> slight mixing). Implement the rig state once (the camera
+   executor's readjust state machine is the natural home) and expose it to the post pass as a block
+   of constants that later tasks (V) consume.

@@ -2206,9 +2206,9 @@ struct AcidParamsGPU {
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
-    float p18[4], p19[4], p20[4], p21[4], p22[4], men[4];
+    float p18[4], p19[4], p20[4], p21[4], p22[4], p23[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 512, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 528, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -3692,7 +3692,18 @@ void FluidRenderer::UploadAcidConstants() {
                      fmaxf(a.oilPenumbraPx, 0.5f) / 1440.0f,
                      a.oilPenumbraHue,
                      fminf(fmaxf(a.oilPenumbraDark, 0.0f), 1.0f) };
+    // cellulose: the master folded into the two side weights, so the shader
+    // can skip the whole block on one test; the feature size is authored in
+    // px at 1440p and carried as a fraction of the frame (same convention as
+    // every other optical width here), and the drift is the rise speed times
+    // cellulose_drift, in uv/s, so the fibres travel with the masses.
+    const float cellM = fminf(fmaxf(a.cellulose, 0.0f), 1.0f);
+    float p23[4] = { cellM * fmaxf(a.celluloseInk, 0.0f),
+                     cellM * fmaxf(a.celluloseOil, 0.0f),
+                     fmaxf(a.celluloseScale, 2.0f) / 1440.0f,
+                     fmaxf(a.riseSpeed, 0.0f) * fminf(fmaxf(a.celluloseDrift, 0.0f), 1.0f) };
     memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
+    memcpy(p.p23, p23, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 

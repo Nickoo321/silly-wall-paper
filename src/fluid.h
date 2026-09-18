@@ -392,6 +392,28 @@ struct LiquidAcidConfig {
     float oilPenumbraHue= 12.0f;    // degrees                  oil_penumbra_hue
     float oilPenumbraDark = 0.15f;  // 0..1 darkening          oil_penumbra_dark
 
+    // --- MACRO "CELLULOSE" SURFACE TEXTURE (cellulose) --------------------
+    // The user, on the Requiem microscope frame: the cell body is not smooth,
+    // it is fibrous and mottled, like paper fibres seen through a lens -- and
+    // they want it "in the black oil more than the oil". So this is an
+    // anisotropic fBm (stretched along a slowly turning direction, which is
+    // what makes it read as STRANDS rather than blobs), drifting with the
+    // rise so it belongs to the masses instead of to the screen, added in the
+    // DISPLAY pass -- i.e. under the film grain, because it is the surface
+    // and the grain is the camera.
+    //
+    // On the black side it is deliberately a THICKNESS effect: the strands
+    // are strongest just inside the edge of a black mass (where the layer is
+    // thin and light gets through) and fade to nothing deep inside it. That
+    // is what keeps the OLED's true black -- the best thing on this panel --
+    // from turning into a grey wash. On the film it is a faint mottling of
+    // the colour, not a lift.
+    float cellulose      = 0.0f;    // 0..1 master                cellulose
+    float celluloseInk   = 1.0f;    // weight on the black side   cellulose_ink
+    float celluloseOil   = 0.35f;   // weight on the film         cellulose_oil
+    float celluloseScale = 40.0f;   // feature size, px at 1440p  cellulose_scale
+    float celluloseDrift = 1.0f;    // 0..1 with the rise motion  cellulose_drift
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".

@@ -586,6 +586,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w -
     float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w bandMin
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
+    float4 laP23;        // x cellInk    y cellOil    z cellScale(uv) w cellDrift(uv/s)
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -611,7 +612,9 @@ StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
 // ---------------------------------------------------------------------------
 StructuredBuffer<float4> AcidDrops : register(t2);
 StructuredBuffer<uint2>  DropCells : register(t4);
-
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
 float AcidHash21(float2 p) {
     p = frac(p * float2(234.34, 435.345));
     p += dot(p, p + 34.23);
@@ -1861,6 +1864,55 @@ R"hlsl(
         float  sMask = saturate(smoothstep(-0.020, 0.0, sdf) * (1.0 - cov) * 1.2
                               + (1.0 - smoothstep(laP1.x * 2.0, laP1.x * 7.0, sdf)) * cov * 0.30);
         col = lerp(col, col * 0.18, dot1 * sMask * laP6.x);
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- MACRO "CELLULOSE" SURFACE TEXTURE (cellulose) -------------------
+    // The user, on the Requiem microscope frame: the cell body is fibrous and
+    // mottled, "macro-ish cellulose noise", and they want it "in the black oil
+    // more than the oil". Two cheap fBms:
+    //   * an ANISOTROPIC one -- the sample point is rotated into a slowly
+    //     turning frame and squashed 5:1 along it, so the same noise reads as
+    //     STRANDS instead of blobs -- run through 1-|2f-1| so the ridges
+    //     become filaments rather than lumps;
+    //   * a slow isotropic one three times coarser, for the mottling that
+    //     makes the strands come in patches.
+    // Both drift with the rise (laP23.w = rise_speed * cellulose_drift), so
+    // the texture belongs to the masses and not to the screen, and this sits
+    // in the DISPLAY pass -- under the film grain, because the fibres are the
+    // surface and the grain is the camera.
+    //
+    // On the BLACK side it is a THICKNESS effect, never a fill: the strands
+    // are strongest where the black layer is thin (just inside its edge) and
+    // fall off to nothing deep inside a mass, so the OLED's true black is
+    // still true black over most of the frame. On the film it is a faint
+    // multiplicative mottle of the colour, which cannot lift anything.
+    [branch] if (laP23.x > 0.0005 || laP23.y > 0.0005) {
+        float  csc = max(laP23.z, 1e-4);
+        float2 q0  = pp + float2(0.0, laP23.w * laP6.z);
+        float  ang = 0.9 * AcidVNoise(q0 * 0.7) + laP6.z * 0.010;
+        float2 ca  = float2(cos(ang), sin(ang));
+        float2 qr  = float2(dot(q0, ca), dot(q0, float2(-ca.y, ca.x))) / csc;
+        qr.x *= 0.20;
+        float  f   = saturate(AcidFbm(qr) * 1.143);
+        float  str = 1.0 - abs(2.0 * f - 1.0);
+        float  mot = saturate(AcidFbm(q0 / (csc * 3.5)) * 1.143);
+        float  n   = (str - 0.5) * 0.75 + (mot - 0.5) * 0.45;
+        // Thickness falloff into the black, Beer-Lambert rather than
+        // Gaussian: a long tail is what makes the strands fade OUT of a mass
+        // instead of ending on a rim of their own. The amplitudes below are
+        // in the display's sRGB-ENCODED domain, where a lift of 0.08 over
+        // black is ~1.5 nits at SDR white 240 -- "a few nits at most", and
+        // the negative half of the noise is simply clamped away by the black.
+        float  dIn = max(-sdf, 0.0);
+        float  bw  = max(csc * 3.0, 24.0 * PX1440);
+        float  th  = exp(-dIn / bw);
+        // isoOk: on a plateau that never crosses the threshold sdf collapses
+        // to nearly zero over a wide area, and without this gate the falloff
+        // would print a mass-shaped grey cloud with no edge under it.
+        col += n * (0.28 * laP23.x * (1.0 - alpha) * th * isoOk);
+        col *= 1.0 + n * (0.45 * laP23.y * alpha);
     }
     // ---- ink-tinted toe (toe_tint) ---------------------------------------
     // The genre's darkest ink is #180808 / #2c1506 — a lifted, HUE-TINTED toe,

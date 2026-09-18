@@ -518,6 +518,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.oilPenumbraPx  = getF(S, L"oil_penumbra_px", a.oilPenumbraPx);
         a.oilPenumbraHue = getF(S, L"oil_penumbra_hue", a.oilPenumbraHue);
         a.oilPenumbraDark= getF(S, L"oil_penumbra_dark", a.oilPenumbraDark);
+        a.cellulose      = getF(S, L"cellulose", a.cellulose);
+        a.celluloseInk   = getF(S, L"cellulose_ink", a.celluloseInk);
+        a.celluloseOil   = getF(S, L"cellulose_oil", a.celluloseOil);
+        a.celluloseScale = getF(S, L"cellulose_scale", a.celluloseScale);
+        a.celluloseDrift = getF(S, L"cellulose_drift", a.celluloseDrift);
         a.dropletRingFrac  = getF(S, L"droplet_ring_frac", a.dropletRingFrac);
         a.dropletRingWidth = getF(S, L"droplet_ring_width", a.dropletRingWidth);
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
@@ -1618,6 +1623,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"oil_penumbra_px", a.oilPenumbraPx, 1);
         putF(S, L"oil_penumbra_hue", a.oilPenumbraHue, 1);
         putF(S, L"oil_penumbra_dark", a.oilPenumbraDark, 3);
+        putF(S, L"cellulose", a.cellulose, 3);
+        putF(S, L"cellulose_ink", a.celluloseInk, 3);
+        putF(S, L"cellulose_oil", a.celluloseOil, 3);
+        putF(S, L"cellulose_scale", a.celluloseScale, 1);
+        putF(S, L"cellulose_drift", a.celluloseDrift, 3);
         putF(S, L"droplet_ring_frac", a.dropletRingFrac, 3);
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);

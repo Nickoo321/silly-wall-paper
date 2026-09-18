@@ -3042,7 +3042,11 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     const bool  cons     = (a.conserveMass > 0.5f);
     const float growTau  = (cons && a.spawnGrowS > 0.01f) ? a.spawnGrowS : tau;
     const float dieTau   = (cons && a.dissolveS  > 0.01f) ? a.dissolveS  : tau;
-    const float mrelax = 1.0f - expf(-dt / 0.18f);   // merge centre pull
+    // droplet_coalesce_s: the neck takes this long to close -- the absorbed
+    // droplet's slide-in AND both radii move on it, so a coalescence reads as
+    // one surface pulling itself round rather than a dot snapping into place.
+    const float coalS  = fmaxf(a.dropletCoalesceS, 0.0f);
+    const float mrelax = 1.0f - expf(-dt / (coalS > 0.01f ? coalS : 0.18f));
     const float life  = a.dropletLife;
     // oil_viscosity, droplet side: a slower velocity relaxation (so a droplet
     // is carried smoothly and never snaps to a new target) and a damped
@@ -3396,6 +3400,17 @@ void FluidRenderer::StepAcidDroplets(float dt) {
 
     // ---- 3. surface tension: attraction, contact repulsion, coalescence ---
     const float mergeF = 1.0f - fminf(fmaxf(a.dropletMerge, 0.05f), 0.90f);
+    // ---- droplet_coalesce: TOUCHING solids become one --------------------
+    // See the key's comment in fluid.h: droplet_merge's overlap distance sits
+    // INSIDE the contact repulsion's rest distance, so it is unreachable and
+    // pairs park at dd = ri+rj forever -- the lumpy 5-lobed groups the user
+    // photographed. This adds the missing rule: a contact is a coin flip per
+    // frame at 8 * droplet_coalesce per second, so it lasts a moment and then
+    // the two pour into one round droplet of the combined area.
+    const float coal  = fminf(fmaxf(a.dropletCoalesce, 0.0f), 1.0f);
+    const float coalP = (coal > 1e-4f && dt > 0.0f)
+                      ? (1.0f - expf(-8.0f * coal * dt)) : 0.0f;
+    const float mergeTau = (coalS > 0.01f) ? coalS : tau;
     std::vector<AcidDrop> satellites;
     // ---- rings behave like BUBBLES, not lone lenses ----------------------
     // The user, with photos of boiling oil and a soap raft: "it kinda looks
@@ -3430,6 +3445,12 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                         AcidDrop& di = m_acidDrops[i];
                         AcidDrop& dj = m_acidDrops[j];
                         if (dj.kind != di.kind || dj.r <= 0.0f) continue;
+                        // A pair already pouring into one another must not be
+                        // shoved apart by the contact repulsion while the neck
+                        // closes -- with droplet_coalesce_s that takes about a
+                        // second, long enough for the repulsion to win.
+                        if (coal > 1e-4f && (di.mergeTo == j || dj.mergeTo == i))
+                            continue;
                         const float dx = (di.x - dj.x) * aspect, dy = di.y - dj.y;
                         const float d2 = dx * dx + dy * dy;
                         const float sum = di.r + dj.r;
@@ -3446,9 +3467,16 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                         // area-conserving, so the solid survives and the ring
                         // pours into it exactly as a small drop pours into a
                         // big one -- the survivor choice is the only change.
-                        if (!bothRing && dd < sum * mergeF
+                        // ...or TOUCHING, when droplet_coalesce is on. The
+                        // || short-circuits, so rf() is reached only when the
+                        // key is on and the pair is in contact: with the key
+                        // at 0 the random stream is untouched and the whole
+                        // sim is bit-identical to before.
+                        if (!bothRing
                             && di.mergeTo < 0 && dj.mergeTo < 0
-                            && di.rt > 0.0f && dj.rt > 0.0f) {
+                            && di.rt > 0.0f && dj.rt > 0.0f
+                            && (dd < sum * mergeF
+                                || (coalP > 0.0f && dd < sum && rf() < coalP))) {
                             // COALESCE, area-conserving. The survivor is the
                             // larger one; the other pours into it (rt -> 0,
                             // centre pulled in) instead of being deleted, so
@@ -3484,9 +3512,9 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                                 }
                             }
                             m_acidDrops[bi].rt = rn;
-                            m_acidDrops[bi].tauR = tau;    // coalescence stays quick
+                            m_acidDrops[bi].tauR = mergeTau;
                             m_acidDrops[sm].rt = 0.0f;
-                            m_acidDrops[sm].tauR = tau;
+                            m_acidDrops[sm].tauR = mergeTau;
                             m_acidDrops[sm].mergeTo = bi;
                             continue;
                         }

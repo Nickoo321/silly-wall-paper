@@ -391,6 +391,27 @@ struct LiquidAcidConfig {
     //                   shrink away. 0 = today's 0.34 s. Coalescence keeps
     //                   its own 0.34 s: pouring into a neighbour is not a
     //                   disappearance and it should still read as fast.
+    // --- COALESCENCE (user 2026-09-18, panel photo lobed-groups-of-5) ----
+    // "all of these things are groups of 5, like what". droplet_merge is an
+    // OVERLAP fraction: the merge fires at dd < (ri+rj) * (1 - droplet_merge),
+    // i.e. only when two droplets interpenetrate by 30% of the sum of their
+    // radii. But the contact repulsion starts at dd = ri+rj and is several
+    // times stronger than droplet_attract, so a pair settles at exactly
+    // touching and can never reach the merge distance. The result is a
+    // permanent lumpy cluster of 4-6 same-size lobes necked together in the
+    // metaball field, which is what the user photographed.
+    //   droplet_coalesce    0 = today. > 0: same-kind SOLID droplets that
+    //                       TOUCH coalesce at a rate of 8 * this per second,
+    //                       area-conserving, so a contact lasts a moment and
+    //                       becomes one round droplet instead of a lobe.
+    //                       Rings are untouched -- a foam raft is meant to
+    //                       keep its shared walls.
+    //   droplet_coalesce_s  seconds the neck takes to close (the absorbed
+    //                       droplet's slide-in and both radii). 0 = today's
+    //                       0.18 s pull / 0.34 s radii.
+    float dropletCoalesce  = 0.0f;  // 0..1                   droplet_coalesce
+    float dropletCoalesceS = 0.0f;  // s, 0 = today         droplet_coalesce_s
+
     float conserveMass  = 0.0f;     // 0..1                        conserve_mass
     float spawnGrowS    = 0.0f;     // s, 0 = today (0.34)         spawn_grow_s
     float dissolveS     = 0.0f;     // s, 0 = today (0.34)         dissolve_s

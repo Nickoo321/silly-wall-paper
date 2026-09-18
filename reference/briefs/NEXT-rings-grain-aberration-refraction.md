@@ -91,3 +91,12 @@ P. (user 2026-09-18 17:58, SUPERSEDES the reading of O; refs reference/shots/pho
    master), film_hairs (count/intensity), film_scratches, film_leak (default 0), film_artefact_rate
    (how often the population changes, s). Ship subtle (a few specks, one hair now and then, scratches
    faint); NO-lens twin 0. Must stay off unless named (fluid parity by construction).
+
+Q. (user 2026-09-18 18:10, "do you see that light, spreads?" on film-overlay-ref-1/-4 and the Requiem cell)
+   BLOOM: the brightest areas bleed a soft, very wide wash into the dark (the corner light leak covers a
+   third of the frame; the pale cell wall glows outward into the black). Post pass (kPostSrc): a large-
+   radius (>= 100 px at 1440p, scaled with the frame), very weak (a few percent) bloom taken from the
+   bright film into the black; cheap = downsample chain or a few wide taps at low res. It must MOVE
+   by itself, a tiny bit, like an idle animation: the bloom's centre/weight/radius drift slowly and
+   continuously (slow sine sum, seconds to a minute), never static, never jumping. Keys [post]:
+   bloom (0..1, default 0), bloom_px (default ~120), bloom_drift (0..1, default 1). Subtle.

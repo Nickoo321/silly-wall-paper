@@ -60,3 +60,19 @@ N. (user 2026-09-18 17:35, on the live post-pass build) DEPTH per droplet: give 
    too much blur" on post_blur_px 1.5 -> 1.2 applied live.
 
    Refs for N/G (user 17:40, Requiem-for-a-Dream microscope frame): reference/shots/photos/microscope-ref-9-requiem-strip.jpg, -10-requiem-cell.jpg -- ONE cell in focus (grainy body, thin pale wall with a warm/cool fringe, soft halo) while the background rings are out-of-focus ghosts: that is the depth-of-field target, plus the film grain sitting on everything.
+
+O. (user 2026-09-18 17:50, "macro-ish cellulose noise", ref microscope-ref-10-requiem-cell.jpg) The cell body
+   in the ref is not smooth: a fibrous, mottled, slightly streaky texture like paper fibres / cellulose
+   strands under a microscope. Wanted MOSTLY IN THE BLACK masses ("the black oil more than the oil"),
+   fainter on the coloured film. It belongs to the SURFACE: low contrast, features ~20-60 px at 1440p,
+   anisotropic (fBm stretched along a slowly turning direction, so it reads as strands not blobs),
+   advected with the rise motion so it drifts with the masses, and it sits UNDER the film grain (i.e.
+   in the display pass, not the post pass). On the black side it must stay dark: lift the black by a
+   few nits at most, never a grey wash -- the OLED's true black is the best thing on the panel, so the
+   texture there should read as faint dark-grey strands in the black, strongest near edges and
+   fading to pure black deep inside a big mass (a plausible thickness falloff), not a uniform fill.
+   Keys: [liquid_acid] cellulose (0..1 master, default 0), cellulose_ink (weight on the black side,
+   default 1), cellulose_oil (weight on the film, default 0.35), cellulose_scale (px), cellulose_drift
+   (0..1 with the rise motion). Ship values in the rising configs/presets that read as subtle on the
+   panel; the NO-lens twin stays 0. Verify with a 4x crop of a black mass edge + interior and a film
+   patch, before/after.

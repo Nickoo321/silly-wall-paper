@@ -273,3 +273,15 @@ U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen per
    things move at once (lamp, ghosts, flare, focus, vignette centre) as one eased move with a settle.
    Never constant visible motion, never a single effect moving alone. Task V is LARGE -- schedule it
    after the camera executor (N+R) lands, as its own executor.
+
+W. DIFFRACTION (user 2026-09-18 19:10, photo reference/shots/panel/2026-09-18-infocus-pixelated-ring.jpg:
+   "a thin hair on a film will never cause pure darkness because the light bends around it; it's not
+   out of focus per se"). Light diffracts around small features: nothing small can be both fully
+   black and hard-edged, whatever the focus. Two rules: (1) a FIXED point-spread blur on everything,
+   ~1 px at 1440p ([post] psf_px, applied as the floor of the per-pixel defocus radius regardless of
+   focus -- "razor sharp" = diffraction-limited, not pixel-limited); (2) SIZE-DEPENDENT CONTRAST in
+   the display pass: a droplet's/ring wall's peak darkness scales with its size relative to the
+   point spread (e.g. darkness *= 1 - exp(-(r / (k*psf))^2), ring wall by its wall width), so tiny
+   droplets are soft grey dots, medium ones dark with soft edges, only big masses fully black;
+   [liquid_acid] diffraction (0..1 master, default 0), diffraction_px. Also the "straight pixeled O":
+   in-focus edges at softness 0 are raw coverage AA -> with psf_px >= 1 that never happens.

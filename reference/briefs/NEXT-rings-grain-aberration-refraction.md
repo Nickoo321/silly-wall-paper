@@ -51,3 +51,10 @@ M. (user 23:50, ideas list, "just ideas", not orders) 1. Simulated OFF-VIEW ligh
    different focus/scale/parallax (ties to G dof/bokeh and rise_parallax). 3. Direction/force-guided
    OVALNESS: when a grouping is pushed (mouse push, rise, drag) it stretches slightly along the push
    direction; velocity -> anisotropy of the droplet/ring band.
+
+N. (user 2026-09-18 17:35, on the live post-pass build) DEPTH per droplet: give every droplet/ring a depth
+   value; the back layer rises faster (their words: "the back particles going up faster"); use depth for
+   a real DEPTH OF FIELD in the post pass (blur radius per element by |depth - focus|, i.e. the post
+   pass needs a depth/CoC channel written by the display pass -- the FP16 target's alpha is free for
+   it) instead of one global defocus. Ties to G (dof/bokeh) and M2 (depth). Also: "slightly slightly
+   too much blur" on post_blur_px 1.5 -> 1.2 applied live.

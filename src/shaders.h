@@ -298,6 +298,108 @@ void CSSplatDye(uint3 id : SV_DispatchThreadID) {
     c *= cap / max(m, cap);
     Dst4[id.xy] = float4(c, 1.0);
 }
+
+)hlsl"
+// (MSVC caps one string literal at 16380 bytes, so the compute source is
+// split here and concatenated by the preprocessor. Nothing above changes.)
+R"hlsl(
+// ===========================================================================
+// OIL DRAG ([liquid_acid] oil_drag / oil_dye_block). Three passes, dispatched
+// only while one of those keys is non-zero -- the fluid look and every acid
+// ini that leaves them at 0 never runs a line of this.
+//
+// The user: "make it impossible for the fluid sim underneath, the mono ink, to
+// get under the oil, or rather an intense friction that makes it hard for it
+// to get under."
+//
+// CSOilMask evaluates the SAME Wyvill metaball field the display shader
+// thresholds, at sim resolution (~256x144, so ~37k texels x <=128 blobs = a
+// rounding error next to the Jacobi solve), and soft-thresholds it. Because it
+// is the same field, a negative "hole" blob is negative here too: a hole is
+// NOT oil, so ink inside it is neither dragged nor faded, which is exactly the
+// behaviour the holes need (the ink you see through one is the ink layer).
+//
+// Packing (the pass builds its own SimCB, so these are free):
+//   value  = threshold        radius = support scale
+//   point_ = (blob count, soft-edge half width in field units)
+//   color  = (drag k, edge push, viscous diffusion k)   [drag pass]
+//   cap    = dye block k                                [dye pass]
+// ===========================================================================
+struct OilBlobGPU { float4 a; float4 b; float4 c; };
+StructuredBuffer<OilBlobGPU> OilBlobs : register(t3);
+
+[numthreads(8, 8, 1)]
+void CSOilMask(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= (uint2)dims)) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(dims);
+    float2 pp = float2(uv.x * aspect, uv.y);
+    float  field = 0.0;
+    int nb = (int)point_.x;
+    [loop]
+    for (int bi = 0; bi < nb; bi++) {
+        OilBlobGPU B = OilBlobs[bi];
+        float2 q = pp - float2(B.a.x * aspect, B.a.y);
+        float  sup = B.a.z * radius;
+        float  s2 = sup * sup;
+        float  d2 = dot(q, q);
+        if (d2 >= s2) continue;
+        float u = 1.0 - d2 / s2;
+        field += u * u * u * B.a.w;
+    }
+    // Soft edge a few sim texels wide, expressed in FIELD units: the Wyvill
+    // field crosses the threshold over roughly its own gradient, and point_.y
+    // is tuned on the CPU from the mean blob size so the band is the same
+    // handful of texels whatever the resolution.
+    float m = smoothstep(value - point_.y, value + point_.y, field);
+    Dst1[id.xy] = m;
+}
+
+// Velocity under the mask. Two terms:
+//   1. friction -- an exponential decay toward rest, fps-normalised on the
+//      CPU, so ink already under the oil comes to a stop and nothing new can
+//      stream in and keep its momentum;
+//   2. the mask's own GRADIENT as a gentle outward push at the rim. grad(m)
+//      points INTO the oil, so -grad deflects the flow AROUND an island and
+//      the ink piles up along its edge instead of leaking underneath.
+// Plus, when oil_viscosity is on, a Laplacian blend toward the neighbourhood
+// mean under the mask: a thick fluid's own velocity diffusion.
+[numthreads(8, 8, 1)]
+void CSOilDrag(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= (uint2)dims)) return;
+    int2 c = int2(id.xy);
+    float2 v = SrcA.Load(int3(c, 0)).xy;
+    float  m = SrcB.Load(int3(c, 0)).x;
+    float  mL = SrcB.Load(int3(ClampCoord(c - int2(1, 0)), 0)).x;
+    float  mR = SrcB.Load(int3(ClampCoord(c + int2(1, 0)), 0)).x;
+    float  mD = SrcB.Load(int3(ClampCoord(c - int2(0, 1)), 0)).x;
+    float  mU = SrcB.Load(int3(ClampCoord(c + int2(0, 1)), 0)).x;
+    if (color.z > 0.0) {
+        float2 vL = SrcA.Load(int3(ClampCoord(c - int2(1, 0)), 0)).xy;
+        float2 vR = SrcA.Load(int3(ClampCoord(c + int2(1, 0)), 0)).xy;
+        float2 vD = SrcA.Load(int3(ClampCoord(c - int2(0, 1)), 0)).xy;
+        float2 vU = SrcA.Load(int3(ClampCoord(c + int2(0, 1)), 0)).xy;
+        v = lerp(v, 0.25 * (vL + vR + vD + vU), saturate(color.z * m));
+    }
+    v *= 1.0 - saturate(color.x * m);
+    // Sim texels per unit mask: the gradient is in texel space already, which
+    // is the same space the velocity lives in.
+    float2 g = float2(mR - mL, mU - mD) * 0.5;
+    v -= g * color.y;
+    DstV[id.xy] = v;
+}
+
+// Dye that lands under the oil fades out, so the oil reads as sitting ON the
+// water instead of as a colour filter over trapped ink. Ink outside the mask
+// is multiplied by exactly 1.0.
+[numthreads(8, 8, 1)]
+void CSOilDyeBlock(uint3 id : SV_DispatchThreadID) {
+    if (any(id.xy >= (uint2)dims)) return;
+    float2 uv = (float2(id.xy) + 0.5) / float2(dims);
+    float  m = SrcB.SampleLevel(linearClamp, uv, 0).x;
+    float4 d = SrcA.Load(int3(int2(id.xy), 0));
+    d.rgb *= 1.0 - saturate(cap * m);
+    Dst4[id.xy] = d;
+}
 )hlsl";
 
 // Display: fullscreen triangle sampling the dye texture, with the reference's
@@ -470,7 +572,11 @@ cbuffer AcidCB : register(b1) {
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
-struct AcidBlobGPU { float4 a; float4 b; };
+// .c = mouse_oil_mode 2 (comb): x = stretch amount along the DRAG direction
+// (0 = off, and then the whole comb branch is skipped and the round/rise
+// path below is the original code), yz = that direction as a unit vector in
+// p-space. Zero for every blob unless the comb is actually running.
+struct AcidBlobGPU { float4 a; float4 b; float4 c; };
 StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
 
 // ---------------------------------------------------------------------------
@@ -772,7 +878,19 @@ float4 PSMain(VSOut i) : SV_Target {
         // an existing acid ini renders bit-for-bit as it did. (Expanding it
         // by hand moved the rounding and changed every acid frame.)
         float  e  = 1.0 + B.b.w;
-        float2 qs = float2(q.x, q.y / e);
+        // mouse_oil_mode = 2 (comb) stretches along the DRAG direction rather
+        // than the rise axis, so the same anisotropy is built in the blob's
+        // own frame. B.c.x is 0 for every blob unless the comb is running and
+        // the condition is uniform across the wave (all lanes read the same
+        // blob), so [branch] genuinely skips it and the else arm below is the
+        // untouched original line.
+        float2 qs;
+        [branch] if (B.c.x > 0.0) {
+            float2 ax = B.c.yz, pv = float2(-B.c.z, B.c.y);
+            qs = float2(dot(q, ax) / (1.0 + B.c.x), dot(q, pv));
+        } else {
+            qs = float2(q.x, q.y / e);
+        }
         float  d2 = dot(qs, qs);
         float  sup = B.a.z * laP0.z;              // support radius
         float  s2 = sup * sup;
@@ -789,7 +907,15 @@ float4 PSMain(VSOut i) : SV_Target {
         // gradient stays consistent with the ellipse and the sdf, the rim and
         // the lens radius all follow the stretched shape instead of the
         // circle it was drawn from. (e = 1 leaves this the original line.)
-        grad  += (-6.0 * u2 / s2) * float2(q.x, q.y / (e * e)) * B.a.w;
+        float2 gq;
+        [branch] if (B.c.x > 0.0) {
+            float2 ax = B.c.yz, pv = float2(-B.c.z, B.c.y);
+            float  ec = 1.0 + B.c.x;
+            gq = (dot(q, ax) / (ec * ec)) * ax + dot(q, pv) * pv;
+        } else {
+            gq = float2(q.x, q.y / (e * e));
+        }
+        grad  += (-6.0 * u2 / s2) * gq * B.a.w;
         // Flat fill from a SOFT-max over the blob weights. A hard argmax drew
         // a crisp circle wherever the dominant blob handed over inside a
         // merged mass; a plain influence-weighted mean is what turned the oil

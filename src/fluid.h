@@ -93,6 +93,63 @@ struct LiquidAcidConfig {
     // bottom edge, cooling as a blob climbs, like the lamp's base underneath.
     // Applied to the oil colour AND to its HDR lift.        rise_bottom_light
     float riseBottomLight = 0.0f;
+    // LAVA-LAMP PARALLAX. The user, watching the rise live: "for the lava lamp
+    // effect make the smaller / further particles move slower, aka parallax."
+    // A blob's whole motion budget -- rise speed, wobble and how much of the
+    // water's flow it picks up -- is scaled by
+    //     s = lerp(1, clamp(r / disc_max, 0.25, 1), rise_parallax)
+    // so a small blob reads as a FAR one: it crosses the frame slowly and is
+    // barely pushed around by the near currents.                rise_parallax
+    float riseParallax = 0.0f;
+    // Optional depth cue on top: a far (small) blob is slightly dimmer, its
+    // colour pulled toward the background by (1 - s) * dim. Subtle by design;
+    // past ~0.4 the small blobs read as a different palette, not as distance.
+    //                                                       rise_parallax_dim
+    float riseParallaxDim = 0.0f;
+
+    // --- oil as an OBSTACLE to the ink underneath (user: "make it impossible
+    // for the fluid sim underneath, the mono ink, to get under the oil, or
+    // rather an intense friction that makes it hard for it to get under") ---
+    // Both default 0, and with both 0 the three extra compute passes are not
+    // dispatched at all, so style=fluid (and every existing acid ini) is
+    // untouched. Coverage is evaluated once per frame into a sim-res "oil
+    // mask" (the same Wyvill field the display shader thresholds, so holes --
+    // negative blobs -- are naturally NOT oil and do not drag).
+    // Velocity under the mask decays toward rest at this per-second rate
+    // (fps-normalised, k = 1 - exp(-rate*dt)), and the mask's gradient adds a
+    // gentle OUTWARD push at the rim so ink piles up along the edge of an
+    // island instead of streaming in under it.                     oil_drag
+    float oilDrag = 0.0f;
+    // Dye that ends up under the oil fades out over ~1-2 s, so the oil reads
+    // as sitting ON the water rather than as a colour filter over trapped
+    // ink. Ink outside the mask is untouched.                  oil_dye_block
+    float oilDyeBlock = 0.0f;
+
+    // --- mouse interaction, as a MODE (user: "maybe make the mouse comb-like?
+    // it's all experiments, maybe oil mode just doesn't let you interact") ---
+    // 0 = none (DEFAULT, and what the shipped rise presets use: the cursor
+    //     does nothing to this look at all)
+    // 1 = push  -- blobs inside the radius take the pointer's own velocity
+    //     plus a weak radial shove, so the cursor parts the oil
+    // 2 = comb  -- the pointer path is a marbling comb: blobs in a narrow
+    //     band along it stretch ALONG the drag direction, ramping with
+    //     pointer speed and relaxing round again over ~3 s
+    // The mouse never touches the INK in this look and never deletes or
+    // shrinks oil.                                           mouse_oil_mode
+    int   mouseOilMode = 0;
+    float mouseOilRadius = 0.12f;   // uv (y units)          mouse_oil_radius
+    float mouseOilGain   = 1.0f;    // strength multiplier     mouse_oil_gain
+
+    // --- oil_viscosity: ONE key that makes the oil move like a THICK liquid
+    // (user: "and more viscosity?"). It lowers the blob velocity relaxation
+    // rate (blobs lag the water, accelerate slowly and coast), cuts the flow
+    // and curl-drift response, slows the breathing and the rise wobble, adds
+    // a short-range viscous attraction with a softer contact so two blobs
+    // NECK together over seconds instead of snapping, smooths the droplet
+    // particles' velocities (and damps their Brownian jitter), and -- only
+    // when oil_drag is also on -- raises the SIM's velocity diffusion under
+    // the mask.                                               oil_viscosity
+    float oilViscosity = 0.0f;
 
     // --- oil shading ---
     float rimWidth    = 0.0013f;    // dark rim half-width, sdf units (~2 px at 1080p)
@@ -918,6 +975,13 @@ private:
                              // palette reaches the blobs too
         float s1, s2;        // curl-drift phase offsets
         int   kind;          // 0 disc, 1 web, 2 bubble, 3 hole
+        // mouse_oil_mode = 2 (comb): how far this blob is currently stretched
+        // along `cdx, cdy` (a unit vector in p-space). Ramps up with pointer
+        // speed while the comb passes and relaxes back to 0 over ~3 s. 0 for
+        // every blob unless the comb is active, and the shader's round path
+        // is then taken untouched.
+        float comb = 0.0f;
+        float cdx = 0.0f, cdy = 0.0f;
     };
     std::vector<AcidBlob> m_acidBlobs;
     bool   m_acidSeeded = false;
@@ -968,6 +1032,28 @@ private:
     void*  m_dropletData[kFrames] = {};
     void*  m_dropletCellData[kFrames] = {};
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoLiquidAcid;
+
+    // --- oil_drag / oil_dye_block ---------------------------------------
+    // Sim-res coverage mask (1 = under the oil, 0 = open ink) plus the three
+    // compute PSOs that build and apply it. Created lazily the first frame
+    // either key is non-zero, and NOTHING here is dispatched while both are
+    // 0 -- the fluid look never sees a single extra instruction.
+    Tex    m_oilMask;
+    bool   m_oilMaskMade = false;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoOilMask;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoOilDrag;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoOilDyeBlock;
+    void EnsureOilMask();
+    void StepOilDrag(float dt);
+
+    // --- mouse_oil_mode: the pointer, in uv, and its own velocity --------
+    // Recorded by HandleInput for StepAcidBlobs. This NEVER splats: the oil
+    // modes must not touch the ink.
+    float m_ptrX = 0.5f, m_ptrY = 0.5f;
+    float m_ptrPx = 0.5f, m_ptrPy = 0.5f;   // previous frame
+    float m_ptrVx = 0.0f, m_ptrVy = 0.0f;   // uv / s, smoothed
+    bool  m_ptrMoved = false, m_ptrHave = false;
+
     // low-res velocity readback (same async pattern as the coverage governor)
     Tex    m_velLow;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_velReadback;

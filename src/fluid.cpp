@@ -281,7 +281,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         D3D12_DESCRIPTOR_RANGE rUav1 = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 1, 0, 0 };
         D3D12_DESCRIPTOR_RANGE rUav2 = { D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 2, 0, 0 };
 
-        D3D12_ROOT_PARAMETER params[7] = {};
+        D3D12_ROOT_PARAMETER params[8] = {};
         params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[0].Constants = { 0, 0, sizeof(SimCB) / 4 };
         auto table = [](D3D12_ROOT_PARAMETER& p, D3D12_DESCRIPTOR_RANGE* r) {
@@ -294,6 +294,12 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         table(params[4], &rUav1);
         table(params[5], &rUav2);
         table(params[6], &rSrv2);
+        // Param 7 is the Liquid Acid blob buffer (t3) as a ROOT descriptor,
+        // read only by the oil-mask pass (oil_drag / oil_dye_block). Every
+        // other compute shader compiled from kComputeSrc ignores it, so it
+        // costs the fluid sim two DWORDs of root signature and nothing else.
+        params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+        params[7].Descriptor = { 3, 0 };            // t3
 
         D3D12_STATIC_SAMPLER_DESC samp = {};
         samp.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -301,7 +307,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
         D3D12_ROOT_SIGNATURE_DESC rsd = {};
-        rsd.NumParameters = 7;
+        rsd.NumParameters = 8;
         rsd.pParameters = params;
         rsd.NumStaticSamplers = 1;
         rsd.pStaticSamplers = &samp;
@@ -582,6 +588,10 @@ void FluidRenderer::CreateSimResources() {
     // Liquid Acid: 64x36 velocity downsample for CPU blob advection. Same
     // async-readback pattern as the coverage governor; one frame of latency.
     m_velLow = CreateTex(kVelW, kVelH, DXGI_FORMAT_R16G16B16A16_FLOAT, slot++);
+    // Liquid Acid oil_drag / oil_dye_block: sim-res oil coverage mask. 72 KB
+    // and one heap slot; nothing ever writes or reads it unless one of those
+    // two keys is non-zero (see StepOilDrag), so the fluid look is untouched.
+    m_oilMask = CreateTex(m_simW, m_simH, DXGI_FORMAT_R16_FLOAT, slot++);
     m_velPitch = (kVelW * 8 + 255) & ~255u;
     m_velCpu.assign((size_t)kVelW * kVelH * 2, 0.0f);
     m_velPending = false;
@@ -1514,6 +1524,10 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         StepAcidBlobs(dt);
         StepAcidDroplets(dt);
         UploadAcidConstants();
+        // Oil as an obstacle to the ink: needs the blob buffer this frame's
+        // display draw will read, so it runs after the upload. Returns at once
+        // (and compiles nothing) while oil_drag and oil_dye_block are both 0.
+        StepOilDrag(dt);
     }
     // Shared ink-in-water constants: needed by style=ink and by the acid look
     // when ink_mode=water. 112 bytes; skipped entirely for style=fluid.
@@ -1669,6 +1683,7 @@ void FluidRenderer::Shutdown() {
     freeTex(m_divergence);  freeTex(m_curl);
     freeTex(m_coverage);
     freeTex(m_velLow);
+    freeTex(m_oilMask);
 
     // root signatures + PSOs (shader blobs are recompiled from embedded source
     // in CreateDevice — nothing static is cached, so re-init is idempotent)
@@ -1680,6 +1695,8 @@ void FluidRenderer::Shutdown() {
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
     m_psoDisplay.Reset(); m_psoGradient.Reset();
     m_psoLiquidAcid.Reset();
+    m_psoOilMask.Reset(); m_psoOilDrag.Reset(); m_psoOilDyeBlock.Reset();
+    m_oilMaskMade = false;
     m_psoInk.Reset();
     m_dropTimer = 0.0f;
     m_dropPrimed = false;
@@ -2018,6 +2035,15 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
     // With mirror.mode = 0 this is the identity and costs nothing.
     float mx = in.mouseX, my = in.mouseY, fx = 1.0f, fy = 1.0f;
     MirrorMapPointer(mx, my, fx, fy);
+    // [liquid_acid] mouse_oil_mode reads the pointer from here in uv -- and
+    // ONLY the pointer. No splat, no dye, no branch above is affected: the
+    // oil modes must never touch the ink (the rise presets ship with
+    // show_mouse / hold_to_splat / splat_on_click all 0 and stay that way).
+    m_ptrMoved = in.mouseMoved;
+    if (in.mouseMoved) {
+        m_ptrX = mx / fmaxf((float)m_width, 1.0f);
+        m_ptrY = my / fmaxf((float)m_height, 1.0f);
+    }
     if (m_cfg.holdToSplat && in.mouseDown) {
         float jx = (RandF() - 0.5f) * 200.0f;
         float jy = (RandF() - 0.5f) * 200.0f;
@@ -2044,7 +2070,9 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 // ===========================================================================
 
 // GPU mirrors — must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
-struct AcidBlobGPU { float a[4]; float b[4]; };
+// .c = the comb anisotropy (mouse_oil_mode 2): x = stretch amount along the
+// drag direction, yz = that direction. All zero unless the comb is running.
+struct AcidBlobGPU { float a[4]; float b[4]; float c[4]; };
 struct AcidParamsGPU {
     float oil[4][4];
     float ink[4][4];
@@ -2414,6 +2442,53 @@ void FluidRenderer::StepAcidBlobs(float dt) {
     const float simTexY = 1.0f / fmaxf((float)m_simH, 1.0f);
     const float t = m_time;
 
+    // ---- oil_viscosity: one key, several coupled effects ------------------
+    // A thick liquid lags the water it floats on, accelerates slowly, coasts,
+    // breathes and sways more slowly, and NECKS into a neighbour over seconds
+    // instead of snapping to it. Every factor below is exactly 1 (or the
+    // branch is skipped) at oil_viscosity 0, so an existing ini is unmoved.
+    const float vis     = fminf(fmaxf(a.oilViscosity, 0.0f), 1.0f);
+    const float visFlow = 1.0f - 0.55f * vis;    // flow + curl response
+    const float breathS = 1.0f - 0.60f * vis;    // breathing rate
+    // Relaxation RATE, not a drag coefficient: a lower rate is what makes the
+    // blob lag its target velocity in both directions.
+    const float dampRate = fmaxf(a.damping, 0.05f) / (1.0f + 2.0f * vis);
+    // The rise wobble is a function of wallpaper time, so "slower" is a slower
+    // clock, not a smaller amplitude.
+    const float tw = (vis > 1e-4f) ? t * (1.0f - 0.5f * vis) : t;
+    const float fg = a.flowGain * visFlow;
+    const float cdrift = a.curlDrift * visFlow;
+
+    // ---- rise_parallax ----------------------------------------------------
+    // s = lerp(1, clamp(r/disc_max, 0.25, 1), rise_parallax). A small blob is
+    // a FAR blob: it rises slowly, sways slowly and picks up less of the near
+    // currents. Exactly 1 for every blob when the key is 0.
+    const float par  = fminf(fmaxf(a.riseParallax, 0.0f), 1.0f);
+    const float rRef = fmaxf(a.discMax, 1e-4f);
+
+    // ---- mouse_oil_mode: the pointer's own velocity, uv/s -----------------
+    // Recorded by HandleInput, differentiated here (HandleInput has no dt) and
+    // smoothed so a single 144 Hz sample does not spike. Nothing in this block
+    // touches the ink -- the oil modes are deliberately oil-only.
+    const int mm = a.mouseOilMode;
+    float ptrVx = 0.0f, ptrVy = 0.0f, ptrSp = 0.0f;
+    if (mm > 0) {
+        if (m_ptrMoved && m_ptrHave && dt > 1e-5f) {
+            const float kk = 1.0f - expf(-12.0f * dt);
+            m_ptrVx += ((m_ptrX - m_ptrPx) / dt - m_ptrVx) * kk;
+            m_ptrVy += ((m_ptrY - m_ptrPy) / dt - m_ptrVy) * kk;
+        } else {
+            const float kk = 1.0f - expf(-6.0f * dt);
+            m_ptrVx -= m_ptrVx * kk;
+            m_ptrVy -= m_ptrVy * kk;
+        }
+        ptrVx = m_ptrVx; ptrVy = m_ptrVy;
+        ptrSp = sqrtf(ptrVx * ptrVx + ptrVy * ptrVy);
+    }
+    m_ptrPx = m_ptrX; m_ptrPy = m_ptrY; m_ptrHave = true;
+    const float mGain = fmaxf(a.mouseOilGain, 0.0f);
+    const float mR    = fmaxf(a.mouseOilRadius, 0.01f);
+
     // bilinear sample of the low-res velocity grid, in uv/s
     auto sampleVel = [&](float x, float y, float& ox, float& oy) {
         float fx = x * kVelW - 0.5f, fy = y * kVelH - 0.5f;
@@ -2433,10 +2508,18 @@ void FluidRenderer::StepAcidBlobs(float dt) {
 
     for (int i = 0; i < n; i++) {
         AcidBlob& b = m_acidBlobs[i];
+        // rise_parallax: this blob's whole motion budget, by size.
+        float pscale = 1.0f;
+        if (par > 1e-4f) {
+            float rr = b.baseR / rRef;
+            rr = rr < 0.25f ? 0.25f : (rr > 1.0f ? 1.0f : rr);
+            pscale = 1.0f + (rr - 1.0f) * par;
+        }
         float vu = 0, vv = 0;
         sampleVel(b.x, b.y, vu, vv);
-        float tx = vu * a.flowGain;
-        float ty = vv * a.flowGain;
+        const float fgb = fg * pscale;
+        float tx = vu * fgb;
+        float ty = vv * fgb;
 
         // Mild analytic curl drift so the oil still creeps where the fluid is
         // quiet (divergence-free: blobs swirl instead of piling up).
@@ -2446,8 +2529,8 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         float a4 = 4.1f * b.y + 0.29f * t + b.s2;
         float dpsidx = 3.1f * cosf(a1) * cosf(a2) + 0.7f * 5.3f * cosf(a3) * cosf(a4);
         float dpsidy = -2.7f * sinf(a1) * sinf(a2) - 0.7f * 4.1f * sinf(a3) * sinf(a4);
-        tx += dpsidy * a.curlDrift;
-        ty += -dpsidx * a.curlDrift;
+        tx += dpsidy * cdrift;
+        ty += -dpsidx * cdrift;
 
         // buoyancy (uv y is down, so "up" is negative); holes sink
         ty += (b.wgt > 0.0f ? -1.0f : 1.0f) * a.buoyancy * (b.baseR / 0.12f);
@@ -2459,20 +2542,92 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // what makes a bubble creep across the disc it sits in rather than
         // riding it like a painted dot.
         if (a.riseSpeed > 1e-6f) {
-            const float rs = a.riseSpeed * (b.wgt > 0.0f ? 1.0f : 0.7f);
+            // rise_parallax scales the climb itself: the small (far) blobs
+            // take up to 4x as long to cross the frame as the big near ones,
+            // which is the whole parallax cue.
+            const float rs = a.riseSpeed * (b.wgt > 0.0f ? 1.0f : 0.7f) * pscale;
             ty -= rs;
             if (a.riseWobble > 1e-4f) {
                 // two incommensurate sines on the blob's own curl phases:
                 // long lazy sway, never in step with its neighbours.
                 tx += a.riseWobble * rs *
-                      (0.85f * sinf(0.17f * t + b.s1) + 0.45f * sinf(0.29f * t + b.s2));
+                      (0.85f * sinf(0.17f * tw + b.s1) + 0.45f * sinf(0.29f * tw + b.s2));
             }
+        }
+
+        // ---- mouse_oil_mode = 1, PUSH ------------------------------------
+        // Blobs inside the radius take the pointer's own velocity (kernel
+        // weighted) plus a weak radial shove, so the cursor drags AND parts
+        // the oil. Added to the TARGET velocity, so the damping relaxation
+        // still smooths it and the oil keeps its own inertia; nothing here can
+        // move, shrink or delete a blob.
+        if (mm == 1 && ptrSp > 1e-5f) {
+            const float dx = (b.x - m_ptrX) * aspect, dy = b.y - m_ptrY;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < mR * mR) {
+                float kq = 1.0f - d2 / (mR * mR);
+                kq = kq * kq;
+                const float g = mGain * kq;
+                tx += ptrVx * g;
+                ty += ptrVy * g;
+                const float d = sqrtf(d2);
+                if (d > 1e-5f) {
+                    const float pr = 0.05f * g * ptrSp / (ptrSp + 0.25f);
+                    tx += (dx / d) * pr / aspect;
+                    ty += (dy / d) * pr;
+                }
+            }
+        }
+        // ---- mouse_oil_mode = 2, COMB ------------------------------------
+        // The pointer path is a marbling comb: blobs in a NARROW band along it
+        // stretch along the drag direction (b.comb / b.cdx,b.cdy, uploaded in
+        // AcidBlobGPU.c and turned into the shader's anisotropic kernel), so
+        // the cursor leaves thin oil streaks that slowly round back up over
+        // ~3 s. Small blobs are towed along the stroke as well.
+        if (mm == 2) {
+            if (b.comb > 0.0f) {
+                b.comb -= b.comb * (1.0f - expf(-dt / 3.0f));
+                if (b.comb < 1e-4f) { b.comb = 0.0f; b.cdx = 0.0f; b.cdy = 0.0f; }
+            }
+            if (ptrSp > 1e-4f) {
+                const float ux = ptrVx * aspect, uy = ptrVy;
+                const float ul = sqrtf(ux * ux + uy * uy) + 1e-9f;
+                const float nx = ux / ul, ny = uy / ul;
+                const float dx = (b.x - m_ptrX) * aspect, dy = b.y - m_ptrY;
+                const float along = dx * nx + dy * ny;
+                const float perp  = fabsf(-dx * ny + dy * nx);
+                const float bw = mR * 0.35f;
+                if (perp < bw && fabsf(along) < mR) {
+                    float kq = (1.0f - perp / bw) * (1.0f - fabsf(along) / mR);
+                    kq = kq * kq;
+                    const float sp = fminf(ptrSp / 0.6f, 1.0f);
+                    const float want = fminf(mGain * sp * kq * 0.9f, 0.80f);
+                    if (want > b.comb) {
+                        b.comb += (want - b.comb) * (1.0f - expf(-dt / 0.25f));
+                        b.cdx = nx; b.cdy = ny;
+                    }
+                    // (not `small`: <rpcndr.h> #defines that to char)
+                    const float tow = fminf(fmaxf(0.10f / fmaxf(b.baseR, 0.01f), 0.3f), 2.0f);
+                    tx += ptrVx * kq * tow * 0.5f * mGain;
+                    ty += ptrVy * kq * tow * 0.5f * mGain;
+                }
+            }
+        } else if (b.comb > 0.0f) {
+            b.comb = 0.0f; b.cdx = 0.0f; b.cdy = 0.0f;
         }
 
         // Soft repulsion between SAME-SIGN blobs: keeps discs and bubbles from
         // collapsing into one continent (the oil PoC's size-sorting failure),
         // while holes stay free to sit inside oil.
-        if (a.repulsion > 0.0001f) {
+        // oil_viscosity widens this into a NECKING model: outside contact
+        // there is now a weak attraction over a band ~2x the contact radius
+        // that pulls two approaching blobs together over seconds, and the
+        // contact repulsion itself is softened so the neck thickens instead of
+        // snapping. At oil_viscosity 0 reachF and soft are exactly 1, the
+        // attraction branch is unreachable and this is the original loop.
+        if (a.repulsion > 0.0001f || vis > 1e-4f) {
+            const float reachF = 1.0f + 0.9f * vis;
+            const float soft   = 1.0f - 0.35f * vis;
             for (int j = 0; j < n; j++) {
                 if (j == i) continue;
                 const AcidBlob& o = m_acidBlobs[j];
@@ -2480,15 +2635,19 @@ void FluidRenderer::StepAcidBlobs(float dt) {
                 float dx = (b.x - o.x) * aspect, dy = b.y - o.y;
                 float d2 = dx * dx + dy * dy;
                 float rr = (b.baseR + o.baseR) * 0.95f;
-                if (d2 > rr * rr || d2 < 1e-8f) continue;
+                const float reach = rr * reachF;
+                if (d2 > reach * reach || d2 < 1e-8f) continue;
                 float d = sqrtf(d2);
-                float push = a.repulsion * (1.0f - d / rr) * 0.02f;
+                float push;
+                if (d < rr)            push = a.repulsion * (1.0f - d / rr) * 0.02f * soft;
+                else if (vis > 1e-4f)  push = -vis * (1.0f - (d - rr) / (reach - rr)) * 0.006f;
+                else                   continue;
                 tx += (dx / d) * push / aspect;
                 ty += (dy / d) * push;
             }
         }
 
-        float k = 1.0f - expf(-fmaxf(a.damping, 0.05f) * dt);   // fps-normalised
+        float k = 1.0f - expf(-dampRate * dt);   // fps-normalised
         b.vx += (tx - b.vx) * k;
         b.vy += (ty - b.vy) * k;
         b.x += b.vx * dt;
@@ -2547,7 +2706,7 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             if (b.y > floorY) { b.y = floorY; if (b.vy > 0.0f) b.vy = 0.0f; }
         }
 
-        b.phase += b.breathRate * dt;
+        b.phase += b.breathRate * breathS * dt;
     }
 }
 
@@ -2640,6 +2799,12 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     const float relax = 1.0f - expf(-dt / tau);
     const float mrelax = 1.0f - expf(-dt / 0.18f);   // merge centre pull
     const float life  = a.dropletLife;
+    // oil_viscosity, droplet side: a slower velocity relaxation (so a droplet
+    // is carried smoothly and never snaps to a new target) and a damped
+    // Brownian term. Both are exactly the shipped values at viscosity 0.
+    const float dvis  = fminf(fmaxf(a.oilViscosity, 0.0f), 1.0f);
+    const float dvDamp = fmaxf(a.dropletDamping, 0.1f) / (1.0f + 2.0f * dvis);
+    const float dvJit  = 1.0f - 0.70f * dvis;
 
     auto rf = [&]() {
         m_dropletRng ^= m_dropletRng << 13;
@@ -2747,9 +2912,10 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             tx = vu * a.flowGain;
             ty = vv * a.flowGain;
         }
-        // slow Brownian jitter
-        tx += (rf() * 2.0f - 1.0f) * a.dropletJitter;
-        ty += (rf() * 2.0f - 1.0f) * a.dropletJitter;
+        // slow Brownian jitter -- damped by oil_viscosity: a droplet suspended
+        // in a thick liquid does not twitch.
+        tx += (rf() * 2.0f - 1.0f) * a.dropletJitter * dvJit;
+        ty += (rf() * 2.0f - 1.0f) * a.dropletJitter * dvJit;
 
         // ---- confinement: kind 0 stays inside the oil, kind 1 outside it --
         // Push back along the field gradient (which points INTO the oil).
@@ -2776,7 +2942,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             d.y += (s.y - d.y) * mrelax;
         }
 
-        const float k = 1.0f - expf(-fmaxf(a.dropletDamping, 0.1f) * dt);
+        const float k = 1.0f - expf(-dvDamp * dt);
         d.vx += (tx - d.vx) * k;
         d.vy += (ty - d.vy) * k;
         d.x += d.vx * dt;
@@ -2975,6 +3141,116 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     buildGrid();
 }
 
+// ===========================================================================
+// OIL DRAG ([liquid_acid] oil_drag / oil_dye_block)
+//
+// The user, watching acid-rise-12 live: "make it impossible for the fluid sim
+// underneath, the mono ink, to get under the oil, or rather an intense
+// friction that makes it hard for it to get under."
+//
+// Three compute passes, all of them skipped entirely while both keys are 0 --
+// including the PSO compiles, which happen the first frame one of them is
+// turned on. The mask is the SAME Wyvill field the display shader thresholds,
+// which is what makes the holes behave: a negative blob is negative here too,
+// so a hole is not oil, is not dragged, and the ink you see through it is the
+// ink layer, exactly as it renders.
+// ===========================================================================
+void FluidRenderer::EnsureOilMask() {
+    if (m_oilMaskMade) return;
+    if (!m_device || !m_computeRS) return;
+    auto makeCS = [&](const char* entry, ComPtr<ID3D12PipelineState>& pso) {
+        ComPtr<ID3DBlob> cs = Compile(kComputeSrc, entry, "cs_5_0");
+        D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
+        cd.pRootSignature = m_computeRS.Get();
+        cd.CS = { cs->GetBufferPointer(), cs->GetBufferSize() };
+        HR(m_device->CreateComputePipelineState(&cd, IID_PPV_ARGS(&pso)));
+    };
+    makeCS("CSOilMask", m_psoOilMask);
+    makeCS("CSOilDrag", m_psoOilDrag);
+    makeCS("CSOilDyeBlock", m_psoOilDyeBlock);
+    m_oilMaskMade = true;
+}
+
+void FluidRenderer::StepOilDrag(float dt) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const float drag  = fmaxf(a.oilDrag, 0.0f);
+    const float block = fmaxf(a.oilDyeBlock, 0.0f);
+    if (drag <= 1e-4f && block <= 1e-4f) return;
+    if (!m_oilMask.res || !m_acidBlobUpload[m_frameIndex] || dt <= 0.0f) return;
+    EnsureOilMask();
+    if (!m_psoOilMask || !m_psoOilDrag || !m_psoOilDyeBlock) return;
+
+    const int nb = (int)m_acidBlobs.size();
+    if (nb <= 0) return;
+
+    // Soft edge of the coverage threshold, in FIELD units. The Wyvill field
+    // climbs from 0 to ~1 over a blob's support radius, so a band of a few sim
+    // texels is a small fraction of the threshold; 0.10 of it puts the edge at
+    // roughly 3-5 texels for the shipped radii, which is the couple of texels
+    // the brief asks for without aliasing the mask into a staircase.
+    const float edge = fmaxf(a.threshold, 0.05f) * 0.10f;
+
+    SimCB cb = {};
+    cb.texelW = 1.0f / m_simW;
+    cb.texelH = 1.0f / m_simH;
+    cb.dt = dt;
+    cb.aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    cb.value  = a.threshold;
+    cb.radius = a.supportScale;
+    cb.pointX = (float)nb;
+    cb.pointY = edge;
+
+    m_cmd->SetComputeRootSignature(m_computeRS.Get());
+    m_cmd->SetComputeRootShaderResourceView(
+        7, m_acidBlobUpload[m_frameIndex]->GetGPUVirtualAddress());
+
+    auto run = [&](ID3D12PipelineState* pso, Tex* s0, Tex* s1, Tex* dst) {
+        if (s0) Transition(*s0, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        if (s1) Transition(*s1, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Transition(*dst, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        m_cmd->SetPipelineState(pso);
+        cb.dimsW = dst->w; cb.dimsH = dst->h;
+        m_cmd->SetComputeRoot32BitConstants(0, sizeof(SimCB) / 4, &cb, 0);
+        m_cmd->SetComputeRootDescriptorTable(1, s0 ? s0->srv : dst->srv);
+        m_cmd->SetComputeRootDescriptorTable(2, s1 ? s1->srv : dst->srv);
+        m_cmd->SetComputeRootDescriptorTable(3, dst->uav);
+        m_cmd->SetComputeRootDescriptorTable(4, dst->uav);
+        m_cmd->SetComputeRootDescriptorTable(5, dst->uav);
+        m_cmd->SetComputeRootDescriptorTable(6, dst->srv);
+        m_cmd->Dispatch(Groups(dst->w), Groups(dst->h), 1);
+    };
+
+    // 1. coverage
+    run(m_psoOilMask.Get(), nullptr, nullptr, &m_oilMask);
+    UavBarrier(m_oilMask.res.Get());
+
+    // 2. friction + rim deflection (+ viscous diffusion under the oil).
+    // Applied ONCE per frame with the frame's own dt rather than inside the
+    // substep loop: it is a damping term, fps-normalised the same way every
+    // other decay in this file is (k = 1 - exp(-rate*dt)), so the result is
+    // the same at 60 and at 144 fps and the solver never sees a discontinuity.
+    if (drag > 1e-4f) {
+        // oil_drag 1 -> ~6/s, i.e. ink under the oil loses ~99% of its speed
+        // in half a second. Anything faster is indistinguishable from a wall.
+        cb.colorR = 1.0f - expf(-6.0f * drag * dt);
+        // The rim push is the mask gradient scaled to sim texels/s. Deliberately
+        // gentle: this is meant to make ink SLIDE along the edge of an island,
+        // not to blow a hole around it.
+        cb.colorB = fminf(fmaxf(a.oilViscosity, 0.0f), 1.0f) * 0.6f;
+        // texels/s of push per unit of mask gradient, times dt -- an
+        // acceleration integrated over the frame, so it is fps-normalised too.
+        cb.colorG = 90.0f * drag * dt;
+        run(m_psoOilDrag.Get(), m_velocity.read, &m_oilMask, m_velocity.write);
+        m_velocity.Swap();
+    }
+    // 3. dye under the oil fades out over ~1-2 s at oil_dye_block 1.
+    if (block > 1e-4f) {
+        cb.cap = 1.0f - expf(-1.2f * block * dt);
+        run(m_psoOilDyeBlock.Get(), m_dye.read, &m_oilMask, m_dye.write);
+        m_dye.Swap();
+    }
+}
+
 void FluidRenderer::UploadAcidConstants() {
     const LiquidAcidConfig& a = m_cfg.acid;
     const UINT fi = m_frameIndex;
@@ -3067,6 +3343,22 @@ void FluidRenderer::UploadAcidConstants() {
             stretch = fminf(a.riseStretch * sf * rf2, 0.80f);
         }
         dst[i].b[3] = stretch;
+        // rise_parallax_dim: a far (small) blob is slightly dimmer, its colour
+        // pulled toward the background as a depth cue. Same s as the motion
+        // scale in StepAcidBlobs, so the two cues agree.
+        if (a.riseParallaxDim > 1e-4f && a.riseParallax > 1e-4f) {
+            float rr = b.baseR / fmaxf(a.discMax, 1e-4f);
+            rr = rr < 0.25f ? 0.25f : (rr > 1.0f ? 1.0f : rr);
+            const float s = 1.0f + (rr - 1.0f) * fminf(a.riseParallax, 1.0f);
+            const float dim = 1.0f - (1.0f - s) * fminf(a.riseParallaxDim, 1.0f);
+            dst[i].b[0] *= dim; dst[i].b[1] *= dim; dst[i].b[2] *= dim;
+        }
+        // mouse_oil_mode = 2 (comb): stretch amount + direction. Zero unless
+        // the comb is running, and the shader then skips the whole branch.
+        dst[i].c[0] = b.comb;
+        dst[i].c[1] = b.cdx;
+        dst[i].c[2] = b.cdy;
+        dst[i].c[3] = 0.0f;
     }
 
     AcidParamsGPU p = {};

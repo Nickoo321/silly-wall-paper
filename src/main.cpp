@@ -20,6 +20,11 @@
 //   --shot-pour X,Y,S,D  hold LMB at (X,Y) px from S for D seconds
 //   --shot-drop X,Y,T[,VY]  one ink drop at (X,Y) px at wallpaper time T
 //                      (VY = downward impulse; default [drops] speed)
+//   --shot-mouse X,Y,DX,DY,T[,DUR]  one synthetic pointer STROKE from (X,Y) px
+//                      to (X+DX,Y+DY) px, starting at wallpaper time T over
+//                      DUR seconds (default 0.5). Pointer only -- never a
+//                      click -- so it drives [liquid_acid] mouse_oil_mode and
+//                      nothing else.
 //   --shot-preset <ini> AT <sec>  apply that preset at wallpaper time <sec>,
 //                      through the tray's own ApplyPreset (look switches too)
 //   --seed N           seed every rand() behavior (default 1234) -> determinism
@@ -413,6 +418,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.riseRespawn  = getB(S, L"rise_respawn", a.riseRespawn);
         a.riseStretch  = getF(S, L"rise_stretch", a.riseStretch);
         a.riseBottomLight = getF(S, L"rise_bottom_light", a.riseBottomLight);
+        a.riseParallax    = getF(S, L"rise_parallax", a.riseParallax);
+        a.riseParallaxDim = getF(S, L"rise_parallax_dim", a.riseParallaxDim);
+        a.oilDrag      = getF(S, L"oil_drag", a.oilDrag);
+        a.oilDyeBlock  = getF(S, L"oil_dye_block", a.oilDyeBlock);
+        a.oilViscosity = getF(S, L"oil_viscosity", a.oilViscosity);
+        a.mouseOilMode = getI(S, L"mouse_oil_mode", a.mouseOilMode);
+        a.mouseOilRadius = getF(S, L"mouse_oil_radius", a.mouseOilRadius);
+        a.mouseOilGain   = getF(S, L"mouse_oil_gain", a.mouseOilGain);
         a.rimWidth     = getF(S, L"rim_width", a.rimWidth);
         a.rimInset     = getF(S, L"rim_inset", a.rimInset);
         a.rimDark      = getF(S, L"rim_dark", a.rimDark);
@@ -1471,6 +1484,14 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putI(S, L"rise_respawn", a.riseRespawn ? 1 : 0);
         putF(S, L"rise_stretch", a.riseStretch, 3);
         putF(S, L"rise_bottom_light", a.riseBottomLight, 3);
+        putF(S, L"rise_parallax", a.riseParallax, 3);
+        putF(S, L"rise_parallax_dim", a.riseParallaxDim, 3);
+        putF(S, L"oil_drag", a.oilDrag, 3);
+        putF(S, L"oil_dye_block", a.oilDyeBlock, 3);
+        putF(S, L"oil_viscosity", a.oilViscosity, 3);
+        putI(S, L"mouse_oil_mode", a.mouseOilMode);
+        putF(S, L"mouse_oil_radius", a.mouseOilRadius, 3);
+        putF(S, L"mouse_oil_gain", a.mouseOilGain, 3);
         putF(S, L"rim_width", a.rimWidth, 4);
         putF(S, L"rim_inset", a.rimInset, 4);
         putF(S, L"rim_dark", a.rimDark, 3);
@@ -1692,6 +1713,17 @@ struct ShotOpts {
     bool     drop = false;
     float    dropX = 1280, dropY = 200, dropAt = 0, dropVy = -1.0f;
     bool     dropFired = false;
+    // --shot-mouse X,Y,DX,DY,T[,DUR] : one synthetic pointer STROKE, from
+    // (X,Y) px to (X+DX, Y+DY) px, starting at wallpaper time T and taking DUR
+    // seconds (default 0.5). The reproducible test for [liquid_acid]
+    // mouse_oil_mode -- a single one-frame sample would carry almost no
+    // pointer velocity, and a stroke is what a comb or a push actually is.
+    // It only ever sets FrameInput's pointer fields, so with show_mouse /
+    // hold_to_splat / splat_on_click at 0 (every rise preset) it cannot put a
+    // single splat of dye into the ink.
+    bool     mouse = false;
+    float    mouseSx = 1280, mouseSy = 720, mouseDx = 0, mouseDy = 0;
+    float    mouseAt = 0, mouseDur = 0.5f;
     // --shot-preset <ini> AT <sec> : apply that preset at wallpaper time <sec>
     // through the SAME ApplyPreset() the tray menu uses. This is how a look
     // SWITCH is verified headlessly: start on one ini, switch mid-run, capture
@@ -1859,6 +1891,11 @@ static int RunShotMode() {
                 const wchar_t* v = argv[++i];
                 int got = swscanf_s(v, L"%f,%f,%f,%f", &o.dropX, &o.dropY, &o.dropAt, &o.dropVy);
                 if (got >= 3) { o.drop = true; if (got == 3) o.dropVy = -1.0f; }
+            } else if (wcscmp(argv[i], L"--shot-mouse") == 0 && i + 1 < argc) {
+                const wchar_t* v = argv[++i];
+                int got = swscanf_s(v, L"%f,%f,%f,%f,%f,%f", &o.mouseSx, &o.mouseSy,
+                                    &o.mouseDx, &o.mouseDy, &o.mouseAt, &o.mouseDur);
+                if (got >= 5) { o.mouse = true; if (got == 5) o.mouseDur = 0.5f; }
             } else if (wcscmp(argv[i], L"--shot-preset") == 0 && i + 1 < argc) {
                 // --shot-preset <ini> AT <sec>   (also accepts <ini> <sec>)
                 o.presetIni = argv[++i];
@@ -1972,6 +2009,26 @@ static int RunShotMode() {
                     if (have) { fin.mouseMoved = true; fin.mouseDx = (px - lx) * 5.0f; fin.mouseDy = (py - ly) * 5.0f; }
                     lx = px; ly = py; have = true;
                     fin.mouseDown = true; fin.userInteracted = true;
+                }
+            }
+            // --shot-mouse: one synthetic pointer stroke for the oil modes.
+            // Pointer fields only -- never mouseDown, so no splat path can
+            // fire even if an ini did have hold_to_splat on.
+            if (o.mouse) {
+                const float tm = frames / 144.0f;
+                if (tm >= o.mouseAt && tm <= o.mouseAt + o.mouseDur) {
+                    const float u = (o.mouseDur > 1e-4f)
+                                  ? (tm - o.mouseAt) / o.mouseDur : 1.0f;
+                    const float px = o.mouseSx + o.mouseDx * u;
+                    const float py = o.mouseSy + o.mouseDy * u;
+                    static float mlx = 0, mly = 0; static bool mhave = false;
+                    fin.mouseX = px; fin.mouseY = py;
+                    if (mhave) {
+                        fin.mouseMoved = true;
+                        fin.mouseDx = (px - mlx) * 5.0f;
+                        fin.mouseDy = (py - mly) * 5.0f;
+                    }
+                    mlx = px; mly = py; mhave = true;
                 }
             }
             // --shot-drop: one ink drop, fired on the first frame at or past

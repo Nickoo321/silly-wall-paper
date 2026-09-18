@@ -583,7 +583,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
-    float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w -
+    float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w diffScale(uv)
     float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w bandMin
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
     float4 laP23;        // x cellInk    y cellOil    z cellScale(uv) w cellDrift(uv/s)
@@ -591,7 +591,7 @@ cbuffer AcidCB : register(b1) {
     // --- perspective camera + depth of field + tilt (items N + R) ---------
     float4 laP24;        // x axisX(uv) y axisY(uv) z focusDepth  w dofMaxPx(1440p)
     float4 laP25;        // x fieldCurve y tilt     z cos(tiltAng) w sin(tiltAng)
-    float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w -
+    float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -668,6 +668,22 @@ float3 AcidHueShift(float3 c, float deg) {
     float3 hsv = AcidRgb2Hsv(c);
     hsv.x = frac(hsv.x + deg * 0.0027777778);
     return AcidHsv2Rgb(hsv);
+}
+
+// ---- DIFFRACTION (item W) ------------------------------------------------
+// The user, on an in-focus ring: "a thin hair on a film will never cause pure
+// darkness because the light bends around it; it's not out of focus per se."
+// A feature narrower than the point spread has light filled in from all round
+// it, so it cannot reach full darkness however well it is focused -- that is
+// diffraction, not defocus, and it is why a hair on film is grey. `size` and
+// `kp` are both in p-space: one point spread across gives 63% of full
+// darkness, two gives 98%, and anything several spreads wide is untouched.
+// Only ever REMOVES darkness from small things, so the black under a big mass
+// is exactly the black it was.
+float AcidDiffract(float size, float kp, float amt) {
+    [branch] if (amt <= 0.0 || kp <= 0.0) return 1.0;
+    float x = size / kp;
+    return lerp(1.0, 1.0 - exp(-x * x), saturate(amt));
 }
 
 // Procedural bubble swarm. A jittered cellular layer of round droplets with a
@@ -1141,11 +1157,16 @@ R"hlsl(
                         // asymmetry a stamped "O" can never have.
                         float  asym = clamp(0.90 * tanT, 0.0, 0.45);
                         bw *= 1.0 - asym * dot(un, av);
+                        // ...and a ring diffracts by its WALL WIDTH, not by
+                        // its radius: a big hoop drawn with a two-pixel wall
+                        // is exactly the hair in the user's photograph, and it
+                        // has no business being pure black either.
+                        float  gW = gate * AcidDiffract(bw, laP20.w, laP26.w);
                         float  sgn = dd - Rp;
                         float  su = 1.0 - (sgn * sgn) / (bw * bw);
                         if (su > 0.0) {
                             float  su2 = su * su;
-                            float  dw  = su2 * su * gate;
+                            float  dw  = su2 * su * gW;
                             // d/d(dd) of the profile, carried onto grad(sgn).
                             // grad(phi) = (-un.y, un.x)/dd, so an out-of-round
                             // band's normal leans off the radius exactly as
@@ -1160,7 +1181,7 @@ R"hlsl(
                             // square on the wall of an oblique ring instead of
                             // sliding round it. Identity at camera_fov 0.
                             gs += av * (dot(gs, av) * (invc - 1.0));
-                            float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gate) * gs;
+                            float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gW) * gs;
                             dNeg += dw; gNeg += dg;
                             depSum += dw * ddep; depW += dw;
                         }
@@ -1176,14 +1197,21 @@ R"hlsl(
                         // wall and light together, which is what stops it
                         // reading as a glyph.
                         li *= 1.0 + clamp(1.10 * tanT, 0.0, 0.55) * dot(un, av);
-                        ringIn = max(ringIn, saturate(li) * gate);
-                        depSum += li * gate * ddep * 0.5; depW += li * gate * 0.5;
+                        ringIn = max(ringIn, saturate(li) * gW);
+                        depSum += li * gW * ddep * 0.5; depW += li * gW * 0.5;
                         continue;
                     }
+                    // DIFFRACTION by the droplet's own size: a 3-px dot
+                    // cannot punch the film fully black, so it comes out a
+                    // soft grey spot instead of a hard hole. Carried on the
+                    // gate, which means the field AND its gradient stay
+                    // consistent and the edge softens with the fill -- no
+                    // separate shading path, and nothing to fight the halo.
+                    float  gS = gate * AcidDiffract(R, laP20.w, laP26.w);
                     float  du = 1.0 - dd2 / ds2;
                     float  du2 = du * du;
-                    float  dw = du2 * du * gate;
-                    float2 dg = (-6.0 * du2 / ds2) * dq * gate;
+                    float  dw = du2 * du * gS;
+                    float2 dg = (-6.0 * du2 / ds2) * dq * gS;
                     if (D.z < 0.0) { dNeg += dw; gNeg += dg; }
                     else           { dPos += dw; gPos += dg; }
                     depSum += dw * ddep; depW += dw;
@@ -2268,7 +2296,7 @@ cbuffer PostPassCB : register(b0) {
     float4 pp3;   // x dust       y hairs      z scratches          w leak
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
     float4 pp5;   // x stock      y fog        z bloom   w dofMaxPx(this res; 0 = alpha is not a CoC)
-    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z -          w -
+    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z psfPx(this res) w -
     float4 pp7;   // spare
 };
 // ---- THE RIG -------------------------------------------------------------
@@ -2417,6 +2445,12 @@ float4 PSMain(VSOut i) : SV_Target {
         float coc = min(c4.a * pp4.w, pp5.w);
         rPx = max(coc, pp0.z * saturate(coc));
     }
+    // DIFFRACTION (item W). The floor, and it does not care about focus: the
+    // sharpest a lens can draw a point is its own point spread, so at
+    // psf_px >= 1 nothing in the frame is ever pixel-limited and an in-focus
+    // isoline can never come out as the stair-stepped coverage AA the user
+    // photographed.
+    rPx = max(rPx, pp6.z);
     [branch] if (rPx > 0.01) {
         float jit = 6.2831853 * PHash21(i.pos.xy * 0.0173 + 0.31);
         d = Disc(uv, rPx * pp0.xy, jit);

@@ -442,6 +442,19 @@ struct LiquidAcidConfig {
     float dropletDepth = 0.0f;      // 0..1 spread about 0.5     droplet_depth
     float depthRise    = 0.0f;      // back-layer rise bonus        depth_rise
 
+    // --- DIFFRACTION: SIZE-DEPENDENT CONTRAST (item W) --------------------
+    // The other half of the point spread. A feature narrower than the spread
+    // has its light filled in from around it, so it cannot reach full
+    // darkness: a hair on film is grey, not black, and only something several
+    // spreads across is truly opaque. So a droplet's -- and a ring wall's --
+    // contribution to the field is scaled by its own size against the spread,
+    // 1 - exp(-(size/kP)^2): tiny droplets are soft grey dots, medium ones
+    // dark with soft edges, only the big masses reach black. It only ever
+    // takes darkness AWAY from small things, so the OLED's true black under
+    // the big masses is untouched. 0 = off.
+    float diffraction   = 0.0f;     // 0..1 master                 diffraction
+    float diffractionPx = 1.5f;     // spread width, px at 1440p diffraction_px
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".
@@ -786,6 +799,18 @@ struct PostConfig {
     float focusTiltPeriod = 0.0f;   // mean s between readjustments; 0 = never focus_tilt_period
     float focusTiltMoveS  = 1.4f;   // how long one readjustment takes, s  focus_tilt_move_s
     float dofMaxPx        = 0.0f;   // CoC clamp, px at 1440p; 0 = no DoF   dof_max_px
+
+    // --- DIFFRACTION: the POINT SPREAD (item W) ---------------------------
+    // The user, photographing an in-focus ring on the panel: "a thin hair on a
+    // film will never cause pure darkness because the light bends around it;
+    // it's not out of focus per se." No optical system resolves a point to a
+    // point, so nothing in the frame can be both fully dark and hard-edged,
+    // however well it is focused. This is the floor under the per-pixel
+    // defocus radius, applied regardless of focus: "razor sharp" means
+    // DIFFRACTION-limited, not pixel-limited, and at >= 1 px the in-focus
+    // isoline can never come out as raw coverage AA -- the stair-stepped "O"
+    // in the photo. 0 = off, and style=fluid never names it.
+    float psfPx = 0.0f;             // point spread radius, px at 1440p  psf_px
 };
 
 struct MirrorConfig {

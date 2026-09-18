@@ -929,6 +929,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmScratches > 0.0005f || po.filmLeak > 0.0005f ||
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
+                         po.psfPx > 0.01f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
@@ -1042,7 +1043,11 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[23] = (m_cfg.acid.enabled && po.dofMaxPx > 0.01f) ? po.dofMaxPx * scale : 0.0f;
     c[24] = fmaxf(po.fogPx, 1.0f) / 1440.0f;
     c[25] = fmaxf(po.bloomPx, 1.0f) * scale;
-    // c[26..31] spare. light_x / light_y / light_drift used to live here; the
+    // DIFFRACTION. The floor under the defocus radius, in THIS frame's texels,
+    // applied whatever the focus: no optical system resolves a point to a
+    // point, so the sharpest thing in the frame is still this wide.
+    c[26] = fmaxf(po.psfPx, 0.0f) * scale;
+    // c[27..31] spare. light_x / light_y / light_drift used to live here; the
     // lamp is part of the RIG now and arrives in its own block below.
 
     // ---- THE RIG, as ONE contiguous block ---------------------------------
@@ -3997,9 +4002,16 @@ void FluidRenderer::UploadAcidConstants() {
     // ring band half-width as a fraction of the droplet's SUPPORT radius, so
     // the shader can build the annulus without a per-droplet size; the visible
     // ring is about this fraction of the droplet across.
+    // .w = the DIFFRACTION scale: the point spread times the constant k that
+    // sets where the size curve bends, carried in uv-y like every other
+    // optical width here so a preview and the panel diffract the same. A
+    // droplet of this radius comes out at 63% of its full darkness; twice it,
+    // 98%. k = 2.5 puts the knee on the sim's small droplets (r_min is about
+    // 1.6 px at 1440p) and leaves anything above ~8 px fully black.
     float p20[4] = { fminf(fmaxf(a.dropletRingWidth, 0.02f), 0.60f),
                      fminf(fmaxf(a.dropletRingLift, 0.0f), 1.0f),
-                     fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f), 0.0f };
+                     fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f),
+                     2.5f * fmaxf(a.diffractionPx, 0.05f) / 1440.0f };
     // [post] halo / halo_px / softness. All three are optical widths authored
     // in px at 1440p and handed to the shader as a FRACTION of the frame, so
     // a 960x540 preview and the 1440p panel show the same lens.
@@ -4055,7 +4067,7 @@ void FluidRenderer::UploadAcidConstants() {
     float p26[4] = { fmaxf(po.focusBandPx, 0.0f) / 1440.0f,
                      1.0f / 0.12f,
                      fovK,
-                     0.0f };
+                     fminf(fmaxf(a.diffraction, 0.0f), 1.0f) };
     memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
     memcpy(p.p23, p23, 16);
     memcpy(p.men, men, 16);

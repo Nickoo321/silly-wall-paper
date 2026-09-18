@@ -409,6 +409,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.focusTiltPeriod= getF(S, L"focus_tilt_period", po.focusTiltPeriod);
         po.focusTiltMoveS = getF(S, L"focus_tilt_move_s", po.focusTiltMoveS);
         po.dofMaxPx       = getF(S, L"dof_max_px", po.dofMaxPx);
+        po.psfPx          = getF(S, L"psf_px", po.psfPx);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -560,6 +561,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingWobble= getF(S, L"droplet_ring_wobble", a.dropletRingWobble);
         a.dropletDepth     = getF(S, L"droplet_depth", a.dropletDepth);
         a.depthRise        = getF(S, L"depth_rise", a.depthRise);
+        a.diffraction      = getF(S, L"diffraction", a.diffraction);
+        a.diffractionPx    = getF(S, L"diffraction_px", a.diffractionPx);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1560,6 +1563,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"focus_tilt_period", po.focusTiltPeriod, 1);
         putF(S, L"focus_tilt_move_s", po.focusTiltMoveS, 2);
         putF(S, L"dof_max_px", po.dofMaxPx, 2);
+        putF(S, L"psf_px", po.psfPx, 2);
     }
     {
         const DropConfig& d = c.drops;
@@ -1696,6 +1700,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_wobble", a.dropletRingWobble, 3);
         putF(S, L"droplet_depth", a.dropletDepth, 3);
         putF(S, L"depth_rise", a.depthRise, 3);
+        putF(S, L"diffraction", a.diffraction, 3);
+        putF(S, L"diffraction_px", a.diffractionPx, 2);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

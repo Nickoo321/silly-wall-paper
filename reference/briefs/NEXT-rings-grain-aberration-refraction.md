@@ -76,3 +76,18 @@ O. (user 2026-09-18 17:50, "macro-ish cellulose noise", ref microscope-ref-10-re
    (0..1 with the rise motion). Ship values in the rising configs/presets that read as subtle on the
    panel; the NO-lens twin stays 0. Verify with a 4x crop of a black mass edge + interior and a film
    patch, before/after.
+
+P. (user 2026-09-18 17:58, SUPERSEDES the reading of O; refs reference/shots/photos/film-overlay-ref-1..3.jpg)
+   What "macro-ish cellulose noise" meant: the artefacts of a projected/scanned FILM overlay -- hairs and
+   fibres caught in the gate (thin, curly, bright strands, a few px wide, 20-150 px long), dust specks
+   (sparse bright points, 1-3 px), fine vertical scratches (faint, full-height or partial, drifting
+   sideways), and optionally a very faint light leak. Visible mostly over the DARK areas ("the black
+   oil more than the oil"): additive, weighted toward dark pixels, near-invisible on the bright film.
+   It has to CHANGE: "once in a while, or continuously" -- real film: specks flicker frame to frame,
+   a hair sticks in the gate for a few seconds then is gone, a scratch persists for a stretch then
+   drifts/disappears; nothing sits still. This is an IMAGE-SPACE overlay -> kPostSrc (after the blur,
+   with/after the grain), procedural (no textures): per-artefact seeds + lifetimes from a hash of
+   floor(time/period), so the population changes every few seconds. Keys [post]: film_dust (0..1,
+   master), film_hairs (count/intensity), film_scratches, film_leak (default 0), film_artefact_rate
+   (how often the population changes, s). Ship subtle (a few specks, one hair now and then, scratches
+   faint); NO-lens twin 0. Must stay off unless named (fluid parity by construction).

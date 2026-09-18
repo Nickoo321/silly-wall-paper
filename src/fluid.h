@@ -378,6 +378,25 @@ struct LiquidAcidConfig {
     float dropletRingWidth = 0.08f; // rim width / radius        droplet_ring_width
     float dropletRingLift  = 0.10f; // interior lightening 0..1   droplet_ring_lift
     float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
+    // --- BIG HOLLOW BUBBLES (user 2026-09-18, panel photo
+    // --- 2026-09-18-big-hollow-bubble-liked.jpg: the big faint transparent
+    // --- lens in the middle-left is "exactly what I want more of") ---------
+    // Rings were drawn from the same radius range as the solid droplets, and
+    // that range is itself clamped by the shader's 3x3 cell walk (a droplet's
+    // support may not exceed one grid cell), so a hollow bubble could never be
+    // more than a small ring. A ring that is bigger than a cell is instead
+    // registered in EVERY cell its support disc overlaps, which restores the
+    // walk's invariant at a cost of a few hundred extra table entries -- and
+    // nothing per pixel, because the cells it lands in are the ones its own
+    // pixels are in.
+    //   droplet_ring_r_mul    1 = today. Up to this multiple of droplet_r_max
+    //                         for a BIG ring (2-4 is the look the user asked
+    //                         for); the wall stays droplet_ring_width of the
+    //                         radius and the wobble scales with it.
+    //   droplet_ring_big_frac share of NEW rings that are big. Keep it small:
+    //                         a couple visible at any moment is the point.
+    float dropletRingRMul   = 1.0f;  // 1..6              droplet_ring_r_mul
+    float dropletRingBigFrac= 0.0f;  // 0..1           droplet_ring_big_frac
 
     // --- CONSERVATION OF MASS (brief S, 2026-09-18) ---------------------
     // "matter cannot be created or destroyed": nothing may appear at a
@@ -391,6 +410,27 @@ struct LiquidAcidConfig {
     //                   shrink away. 0 = today's 0.34 s. Coalescence keeps
     //                   its own 0.34 s: pouring into a neighbour is not a
     //                   disappearance and it should still read as fast.
+    // --- COALESCENCE (user 2026-09-18, panel photo lobed-groups-of-5) ----
+    // "all of these things are groups of 5, like what". droplet_merge is an
+    // OVERLAP fraction: the merge fires at dd < (ri+rj) * (1 - droplet_merge),
+    // i.e. only when two droplets interpenetrate by 30% of the sum of their
+    // radii. But the contact repulsion starts at dd = ri+rj and is several
+    // times stronger than droplet_attract, so a pair settles at exactly
+    // touching and can never reach the merge distance. The result is a
+    // permanent lumpy cluster of 4-6 same-size lobes necked together in the
+    // metaball field, which is what the user photographed.
+    //   droplet_coalesce    0 = today. > 0: same-kind SOLID droplets that
+    //                       TOUCH coalesce at a rate of 8 * this per second,
+    //                       area-conserving, so a contact lasts a moment and
+    //                       becomes one round droplet instead of a lobe.
+    //                       Rings are untouched -- a foam raft is meant to
+    //                       keep its shared walls.
+    //   droplet_coalesce_s  seconds the neck takes to close (the absorbed
+    //                       droplet's slide-in and both radii). 0 = today's
+    //                       0.18 s pull / 0.34 s radii.
+    float dropletCoalesce  = 0.0f;  // 0..1                   droplet_coalesce
+    float dropletCoalesceS = 0.0f;  // s, 0 = today         droplet_coalesce_s
+
     float conserveMass  = 0.0f;     // 0..1                        conserve_mass
     float spawnGrowS    = 0.0f;     // s, 0 = today (0.34)         spawn_grow_s
     float dissolveS     = 0.0f;     // s, 0 = today (0.34)         dissolve_s

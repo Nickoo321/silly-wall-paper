@@ -555,6 +555,10 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
         // --- conservation of mass (brief S) ---
+        a.dropletRingRMul    = getF(S, L"droplet_ring_r_mul",    a.dropletRingRMul);
+        a.dropletRingBigFrac = getF(S, L"droplet_ring_big_frac", a.dropletRingBigFrac);
+        a.dropletCoalesce  = getF(S, L"droplet_coalesce",   a.dropletCoalesce);
+        a.dropletCoalesceS = getF(S, L"droplet_coalesce_s", a.dropletCoalesceS);
         a.conserveMass     = getF(S, L"conserve_mass",  a.conserveMass);
         a.spawnGrowS       = getF(S, L"spawn_grow_s",   a.spawnGrowS);
         a.dissolveS        = getF(S, L"dissolve_s",     a.dissolveS);
@@ -1694,6 +1698,10 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
+        putF(S, L"droplet_ring_r_mul", a.dropletRingRMul, 3);
+        putF(S, L"droplet_ring_big_frac", a.dropletRingBigFrac, 3);
+        putF(S, L"droplet_coalesce", a.dropletCoalesce, 3);
+        putF(S, L"droplet_coalesce_s", a.dropletCoalesceS, 3);
         putF(S, L"conserve_mass", a.conserveMass, 3);
         putF(S, L"spawn_grow_s", a.spawnGrowS, 3);
         putF(S, L"dissolve_s", a.dissolveS, 3);

@@ -2612,6 +2612,31 @@ void FluidRenderer::UpdateVelocityReadback() {
     m_velPending = true;
 }
 
+// DIAGNOSTIC ONLY -- see the declaration in fluid.h. Read-only.
+void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"w") != 0 || !f) return;
+    fprintf(f, "# t=%.3f w=%d h=%d simW=%d simH=%d\n",
+            m_time, m_width, m_height, m_simW, m_simH);
+    fprintf(f, "kind,i,x,y,r,wgt,vx,vy,extra\n");
+    for (size_t i = 0; i < m_acidBlobs.size(); i++) {
+        const AcidBlob& b = m_acidBlobs[i];
+        fprintf(f, "blob,%d,%.6f,%.6f,%.6f,%.4f,%.6f,%.6f,%d\n",
+                (int)i, b.x, b.y, b.baseR, b.wgt, b.vx, b.vy, b.kind);
+    }
+    for (size_t i = 0; i < m_acidDrops.size(); i++) {
+        const AcidDrop& d = m_acidDrops[i];
+        fprintf(f, "drop,%d,%.6f,%.6f,%.6f,%.4f,%.6f,%.6f,%d\n",
+                (int)i, d.x, d.y, d.r, d.gate, d.vx, d.vy, d.kind * 10 + d.ring);
+    }
+    for (int y = 0; y < kVelH; y++)
+        for (int x = 0; x < kVelW; x++)
+            fprintf(f, "vel,%d,%d,%d,0,0,%.6f,%.6f,0\n", y * kVelW + x, x, y,
+                    m_velCpu[((size_t)y * kVelW + x) * 2 + 0],
+                    m_velCpu[((size_t)y * kVelW + x) * 2 + 1]);
+    fclose(f);
+}
+
 void FluidRenderer::StepAcidBlobs(float dt) {
     const LiquidAcidConfig& a = m_cfg.acid;
     const int n = (int)m_acidBlobs.size();
@@ -2833,9 +2858,24 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         b.y += b.vy * dt;
 
         // wrap (population stays constant; no respawn churn)
-        const float m = fmaxf(a.wrapMargin, 0.02f);
-        if (b.x < -m)        b.x += 1.0f + 2.0f * m;
-        if (b.x > 1.0f + m)  b.x -= 1.0f + 2.0f * m;
+        // CONSERVATION (brief S). wrap_margin is 0.20 by default, but a big
+        // disc's FIELD reaches baseR * support_scale ~ 0.4 in uv-x: at
+        // x = -0.20 it still covers the left fifth of the frame, and the wrap
+        // teleported it to x = +1.20 where it instantly covered the right
+        // fifth. A large mass -- an oil disc, or a black HOLE -- vanished from
+        // one edge and appeared at the other in a single frame. Measured on
+        // acid-rise-12: blob x ran -0.139..1.149 with support_x up to 0.365,
+        // so every side-drifting blob did this. Under conserve_mass the wrap
+        // margin is at least the blob's own support reach, so the field is
+        // clear of the frame on both sides of the teleport and nothing pops.
+        // The support radius is in p-units (y); uv-x is that over the aspect.
+        const float supOut = b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
+        const bool  cons   = (a.conserveMass > 0.5f);
+        const float m  = fmaxf(a.wrapMargin, 0.02f);
+        const float mx = cons ? fmaxf(m, supOut / fmaxf(aspect, 1e-4f) + 0.02f) : m;
+        const float my = cons ? fmaxf(m, supOut + 0.02f) : m;
+        if (b.x < -mx)        b.x += 1.0f + 2.0f * mx;
+        if (b.x > 1.0f + mx)  b.x -= 1.0f + 2.0f * mx;
         // rise_respawn: a blob that has climbed clear of the TOP re-enters
         // BELOW the bottom edge, at a fresh x and a fresh radius from its own
         // kind's range, instead of reappearing at the same x with the same
@@ -2851,7 +2891,6 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // past that the blob cannot move any isoline. For the small kinds this
         // is a SHORTER trip than the old margin+baseR, so the on-screen
         // population does not thin out.
-        const float supOut = b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
         const bool respawnMode = (a.riseSpeed > 1e-6f && a.riseRespawn);
         if (respawnMode && b.y < -supOut) {
             auto rf = [&]() {
@@ -2872,8 +2911,8 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             b.s1 = rf() * 6.2831853f;
             b.s2 = rf() * 6.2831853f;
         } else if (!respawnMode) {
-            if (b.y < -m)        b.y += 1.0f + 2.0f * m;
-            if (b.y > 1.0f + m)  b.y -= 1.0f + 2.0f * m;
+            if (b.y < -my)        b.y += 1.0f + 2.0f * my;
+            if (b.y > 1.0f + my)  b.y -= 1.0f + 2.0f * my;
         }
         // In respawn mode the y wrap is off entirely: a blob is parked past
         // 1+m on purpose and has to climb back in. A hard ceiling on how far
@@ -2955,7 +2994,24 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     int target = a.droplets;
     if (target > kAcidMaxDrops) target = kAcidMaxDrops;
     if (target <= 0) {
-        if (!m_acidDrops.empty()) m_acidDrops.clear();
+        // CONSERVATION: turning the population off from the settings window
+        // used to delete 1500 visible droplets in one frame. Shrink them away
+        // over dissolve_s instead; the upload path keeps drawing them (their
+        // grid does not move) until the last one is gone.
+        if (!m_acidDrops.empty()) {
+            if (a.conserveMass > 0.5f && dt > 0.0f) {
+                const float k0 = 1.0f - expf(-dt / fmaxf(a.dissolveS, 0.34f));
+                bool any = false;
+                for (size_t i = 0; i < m_acidDrops.size(); i++) {
+                    AcidDrop& d = m_acidDrops[i];
+                    d.rt = 0.0f;
+                    d.r -= d.r * k0;
+                    if (d.r > 1e-5f) any = true; else d.r = 0.0f;
+                }
+                if (any) return;
+            }
+            m_acidDrops.clear();
+        }
         m_dropletSeededFor = -1;
         return;
     }
@@ -2976,6 +3032,16 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // this sim changes size or membership discontinuously.
     const float tau   = 0.34f;
     const float relax = 1.0f - expf(-dt / tau);
+    // CONSERVATION (brief S): the one relaxation time above makes a droplet
+    // appear, and disappear, in about a third of a second. That is a pop at a
+    // visible size in the open. conserve_mass gives BIRTH and DEATH their own
+    // (much longer) times, so a new droplet spends its first seconds below the
+    // resolvable floor and swells into view, and one dying of old age fades
+    // out over seconds. Coalescence keeps the 0.34 s: pouring into a
+    // neighbour is a transfer, not a disappearance, and it should stay quick.
+    const bool  cons     = (a.conserveMass > 0.5f);
+    const float growTau  = (cons && a.spawnGrowS > 0.01f) ? a.spawnGrowS : tau;
+    const float dieTau   = (cons && a.dissolveS  > 0.01f) ? a.dissolveS  : tau;
     const float mrelax = 1.0f - expf(-dt / 0.18f);   // merge centre pull
     const float life  = a.dropletLife;
     // oil_viscosity, droplet side: a slower velocity relaxation (so a droplet
@@ -3037,6 +3103,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             out.x = x; out.y = y;
             out.r = 0.0f;                                  // born at nothing
             out.rt = drawR();
+            out.tauR = growTau;                            // see growTau above
             out.kind = kind;
             out.mergeTo = -1;
             // HOLLOW or solid, and doubled or not: both are drawn ONCE, here,
@@ -3072,6 +3139,19 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // Nucleating 1500 droplets at ~40/s would leave the first 40 s bare, so
     // the initial condition is drawn in one go, at full radius and with
     // staggered ages so they do not all reach droplet_life together.
+    if (m_dropletSeededFor != target && cons && m_dropletSeededFor > 0
+        && !m_acidDrops.empty()) {
+        // CONSERVATION: moving the "droplets" slider used to clear the field
+        // and re-seed the whole population at full radius -- 1500 droplets
+        // vanishing and 1500 appearing in one frame. Retire only the surplus,
+        // by shrinking it, and let the emitter grow any shortfall in.
+        int seen = 0;
+        for (size_t i = 0; i < m_acidDrops.size(); i++) {
+            if (m_acidDrops[i].rt <= 0.0f) continue;
+            if (++seen > target) { m_acidDrops[i].rt = 0.0f; m_acidDrops[i].tauR = dieTau; }
+        }
+        m_dropletSeededFor = target;
+    }
     if (m_dropletSeededFor != target) {
         m_dropletRng = (g_randSeed ? (g_randSeed * 2246822519u) ^ 0xD407u : GetTickCount()) | 1u;
         m_acidDrops.clear();
@@ -3136,7 +3216,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
         // Stranded on the wrong side for good (the oil moved away): dissolve
         // it. Never delete it outright -- that is exactly the one-frame pop
         // the procedural swarm had.
-        if (d.out > 1.2f) d.rt = 0.0f;
+        if (d.out > 1.2f) { d.rt = 0.0f; d.tauR = dieTau; }
 
         // merge pull: the absorbed droplet's centre slides into the survivor
         if (d.mergeTo >= 0 && d.mergeTo < n) {
@@ -3217,10 +3297,66 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             d.gate = g * sp2 * sp2 * (3.0f - 2.0f * sp2);
         }
 
-        if (life > 0.5f && d.age > life) d.rt = 0.0f;
-        // off the frame: dissolve there, never inside the visible area
-        if (d.x < -0.04f || d.x > 1.04f || d.y < -0.04f || d.y > 1.04f) d.rt = 0.0f;
-        d.r += (d.rt - d.r) * relax;
+        if (life > 0.5f && d.age > life) { d.rt = 0.0f; d.tauR = dieTau; }
+        // ---- off the frame ------------------------------------------------
+        // THE BUG BEHIND "why is the motion randomly grouping in this spot"
+        // (user, 2026-09-18, phone video of acid-rise-12 on the panel).
+        // Kind 0 droplets ride the RISING oil, so they all leave across the
+        // TOP and were killed there -- while their replacements were
+        // nucleated UNIFORMLY over the whole frame. A uniform volumetric
+        // source with an absorbing boundary at one end is the textbook recipe
+        // for a linear density ramp toward that end, and that is exactly what
+        // the sim produced: measured over 19 samples of a 300 s headless run,
+        // the visible kind-0 droplets per tenth of the frame ran
+        //   75 78 73 71 62 61 50 40 24 9   (top -> bottom)
+        // -- an 8.5x pile-up in the top band, permanently. The blobs, which
+        // DO re-enter (rise_respawn), were flat over the same run.
+        // The fix is the conservation rule: a droplet that leaves the frame
+        // re-enters from the opposite edge with its own size, ring and seed
+        // intact, exactly as the blobs do. No source, no sink, no ramp.
+        if (cons) {
+            const float kM = 0.06f;      // safely past the droplet's support
+            bool wrapped = false;
+            if (d.y < -kM)             { d.y += 1.0f + 2.0f * kM; wrapped = true; }
+            else if (d.y > 1.0f + kM)  { d.y -= 1.0f + 2.0f * kM; wrapped = true; }
+            if (d.x < -kM)             { d.x += 1.0f + 2.0f * kM; wrapped = true; }
+            else if (d.x > 1.0f + kM)  { d.x -= 1.0f + 2.0f * kM; wrapped = true; }
+            if (wrapped) {
+                // Land it on the right side of the interface before it drifts
+                // back into view -- a kind 0 droplet must re-enter INSIDE the
+                // oil and a kind 1 one on open ink, or the confinement term
+                // would strand and dissolve it on the way in. The search runs
+                // ALONG the edge it re-entered from, so the re-entry point
+                // stays off-frame and is never visible.
+                const float want = (d.kind == 0) ? 1.0f : -1.0f;
+                float f3, gx3, gy3, o1, o2;
+                AcidFieldAt(d.x, d.y, aspect, f3, gx3, gy3, o1, o2);
+                float gl3 = sqrtf(gx3 * gx3 + gy3 * gy3) + 1e-6f;
+                if (((f3 - thresh) / gl3) * want < d.r) {
+                    const bool alongX = (d.y < 0.0f || d.y > 1.0f);
+                    for (int tr = 0; tr < 24; tr++) {
+                        const float c = rf();
+                        const float tx3 = alongX ? c : d.x;
+                        const float ty3 = alongX ? d.y : c;
+                        AcidFieldAt(tx3, ty3, aspect, f3, gx3, gy3, o1, o2);
+                        gl3 = sqrtf(gx3 * gx3 + gy3 * gy3) + 1e-6f;
+                        if (((f3 - thresh) / gl3) * want > d.r) {
+                            d.x = tx3; d.y = ty3; break;
+                        }
+                    }
+                }
+                // Fresh grace on the confinement counter and no inherited
+                // momentum from the far edge. Its AGE is deliberately kept:
+                // resetting it would make wrapping droplets immortal and the
+                // droplet_life turnover would stop.
+                d.out = 0.0f; d.vx = 0.0f; d.vy = 0.0f;
+            }
+        } else {
+            // off the frame: dissolve there, never inside the visible area
+            if (d.x < -0.04f || d.x > 1.04f || d.y < -0.04f || d.y > 1.04f) d.rt = 0.0f;
+        }
+        d.r += (d.rt - d.r) * ((d.tauR > 1e-3f)
+                               ? (1.0f - expf(-dt / d.tauR)) : relax);
         if (!(d.r > 0.0f)) d.r = 0.0f;              // NaN guard
         if (!(d.x > -10.0f && d.x < 10.0f)) { d.x = 0.5f; d.rt = 0.0f; d.r = 0.0f; }
         if (!(d.y > -10.0f && d.y < 10.0f)) { d.y = 0.5f; d.rt = 0.0f; d.r = 0.0f; }
@@ -3342,12 +3478,15 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                                           + cosf(ang) * (rMax + rr) * 1.25f / aspect;
                                     sat.y = m_acidDrops[bi].y + sinf(ang) * (rMax + rr) * 1.25f;
                                     sat.r = 0.0f; sat.rt = rr;
+                                    sat.tauR = growTau;   // a pinch-off swells in too
                                     sat.kind = m_acidDrops[bi].kind; sat.mergeTo = -1;
                                     satellites.push_back(sat);
                                 }
                             }
                             m_acidDrops[bi].rt = rn;
+                            m_acidDrops[bi].tauR = tau;    // coalescence stays quick
                             m_acidDrops[sm].rt = 0.0f;
+                            m_acidDrops[sm].tauR = tau;
                             m_acidDrops[sm].mergeTo = bi;
                             continue;
                         }
@@ -3397,9 +3536,19 @@ void FluidRenderer::StepAcidDroplets(float dt) {
         std::vector<int> remap(m_acidDrops.size(), -1);
         std::vector<AcidDrop> keep;
         keep.reserve(m_acidDrops.size());
+        // dissolve_s stretches a death from a third of a second to seconds, so
+        // the array would fill with droplets that have long since gone under
+        // the contribution gate -- dead weight in an O(blobs) per droplet loop.
+        // The gate is EXACTLY zero below 0.35 of the resolvable floor (see the
+        // sp2 ramp in the motion loop), so anything under that is retired at
+        // once and nothing can pop.
+        const float pxY0 = 1.0f / fmaxf((float)m_height, 1.0f);
+        const float retireR = cons
+            ? 0.34f * fmaxf(1.2f * pxY0, 1.6f * fmaxf(a.rimWidth, 1e-5f))
+            : rMin * 0.08f;
         for (size_t i = 0; i < m_acidDrops.size(); i++) {
             const AcidDrop& d = m_acidDrops[i];
-            if (d.rt <= 0.0f && d.r < rMin * 0.08f) continue;   // gone, invisibly
+            if (d.rt <= 0.0f && d.r < retireR) continue;        // gone, invisibly
             remap[i] = (int)keep.size();
             keep.push_back(d);
         }

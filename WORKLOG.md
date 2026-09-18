@@ -1097,6 +1097,60 @@ after (see OIL-REVIEW.md for the oil PoC review + recommendation).
 
 - **WORKLOG: popdetect hysteresis, and why the 334 pops were the instrument (Sonnet executor, 2026-09-17, 6bc9a11).** Docs-only recap, no code or render changes. Every one of the "appeared hole" components the strict oil/hole classifier (`R>150` oil, `max(R,G,B)<40` hole) counted between two consecutive 1440p frames turned out to be a single near-black pixel drifting ~3% across the hard cut at 40 -- not a droplet, not visible, sitting in the dim thin-edge band rather than on any particle, which also explains why the count scaled with resolution (more pixels near the boundary, not smaller droplets). `tools/popdetect.py` now only counts a component as appeared/vanished if it does not overlap the previous frame's LOOSE mask (hole < 70, oil > 120 instead of < 40 / > 150) -- i.e. those pixels were not even close to being a hole/oil before. On the existing 1440p 10-frame series this took the strict pop count of 334 down to 0 with hysteresis (a second series measured 1, 4 px) while jumpy band px held at 2285 (down 25% from 3047 pre the 7f0188d ring fix). No sim change: there was no popping to fix, only a measurement artefact to stop counting. The one real remaining instability, band jitter, is addressed next in 8b82ad5.
 
+- **[ink] tonemap / tone_chroma / tint_hue_blend, and the 240 Hz cap (Fable executor, 2026-09-17, branch ink-tonemap).**
+  Cause of "the colours are compressed": the parity-plus HDR gain keys on RAW DYE INTENSITY
+  (`gain = lerp(1, peakGain, smoothstep(knee, capBright, m)^2)`), and the ink look feeds it
+  `m = d * hdr_core * motion`. With the shipped `hdr_core` 0.3 and `[hdr] knee` 0.70, `m` maxes
+  at 0.405 and the smoothstep is identically ZERO: the ink look used **none** of the panel's
+  headroom, whatever `peak_nits` said. Measured, `ink-duo-pour-teal-vermillion.ini` 960x540
+  t=60: max **228 nits**, 0.00% of the frame above SDR white (240), on a 1000-nit peak.
+  New keys, all inert at their defaults (`tonemap` 0): `tonemap` 0|1, `white_nits` (0 = today's
+  SDR white), `black_nits` 0, `tone_knee` 0..1, `tone_chroma` 1, `tint_hue_blend` 0. With
+  tonemap=1 the ink composite's own 0..1 range is mapped onto [black, white] nits with an
+  optional smoothstep S (mid slope 1.5x = "more steps of brightness"), hue-preserving, and the
+  parity-plus gain is RETARGETED above the new white so hot moving cores still climb to
+  `peak_nits`. `peak_nits` (ini or tray CMD_PEAK_*) is the ceiling and now also pulls `white_nits`
+  down when it is set lower, so the tray peak menu works for ink.
+  `tone_chroma` is `post_chroma`'s math, deliberately NOT clamped at 0 — with `gamut` > 0 the
+  out-of-gamut components are negative on purpose and the QD-OLED shows them.
+  Why vermillion read as pale peach, at source: the duotone pair is cross-faded per pixel by
+  `tk` in RGB, and teal (0.04,0.63,0.65) -> vermillion (0.90,0.27,0.15) crosses (0.47,0.45,0.40),
+  a dead beige, which is where most of a plume lives. Two fixes tried; the SHIPPED one is the
+  existing `tint_mid_dip` (0.50 on the three duo presets) which routes the midpoint through the
+  BACKGROUND instead of through grey. `tint_hue_blend` (restore the blend's S/V to the anchors',
+  hue untouched) is implemented but ships at 0: it produced vivid green speckle wherever the
+  RGB path is briefly green-dominant. Walking the HUE WHEEL instead was tried and rejected
+  outright - teal -> vermillion the short way is a trip through green and yellow, which turns a
+  duotone into a tricolour (`build2/shots/inktone/a400-hdr.png`).
+  240 Hz: TWO causes, one ours. (a) `Present(1, 0)` is vsynced and the software FPS cap's wait
+  has a ~2 ms floor, so a loop asking for 240 fps on a 240 Hz panel (4.17 ms vblank) sleeps
+  straight past the vblank it aimed at and vsync rounds the miss up to a whole extra refresh -
+  a hard 120 fps, exactly the analyzer's 121. FIXED: the software cap is skipped when the
+  requested limit is at or above `MonitorRefreshHz()`, with a 1 ms floor left in so an occluded
+  Present cannot become a busy spin. (b) the frame itself costs more than 4.17 ms at 1440p, so
+  240 is out of reach anyway: headless 60 s at 2560x1440, ink **5.65 ms/frame** (tonemap off) /
+  **5.61** (on, so the curve is free), WE fluid **6.01**. Achievable vsynced rates are 240/n, so
+  the ink look lands on 120 until the frame drops under 4.17 ms. Not chased - the brief scoped
+  this to caps in our code, not a perf pass.
+  Nits at t=60, `ink-duo-pour-teal-vermillion.ini` 960x540 seed 1234 --hdr on (bins are % of
+  frame, max channel):
+
+  | | min | mean | max | <1 | 1-5 | 5-15 | 15-40 | 40-80 | 80-160 | 160-240 | 240-400 | 400+ |
+  |---|---|---|---|---|---|---|---|---|---|---|---|---|
+  | before (tonemap 0) | 1.5 | 26.7 | 228 | 0.00 | 5.86 | 16.95 | 20.72 | 8.31 | 20.77 | 27.38 | 0.00 | 0.00 |
+  | SHIPPED (white 400 + mid_dip) | 1.3 | 35.2 | 400 | 0.00 | 10.01 | 34.32 | 4.77 | 4.50 | 5.79 | 6.35 | 28.61 | 5.63 |
+  | white 600 (no mid_dip) | 2.0 | 70.6 | 600 | 0.00 | 2.84 | 12.20 | 10.99 | 7.09 | 6.03 | 5.03 | 12.45 | 43.36 |
+  | white 1000 (no mid_dip) | 3.4 | 117.6 | 1000 | 0.00 | 0.57 | 7.62 | 13.61 | 5.79 | 7.65 | 3.31 | 5.63 | 55.82 |
+
+  Fraction of the frame above SDR white: 34.2% at 400 (shipped), 55.8% at 600, 61.5% at 1000 --
+  USER DECISION, and an ABL one: the panel does ~418 nits full-field, so 600 and 1000 mostly buy
+  a dimmer whole frame. Acid look for comparison (`acid-rise-12.ini`, same shot, `peak_nits` 1000):
+  max **293 nits**, mean 20.6, 11.1% above SDR white -- it does not reach peak either, but unlike
+  ink it at least uses some headroom. NOT changed, per the brief.
+  Also new: `--shot` logs a 10-bin nits histogram (fixed edges, comparable run to run) next to the
+  existing mean/max line. Regression: `we-look-live.ini` 60 s 2560x1440 seed 1234 --hdr on md5
+  **10E36EBF1A74EDFE609065D757300054** -- PASS, the fluid look is byte-identical.
+
 - **Verification: oil_edge_mode ship + band-jitter cause fix (Sonnet executor, 2026-09-17, 8b82ad5).** Rote re-check, no code changes; another Opus executor was working in `src/` at the time, so the rebuild was only done after confirming `git status --short` showed src/ clean. `build2\FluidWallpaper.exe` timestamped 22:21:49 predates 8b82ad5's commit time (22:28:56) by ~7 min; `git status` was clean and `build2.cmd FluidWallpaper` reported `ninja: no work to do` (the nested `cmd /c` quoting also threw a harmless `'vswhere.exe' is not recognized` but did not block the no-op build) -- the binary already matched HEAD, build-then-commit ordering as usual, no source files newer than the exe.
   Fix recap: `lensR` (the film-thickness proxy driving the soft edge's fade width) now reads the blob-only gradient wherever that gradient is credible -- near a blob isoline, exactly where the band lives and where a droplet passing through was spiking `|grad|` and jumping the band width frame to frame -- and falls back to the full gradient deep inside a merged mass where the blob-only gradient goes to zero and would otherwise pin `lensR` to its ceiling and turn the oil black. `oil_edge_mode` (0 soft / 1 crisp) ships both film edges as a key: acid-rise-12/-rotate and both "Liquid Acid - rising" presets take mode 1 (crisp); "...(soft film edge).ini" carries mode 0, one tray click from the old look.
   md5 regression (`we-look-live.ini` 60 s 2560x1440): **PASS**, `10e36ebf1a74edfe609065d757300054` matches the expected 10E36EBF1A74EDFE609065D757300054.

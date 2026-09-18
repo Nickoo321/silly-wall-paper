@@ -195,3 +195,8 @@ T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's B
    pastel (bioluminescent colonies, cream discs on dark agar); (4) optional instrument UI marks
    (frame lines, tiny markers, no text) -- only as a separate preset, "it should still be the oil".
    Replaces the CineStill/eyepiece reading above where they differ; halation stays as bloom.
+   T note (user 19:05): "what's in focus is EXTREMELY in focus" -- the dreaminess is bloom, haze and
+   out-of-focus depth, NOT global softness. The focused slice must be razor sharp (crisp edges, visible
+   texture/grain detail), so the global post_blur_px should drop to ~0 once N+R's per-element depth of
+   field lands, and all blur comes from depth (out-of-focus elements very soft, in-focus ones sharper
+   than today). Sharp + bloom, not soft + bloom.

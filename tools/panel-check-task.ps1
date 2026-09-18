@@ -6,12 +6,13 @@
 # FluidWallpaper never sees them (and a shadow copy then MASKS the real file for later reads).
 # A scheduled task runs as the plain interactive user, so the swap, backup and preset install are real.
 # Output: build2\shots\panel-check.log (written by panel-check.ps1). Task is unregistered afterwards.
-param([string]$Ini = "", [switch]$Restore, [switch]$InstallPresets)
+param([string]$Ini = "", [switch]$Restore, [switch]$InstallPresets, [string]$Exe = "")
 $root   = Split-Path -Parent $PSScriptRoot
 $script = Join-Path $root "tools\panel-check.ps1"
 $a = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
 if ($Restore) { $a += " -Restore" } elseif ($Ini) { $a += " -Ini `"$Ini`"" } else { Write-Host "usage: -Ini <path> [-InstallPresets] | -Restore"; exit 1 }
 if ($InstallPresets) { $a += " -InstallPresets" }
+if ($Exe) { $a += " -Exe `"$Exe`"" }
 $name = "FluidPanelCheckOnce"
 $action    = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $a
 $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited

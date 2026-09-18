@@ -683,6 +683,30 @@ struct PostConfig {
     float postGlowPx = 10.0f;       // its radius, px at 1440p            post_glow_px
     float postGlowDark = 0.5f;      // 0..1 lean the glare to the dark side post_glow_dark
 
+    // --- FILM OVERLAY ARTEFACTS (kPostSrc) --------------------------------
+    // What the user meant by "macro-ish cellulose noise" the second time
+    // round: the artefacts of a projected or scanned FILM -- hairs caught in
+    // the gate, dust, fine scratches, the odd light leak. Procedural (no
+    // textures), authored at 1440p and scaled with the frame, additive and
+    // weighted toward the DARK pixels ("the black oil more than the oil"), so
+    // the bright film keeps its colour. The population CHANGES: specks
+    // flicker at 24 fps, a hair sticks for a few seconds then is gone, a
+    // scratch persists for a stretch then drifts away -- every artefact's
+    // seed is hashed from floor(time / rate), so nothing sits still.
+    // "A very very subtle thing" (the user): ship values are barely there.
+    float filmDust      = 0.0f;   // 0..1 how many specks        film_dust
+    float filmHairs     = 0.0f;   // 0..1 chance of a hair       film_hairs
+    float filmScratches = 0.0f;   // 0..1 chance of a scratch    film_scratches
+    float filmLeak      = 0.0f;   // 0..1 edge light leak        film_leak
+    float filmArtefactRate = 5.0f;// s per population       film_artefact_rate
+    // A SECOND, finer and faster noise layer under the coarse grain: the
+    // emulsion's own fizz as against the stock's grain structure. Mono.
+    float filmNoise     = 0.0f;   // 0..1 amount                 film_noise
+    float filmNoiseSize = 1.0f;   // px at 1440p            film_noise_size
+    // A stock's own colour: lifted teal shadows, warm highlights, slightly
+    // different curve per channel (the cross-process feel). Applied last,
+    // after every artefact, just before the frame leaves the pass.
+    float filmStock     = 0.0f;   // 0..1                        film_stock
 };
 
 struct MirrorConfig {

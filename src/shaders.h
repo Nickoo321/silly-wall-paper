@@ -2134,10 +2134,12 @@ R"hlsl(
 static const char* kPostSrc = R"hlsl(
 cbuffer PostPassCB : register(b0) {
     float4 pp0;   // x 1/W        y 1/H        z blurPx (this res) w glow
-    float4 pp1;   // x glowPx     y grain      z grainSize          w grainSpeed
+    float4 pp1;   // x glowPx     y grain      z grainSize(this res) w grainSpeed
     float4 pp2;   // x grainColor y time       z sdrScale           w glowDark
-    float4 pp3;   // spare
-    float4 pp4, pp5, pp6, pp7;
+    float4 pp3;   // x dust       y hairs      z scratches          w leak
+    float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
+    float4 pp5;   // x stock      y -          z -                  w -
+    float4 pp6, pp7;
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2168,6 +2170,24 @@ float3 ToLinear(float3 c) {
     float3 lo = c / 12.92;
     float3 hi = pow((c + 0.055) / 1.055, 2.4);
     return lerp(lo, hi, step(0.04045, c));
+}
+// ONE noise layer, applied exactly the way the display pass applies its own
+// grain: in an sRGB-ENCODED proxy of the pixel, luminance-weighted (the mids
+// and darks carry it, the peaks stay clean, a true-black pixel gets only a
+// whisper), converted back to linear and scaled by whatever HDR gain this
+// pixel carries so it never fizzes on a hot core. Shared by the coarse film
+// grain and the finer, faster film_noise.
+float3 Emulsion(float3 d, float3 nz, float amt, float sdr) {
+    const float3 EW = float3(0.2126, 0.7152, 0.0722);
+    float3 base = d / sdr;
+    float3 e    = ToSRGB(base);
+    float  lum  = dot(e, EW);
+    float  w    = (1.0 - smoothstep(0.55, 1.00, lum))
+                * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
+    float3 e2   = max(e + (nz - 0.5) * (amt * 0.5 * w), 0.0);
+    float3 l0   = ToLinear(e), l2 = ToLinear(e2);
+    float  gain = clamp(dot(base, EW) / max(dot(l0, EW), 1e-4), 1.0, 16.0);
+    return max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
 }
 
 // Uniform disc, 19 taps (centre + 6 at r/2 + 12 at r): the circle of confusion
@@ -2237,6 +2257,141 @@ float4 PSMain(VSOut i) : SV_Target {
     // the pixel and the resulting linear delta is scaled by whatever gain the
     // pixel carries, so the grain reads the same in the SDR mids and never
     // fizzes on a hot HDR core.
+    // ---- FILM OVERLAY ARTEFACTS -----------------------------------------
+    // Hairs caught in the gate, dust, fine scratches and the odd light leak.
+    // Everything is authored in px at 1440p (P below) and is therefore the
+    // same size relative to the picture at any output resolution, and
+    // everything is ADDITIVE and weighted toward the DARK pixels: a speck on
+    // the black is a little star, the same speck on the film is nothing.
+    //
+    // Nothing sits still. Each artefact's seed is hashed from a QUANTISED
+    // time -- floor(t / rate) for the hairs, slower multiples of it for the
+    // scratches and the leak, the 24 fps "film frame" for the dust -- so the
+    // dust flickers frame to frame, a hair sticks for a few seconds and is
+    // gone, and a scratch persists for a stretch, drifts and disappears.
+    [branch] if (pp3.x > 0.0005 || pp3.y > 0.0005 ||
+                 pp3.z > 0.0005 || pp3.w > 0.0005) {
+        float  sc  = max(pp4.w, 1e-4);
+        float2 P   = i.pos.xy / sc;                       // px at 1440p
+        float  Hy  = 1440.0;
+        float  Wx  = 1440.0 * (pp0.y / max(pp0.x, 1e-9)); // frame width, same units
+        float  t   = pp2.y;
+        float  per = max(pp4.x, 0.25);
+        float  ff  = floor(t * 24.0);                     // the film frame
+        float3 add = float3(0.0, 0.0, 0.0);
+
+        // DUST: sparse bright points 1-3 px across at 1440p, a new population
+        // every film frame. A cell of a coarse grid may carry one speck,
+        // placed well inside it so a single-cell lookup is exact.
+        [branch] if (pp3.x > 0.0005) {
+            const float CELL = 42.0;
+            float2 cid = floor(P / CELL);
+            float2 fp  = P - cid * CELL;
+            float  h0  = PHash21(cid * 1.7 + frac(ff * 0.0371) * 511.0);
+            [branch] if (h0 > 1.0 - 0.10 * saturate(pp3.x)) {
+                float  h1 = PHash21(cid + 19.3 + h0 * 37.0);
+                float  h2 = PHash21(cid + 71.9 + h0 * 11.0);
+                float  h3 = PHash21(cid + 3.71 + h0 * 53.0);
+                float2 ct = float2(0.2 + 0.6 * h1, 0.2 + 0.6 * h2) * CELL;
+                float  r  = 0.6 + 1.4 * h3;
+                float  dd = length(fp - ct) / r;
+                add += (0.30 * saturate(pp3.x) * (0.35 + 0.65 * h3))
+                     * exp(-dd * dd * 1.6);
+            }
+        }
+        // HAIRS: three slots, each either empty or carrying one curly strand
+        // for this reel. The strand is the set of points a fixed distance
+        // from a wobbling line (two sines in the along-strand coordinate),
+        // with the distance divided by sqrt(1 + slope^2) so the hair keeps
+        // its thickness through every curl.
+        [branch] if (pp3.y > 0.0005) {
+            float tq  = floor(t / per);
+            float ph  = frac(t / per);
+            float env = smoothstep(0.0, 0.12, ph) * (1.0 - smoothstep(0.78, 1.0, ph));
+            [unroll] for (int k = 0; k < 3; k++) {
+                float fk = (float)k;
+                float s0 = PHash21(float2(tq * 1.13 + 5.7, fk * 9.31 + 2.1));
+                if (s0 > saturate(pp3.y)) continue;
+                float2 C  = float2(PHash21(float2(tq + 3.3, fk * 7.7)) * Wx,
+                                   PHash21(float2(tq + 7.1, fk * 5.9)) * Hy);
+                float  an = PHash21(float2(tq + 11.3, fk * 2.7)) * 6.2831853;
+                float  L  = 30.0 + 120.0 * PHash21(float2(tq + 17.9, fk * 4.1));
+                float2 dr = float2(cos(an), sin(an));
+                float2 nr = float2(-dr.y, dr.x);
+                float2 rl = P - C;
+                float  tt = dot(rl, dr);
+                if (abs(tt) > L * 0.5 + 3.0) continue;
+                float  w1 = 0.055 + 0.050 * s0;
+                float  a1 = 3.0 + 6.0 * PHash21(float2(tq + 23.1, fk * 6.3));
+                float  a2 = 5.0 + 9.0 * PHash21(float2(tq + 29.7, fk * 8.7));
+                float  cp = PHash21(float2(tq + 37.3, fk * 1.9)) * 6.2831853;
+                float  cv = a1 * sin(tt * w1 + cp) + a2 * sin(tt * 0.021 - cp * 0.7);
+                float  dv = a1 * w1 * cos(tt * w1 + cp)
+                          + a2 * 0.021 * cos(tt * 0.021 - cp * 0.7);
+                float  ds = abs(dot(rl, nr) - cv) * rsqrt(1.0 + dv * dv);
+                float  wd = 0.6 + 0.6 * PHash21(float2(tq + 41.7, fk * 3.1));
+                // the gate flutters: the strand breathes a little every frame
+                float  jt = (PHash21(float2(ff, fk * 13.1)) - 0.5) * 0.7;
+                float  en = 1.0 - smoothstep(L * 0.40, L * 0.5, abs(tt));
+                add += (1.0 - smoothstep(wd, wd + 1.5, ds + jt)) * en * env
+                     * (0.09 * (0.5 + 0.5 * saturate(pp3.y)));
+            }
+        }
+        // SCRATCHES: four slots on a slower clock, near-vertical, faintly
+        // wavy, drifting sideways, each covering part of the height.
+        [branch] if (pp3.z > 0.0005) {
+            float tq  = floor(t / (per * 3.0));
+            float ph  = frac(t / (per * 3.0));
+            float env = smoothstep(0.0, 0.10, ph) * (1.0 - smoothstep(0.82, 1.0, ph));
+            [unroll] for (int j = 0; j < 4; j++) {
+                float fj = (float)j;
+                float s0 = PHash21(float2(tq * 1.7 + 3.3, fj * 7.1 + 1.3));
+                if (s0 > saturate(pp3.z)) continue;
+                float xc = PHash21(float2(tq + 13.7, fj * 2.9)) * Wx
+                         + (PHash21(float2(tq + 19.1, fj * 5.3)) - 0.5) * 6.0 * t
+                         + 2.0 * sin(P.y * 0.004 + s0 * 6.2831853);
+                float wd = 0.35 + 0.80 * PHash21(float2(tq + 23.3, fj * 3.7));
+                float y0 = PHash21(float2(tq + 29.9, fj * 11.3)) * Hy * 0.6;
+                float y1 = y0 + Hy * (0.35 + 0.65 * PHash21(float2(tq + 31.1, fj * 4.7)));
+                float yv = smoothstep(y0 - 40.0, y0 + 40.0, P.y)
+                         * (1.0 - smoothstep(y1 - 60.0, y1 + 60.0, P.y));
+                add += (1.0 - smoothstep(wd, wd + 1.2, abs(P.x - xc))) * yv * env
+                     * (0.6 + 0.4 * PHash21(float2(ff, fj * 17.3)))
+                     * (0.055 * (0.4 + 0.6 * saturate(pp3.z)));
+            }
+        }
+        // LIGHT LEAK: a COLOURED wash entering from one edge -- a warm core
+        // (red through orange to yellow) with a cool green/teal fringe just
+        // outside it, in soft bands along the edge -- swelling and dying on
+        // its own slow clock, and not returning every time.
+        [branch] if (pp3.w > 0.0005) {
+            float tq  = floor(t / (per * 5.0));
+            float ph  = frac(t / (per * 5.0));
+            float s0  = PHash21(float2(tq * 2.7 + 1.9, 4.21));
+            float on  = step(s0, saturate(pp3.w * 0.8 + 0.2));
+            float env = sin(saturate(ph) * 3.14159265);
+            env = on * env * env;
+            float sd  = PHash21(float2(tq + 5.1, 8.3));
+            float2 q  = float2(P.x / Wx, P.y / Hy);
+            float  u  = (sd < 0.25) ? q.x : ((sd < 0.5) ? 1.0 - q.x
+                      : ((sd < 0.75) ? q.y : 1.0 - q.y));
+            float  v  = (sd < 0.5) ? q.y : q.x;                  // along the edge
+            float  bd = 0.75 + 0.25 * sin(v * 9.0 + t * 0.05 + s0 * 6.2831853)
+                             * sin(v * 3.0 - t * 0.03);
+            float  core = exp(-u * u * 34.0);                    // warm, on the edge
+            float  frng = exp(-(u - 0.16) * (u - 0.16) * 60.0);  // cool, just outside
+            float3 warm = lerp(float3(1.00, 0.22, 0.06), float3(1.00, 0.72, 0.18),
+                               PHash21(float2(tq + 9.7, 2.3)));
+            float3 cool = float3(0.10, 0.85, 0.65);
+            add += (warm * core + cool * (frng * 0.45))
+                 * (bd * env * 0.20 * saturate(pp3.w));
+        }
+        // the whole overlay leans into the dark: near-invisible on the film
+        float sdrA = max(pp2.z, 1e-3);
+        float lumA = dot(ToSRGB(d / sdrA), W);
+        d += add * (sdrA * lerp(0.10, 1.0, 1.0 - smoothstep(0.20, 0.80, lumA)));
+    }
+    // ---- film grain, after the glass ------------------------------------
     [branch] if (pp1.y > 0.0005) {
         float2 gc  = floor(i.pos.xy / max(pp1.z, 0.25));
         float  tq  = floor(pp2.y * 144.0 * max(pp1.w, 0.0));
@@ -2247,16 +2402,40 @@ float4 PSMain(VSOut i) : SV_Target {
             nz = lerp(nz, float3(n0, PHash21(gc + tj + 37.71),
                                      PHash21(gc + tj + 91.37)), saturate(pp2.x));
         }
-        float  sdr  = max(pp2.z, 1e-3);
-        float3 base = d / sdr;                     // 1.0 = SDR white
+        d = Emulsion(d, nz, pp1.y, max(pp2.z, 1e-3));
+    }
+    // ---- film_noise: the finer, faster layer under the stock's grain -----
+    // A new pattern every frame whatever the grain speed, one px at 1440p by
+    // default: the emulsion's fizz as against the stock's grain structure.
+    [branch] if (pp4.y > 0.0005) {
+        float2 nc = floor(i.pos.xy / max(pp4.z, 0.25));
+        float  tq = floor(pp2.y * 144.0);
+        float2 tj = frac(tq * float2(0.0891, 0.1237)) * 557.0;
+        float  n0 = PHash21(nc + tj + 211.7);
+        d = Emulsion(d, float3(n0, n0, n0), pp4.y, max(pp2.z, 1e-3));
+    }
+    // ---- film_stock: the stock's own colour ------------------------------
+    // Lifted teal shadows, warm highlights, a slightly different curve per
+    // channel -- the cross-process feel. Done on the sRGB proxy so it reads
+    // as a grade and not as a gain, and scaled by the pixel's own HDR gain so
+    // a hot core keeps its level. The shadow lift is deliberately tiny: at
+    // the shipped strength it is a fraction of a nit on a black pixel.
+    [branch] if (pp5.x > 0.0005) {
+        float  k    = saturate(pp5.x);
+        float  sdrS = max(pp2.z, 1e-3);
+        float3 base = d / sdrS;
         float3 e    = ToSRGB(base);
-        float  lum  = dot(e, W);
-        float  w    = (1.0 - smoothstep(0.55, 1.00, lum))
-                    * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
-        float3 e2   = max(e + (nz - 0.5) * (pp1.y * 0.5 * w), 0.0);
+        float  l    = dot(e, W);
+        // ...but a pixel that is TRUE BLACK keeps its black: the lift ramps in
+        // from just above zero, so an off OLED pixel stays off and only the
+        // shadows that already carry light get the teal.
+        float3 sh   = float3(-0.004, 0.008, 0.022) * (1.0 - smoothstep(0.0, 0.40, l))
+                    * smoothstep(0.004, 0.060, l);
+        float3 hi   = float3( 0.045, 0.012, -0.030) * smoothstep(0.30, 1.0, l);
+        float3 e2   = max(e + (sh + hi * e) * k, 0.0);
         float3 l0   = ToLinear(e), l2 = ToLinear(e2);
         float  gain = clamp(dot(base, W) / max(dot(l0, W), 1e-4), 1.0, 16.0);
-        d = max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
+        d = max(d + (l2 - l0) * gain * sdrS, min(d, 0.0));
     }
     return float4(d, 1.0);
 }

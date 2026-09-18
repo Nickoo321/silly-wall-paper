@@ -383,6 +383,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.postGlow       = getF(S, L"post_glow", po.postGlow);
         po.postGlowPx     = getF(S, L"post_glow_px", po.postGlowPx);
         po.postGlowDark   = getF(S, L"post_glow_dark", po.postGlowDark);
+        po.filmDust       = getF(S, L"film_dust", po.filmDust);
+        po.filmHairs      = getF(S, L"film_hairs", po.filmHairs);
+        po.filmScratches  = getF(S, L"film_scratches", po.filmScratches);
+        po.filmLeak       = getF(S, L"film_leak", po.filmLeak);
+        po.filmArtefactRate = getF(S, L"film_artefact_rate", po.filmArtefactRate);
+        po.filmNoise      = getF(S, L"film_noise", po.filmNoise);
+        po.filmNoiseSize  = getF(S, L"film_noise_size", po.filmNoiseSize);
+        po.filmStock      = getF(S, L"film_stock", po.filmStock);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1502,6 +1510,14 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"post_glow", po.postGlow, 3);
         putF(S, L"post_glow_px", po.postGlowPx, 1);
         putF(S, L"post_glow_dark", po.postGlowDark, 2);
+        putF(S, L"film_dust", po.filmDust, 3);
+        putF(S, L"film_hairs", po.filmHairs, 3);
+        putF(S, L"film_scratches", po.filmScratches, 3);
+        putF(S, L"film_leak", po.filmLeak, 3);
+        putF(S, L"film_artefact_rate", po.filmArtefactRate, 1);
+        putF(S, L"film_noise", po.filmNoise, 3);
+        putF(S, L"film_noise_size", po.filmNoiseSize, 2);
+        putF(S, L"film_stock", po.filmStock, 3);
     }
     {
         const DropConfig& d = c.drops;

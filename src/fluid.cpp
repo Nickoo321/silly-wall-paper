@@ -915,7 +915,14 @@ void FluidRenderer::RenderDisplay() {
 // ---- [post] image-space camera pass (kPostSrc) ----------------------------
 bool FluidRenderer::PostActive() const {
     const PostConfig& po = m_cfg.post;
-    return m_psoPost && (po.postBlurPx > 0.01f || po.postGlow > 0.0005f);
+    // Any of the image-space effects turns the pass on -- the film overlay
+    // and the second noise layer live in it as much as the defocus does, and
+    // film_stock is applied there too. All default to 0, so style=fluid still
+    // never enters it.
+    return m_psoPost && (po.postBlurPx > 0.01f || po.postGlow > 0.0005f ||
+                         po.filmDust > 0.0005f || po.filmHairs > 0.0005f ||
+                         po.filmScratches > 0.0005f || po.filmLeak > 0.0005f ||
+                         po.filmNoise > 0.0005f || po.filmStock > 0.0005f);
 }
 
 // One FP16 frame-sized texture: RTV slot kFrames*2+1 (after the back buffers,
@@ -996,12 +1003,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[3]  = fminf(fmaxf(po.postGlow, 0.0f), 1.0f);
     c[4]  = fmaxf(po.postGlowPx, 1.0f) * scale;
     c[5]  = fminf(fmaxf(po.filmGrain, 0.0f), 1.0f);
-    c[6]  = fmaxf(po.filmGrainSize, 0.25f);
+    // grain and noise cell sizes are authored in px at 1440p like every other
+    // optical width here, so the same stock reads the same at any output size
+    c[6]  = fmaxf(fmaxf(po.filmGrainSize, 0.25f) * scale, 0.25f);
     c[7]  = fmaxf(po.filmGrainSpeed, 0.0f);
     c[8]  = fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f);
     c[9]  = m_time;
     c[10] = m_sdrScale;
     c[11] = fminf(fmaxf(po.postGlowDark, 0.0f), 1.0f);
+    // the film overlay: population masters, the clock they change on, the
+    // second noise layer, and this frame's 1440p scale (the shader divides
+    // SV_Position by it, so every artefact is authored once, at 1440p)
+    c[12] = fminf(fmaxf(po.filmDust, 0.0f), 1.0f);
+    c[13] = fminf(fmaxf(po.filmHairs, 0.0f), 1.0f);
+    c[14] = fminf(fmaxf(po.filmScratches, 0.0f), 1.0f);
+    c[15] = fminf(fmaxf(po.filmLeak, 0.0f), 1.0f);
+    c[16] = fmaxf(po.filmArtefactRate, 0.25f);
+    c[17] = fminf(fmaxf(po.filmNoise, 0.0f), 1.0f);
+    c[18] = fmaxf(fmaxf(po.filmNoiseSize, 0.25f) * scale, 0.25f);
+    c[19] = fmaxf(scale, 1e-4f);
+    c[20] = fminf(fmaxf(po.filmStock, 0.0f), 1.0f);
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
@@ -1173,7 +1194,10 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
         // grain moves to the post pass on the draws it follows (see kPostSrc)
         m_postGrainDeferred ? 0.0f : fminf(fmaxf(po.filmGrain, 0.0f), 1.0f),
-        fmaxf(po.filmGrainSize, 0.25f),
+        // px at 1440p, scaled with the frame, so the display pass's own grain
+        // is the same stock as the post pass's and neither changes size with
+        // the output resolution
+        fmaxf(fmaxf(po.filmGrainSize, 0.25f) * ((float)(h > 0 ? h : 1) / 1440.0f), 0.25f),
         fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
         fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationPx, 0.0f),
         fminf(fmaxf(po.aberrationField, 0.0f), 2.0f),

@@ -268,3 +268,8 @@ U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen per
    tiny impulse (a bump of the dish -> slight mixing). Implement the rig state once (the camera
    executor's readjust state machine is the natural home) and expose it to the post pass as a block
    of constants that later tasks (V) consume.
+   V MOTION MODEL (user 19:55, confirmed): the rig moves SLIGHTLY and SLOWLY all the time (barely
+   perceptible idle drift, enough for OLED safety), plus OCCASIONAL readjustments where ALL the
+   things move at once (lamp, ghosts, flare, focus, vignette centre) as one eased move with a settle.
+   Never constant visible motion, never a single effect moving alone. Task V is LARGE -- schedule it
+   after the camera executor (N+R) lands, as its own executor.

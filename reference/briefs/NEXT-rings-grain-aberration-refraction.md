@@ -100,3 +100,18 @@ Q. (user 2026-09-18 18:10, "do you see that light, spreads?" on film-overlay-ref
    by itself, a tiny bit, like an idle animation: the bloom's centre/weight/radius drift slowly and
    continuously (slow sine sum, seconds to a minute), never static, never jumping. Keys [post]:
    bloom (0..1, default 0), bloom_px (default ~120), bloom_drift (0..1, default 1). Subtle.
+
+Q (REVISED, user 2026-09-18 18:20): the bloom and the VOLUMETRIC FOG are ONE task. Ref
+   reference/shots/photos/backlit-glass-ref-volumetric.jpg (a glass of cloudy water with a blob, lit by
+   a lamp from below): the water itself glows -- brightest near the lamp, fading with distance -- so the
+   dark side is never pure black near the light but a soft milky murk; the bright film bleeds a wide,
+   weak glow into the dark (the bloom); blobs are lit from the lamp side (brighter toward it, darker
+   away) with a thin refractive rim on the lamp side. Build it as one "light in the water" post effect:
+   an off-view light position (drifts slowly, tiny idle motion, never static -- the user's "idle
+   animation") that drives (a) a distance-falloff haze added into the dark areas, (b) the wide weak
+   bloom from the bright film, (c) a gentle directional shading term on the masses if it can be read
+   from the display pass (optional; the display pass has the isoline normal). Keys [post]: fog (0..1
+   master, default 0), fog_px / fog_reach, bloom (0..1), bloom_px, light_x / light_y (default: below
+   centre, off-frame), light_drift (0..1, default 1). The user: "idk how it would look" -- render
+   three strengths (subtle / medium / strong) for them to pick from; keep OLED true black deep in the
+   dark far from the light (haze must fall to zero, not lift the whole frame).

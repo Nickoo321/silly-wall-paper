@@ -301,3 +301,12 @@ X. DROPLET LENS SHADING (user 2026-09-18 19:30, ref reference/shots/photos/oilwa
    droplet_lens_band, droplet_spec. Ship subtle-medium. Do NOT add blur; the crispness comes from
    the edge, the gradualness from the interior. Separately Fable tightened the DOF ratio by ini
    (dof_max_px 9->5, droplet_depth 0.65->0.35, post_glow 0.35->0.22 @ 10 px).
+
+Y. RACING MICRO-BUBBLES (user 2026-09-18 19:50): "I just saw racing small bubbles -- add more of those,
+   like in water the uber small bubbles that go up: still slowish but considerably faster than the
+   others." A dedicated class: a fraction of the SMALLEST kind-0 droplets are "racers" -- they rise
+   noticeably faster (2-3x the others, still slow in absolute terms), with a tiny lateral zigzag /
+   spiral the way real micro-bubbles wobble, born at the bottom / off-frame and wrapping (conserve
+   rules), never popping in view. Keys [liquid_acid] droplet_racer_frac (default 0; ship ~0.12),
+   droplet_racer_speed (x, ship ~2.5), droplet_racer_wobble (ship ~0.5), droplet_racer_r_max (only
+   droplets below this radius qualify). The existing depth_rise back-layer bonus stays as is.

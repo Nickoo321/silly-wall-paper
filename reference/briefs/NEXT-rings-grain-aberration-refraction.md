@@ -285,3 +285,19 @@ W. DIFFRACTION (user 2026-09-18 19:10, photo reference/shots/panel/2026-09-18-in
    droplets are soft grey dots, medium ones dark with soft edges, only big masses fully black;
    [liquid_acid] diffraction (0..1 master, default 0), diffraction_px. Also the "straight pixeled O":
    in-focus edges at softness 0 are raw coverage AA -> with psf_px >= 1 that never happens.
+
+X. DROPLET LENS SHADING (user 2026-09-18 19:30, ref reference/shots/photos/oilwater-ref-3-green-lens-shading.jpg,
+   panel photo 2026-09-18-medium-clumps-blurry.jpg, screen capture build2/shots/live/2026-09-18-1930.png):
+   "I was thinking of the oil boundary layer -- some mechanics of how it should be gradual -- and it
+   translated to it just being blurry. The ratio of blurry to focused is off." In the ref EVERY droplet,
+   down to 4 px, is CRISP: a thin bright refractive rim (meniscus) just outside the edge, a darker
+   band just inside it, a lighter centre (the droplet is a lens focusing the backlight), a small
+   specular from the lamp, and a gradual radial shading -- gradual INSIDE the droplet, sharp AT the
+   edge. Ours are soft-edged flat fills. Implement per-droplet (and per-mass-edge) lens shading in
+   the display pass: interior radial gradient (centre lift toward the film colour for holes / toward
+   the backlight for oil drops), dark inner band, bright outer meniscus (the existing meniscus keys
+   scaled to droplets with the band floors), a specular offset toward the rig lamp (CameraRig) that
+   moves with it; keys [liquid_acid] droplet_lens (0..1 master, default 0), droplet_lens_centre,
+   droplet_lens_band, droplet_spec. Ship subtle-medium. Do NOT add blur; the crispness comes from
+   the edge, the gradualness from the interior. Separately Fable tightened the DOF ratio by ini
+   (dof_max_px 9->5, droplet_depth 0.65->0.35, post_glow 0.35->0.22 @ 10 px).

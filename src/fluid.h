@@ -707,6 +707,21 @@ struct PostConfig {
     // different curve per channel (the cross-process feel). Applied last,
     // after every artefact, just before the frame leaves the pass.
     float filmStock     = 0.0f;   // 0..1                        film_stock
+
+    // --- LIGHT IN THE WATER (fog + bloom) ---------------------------------
+    // The user's reference: a glass of cloudy water lit by a lamp from below.
+    // One off-view light position drives both a volumetric haze (the water
+    // itself glowing, brightest near the lamp, falling to nothing with
+    // distance and added only into the dark) and a very wide, very weak bloom
+    // from the bright film into the black. The light never sits still: a sum
+    // of slow sines gives the frame an idle animation of its own.
+    float fog        = 0.0f;      // 0..1 haze master                fog
+    float fogPx      = 700.0f;    // 1/e distance, px at 1440p       fog_px
+    float bloom      = 0.0f;      // 0..1 wide wash master           bloom
+    float bloomPx    = 140.0f;    // its radius, px at 1440p         bloom_px
+    float lightX     = 0.5f;      // uv; off-frame below the middle  light_x
+    float lightY     = 1.20f;     //                                 light_y
+    float lightDrift = 1.0f;      // 0..1 idle motion            light_drift
 };
 
 struct MirrorConfig {

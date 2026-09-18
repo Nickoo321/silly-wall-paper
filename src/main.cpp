@@ -391,6 +391,13 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmNoise      = getF(S, L"film_noise", po.filmNoise);
         po.filmNoiseSize  = getF(S, L"film_noise_size", po.filmNoiseSize);
         po.filmStock      = getF(S, L"film_stock", po.filmStock);
+        po.fog            = getF(S, L"fog", po.fog);
+        po.fogPx          = getF(S, L"fog_px", po.fogPx);
+        po.bloom          = getF(S, L"bloom", po.bloom);
+        po.bloomPx        = getF(S, L"bloom_px", po.bloomPx);
+        po.lightX         = getF(S, L"light_x", po.lightX);
+        po.lightY         = getF(S, L"light_y", po.lightY);
+        po.lightDrift     = getF(S, L"light_drift", po.lightDrift);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1518,6 +1525,13 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_noise", po.filmNoise, 3);
         putF(S, L"film_noise_size", po.filmNoiseSize, 2);
         putF(S, L"film_stock", po.filmStock, 3);
+        putF(S, L"fog", po.fog, 3);
+        putF(S, L"fog_px", po.fogPx, 1);
+        putF(S, L"bloom", po.bloom, 3);
+        putF(S, L"bloom_px", po.bloomPx, 1);
+        putF(S, L"light_x", po.lightX, 3);
+        putF(S, L"light_y", po.lightY, 3);
+        putF(S, L"light_drift", po.lightDrift, 3);
     }
     {
         const DropConfig& d = c.drops;

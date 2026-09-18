@@ -2138,8 +2138,9 @@ cbuffer PostPassCB : register(b0) {
     float4 pp2;   // x grainColor y time       z sdrScale           w glowDark
     float4 pp3;   // x dust       y hairs      z scratches          w leak
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
-    float4 pp5;   // x stock      y -          z -                  w -
-    float4 pp6, pp7;
+    float4 pp5;   // x stock      y fog        z bloom              w lightDrift
+    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z lightX       w lightY
+    float4 pp7;
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2257,6 +2258,65 @@ float4 PSMain(VSOut i) : SV_Target {
     // the pixel and the resulting linear delta is scaled by whatever gain the
     // pixel carries, so the grain reads the same in the SDR mids and never
     // fizzes on a hot HDR core.
+    // ---- LIGHT IN THE WATER: volumetric haze + a wide, weak bloom -------
+    // The user's reference is a glass of cloudy water with a lamp under it:
+    // the WATER glows, brightest near the lamp and fading with distance, so
+    // the dark side is never pure black near the light but a soft milky murk,
+    // and the bright film bleeds a very wide, very weak wash into the black.
+    // Both hang off ONE off-view light position, and that position never sits
+    // still: a sum of slow sines, seconds to a minute, so the frame has an
+    // idle animation of its own instead of a fixed gradient.
+    [branch] if (pp5.y > 0.0005 || pp5.z > 0.0005) {
+        float  tq  = pp2.y;
+        float  asp = pp0.y / max(pp0.x, 1e-9);           // W/H
+        float2 L   = float2(pp6.z, pp6.w);
+        [branch] if (pp5.w > 0.0005) {
+            float kd = saturate(pp5.w);
+            L += float2(0.055 * sin(tq * 0.0171) + 0.030 * sin(tq * 0.0413 + 1.7),
+                        0.040 * sin(tq * 0.0233 + 0.6) + 0.022 * sin(tq * 0.0561 + 2.3)) * kd;
+        }
+        float2 qL  = float2((uv.x - L.x) * asp, uv.y - L.y);
+        float  dl  = length(qL);
+        float  sdrL = max(pp2.z, 1e-3);
+        float  lum0 = dot(ToSRGB(d / sdrL), W);
+        // (a) HAZE. Only into the DARK, and it reaches EXACTLY zero a little
+        // way out (the exponential has its own floor subtracted), so far from
+        // the lamp an off OLED pixel is still off -- the whole frame is never
+        // lifted, which is the one thing that would ruin this panel.
+        [branch] if (pp5.y > 0.0005) {
+            float x  = dl / max(pp6.x, 1e-4);
+            float hz = max(exp(-x) - 0.050, 0.0) / 0.950;
+            float wd = 1.0 - smoothstep(0.02, 0.50, lum0);
+            d += float3(1.00, 0.93, 0.86)
+               * (saturate(pp5.y) * 0.16 * hz * hz * wd * sdrL);
+        }
+        // (b) BLOOM. Two jittered rings of taps at a radius of 100+ px at
+        // 1440p: too few taps for a clean blur, which does not matter at a
+        // few percent, and the per-pixel angular jitter turns what banding
+        // there would be into the grain that is coming anyway. The radius
+        // breathes, the gather centre creeps, and the wash is stronger on the
+        // lamp's side, so it drifts with the light instead of sitting still.
+        [branch] if (pp5.z > 0.0005) {
+            float  rad = pp6.y * (1.0 + 0.12 * sin(tq * 0.0197 + 0.9));
+            float2 ctr = uv + float2(sin(tq * 0.0131), cos(tq * 0.0173))
+                            * (rad * 0.10 * pp0.xy);
+            float  jit = PHash21(i.pos.xy * 0.37) * 6.2831853;
+            float3 bl  = float3(0.0, 0.0, 0.0);
+            [unroll] for (int m = 0; m < 8; m++) {
+                float  an = (float)m * 0.7853982 + jit;
+                float2 dd = float2(cos(an), sin(an)) * (rad * pp0.xy);
+                bl += max(Src.SampleLevel(linearClamp, ctr + dd, 0).rgb, 0.0);
+                bl += max(Src.SampleLevel(linearClamp, ctr + dd * 0.55, 0).rgb, 0.0) * 1.3;
+            }
+            bl /= 18.4;
+            float wd = 1.0 - smoothstep(0.10, 0.75, lum0);
+            float lw = 0.75 + 0.50 * exp(-dl / max(pp6.x * 1.5, 1e-4));
+            d += bl * (saturate(pp5.z) * 0.20 * wd * lw);
+        }
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- FILM OVERLAY ARTEFACTS -----------------------------------------
     // Hairs caught in the gate, dust, fine scratches and the odd light leak.
     // Everything is authored in px at 1440p (P below) and is therefore the

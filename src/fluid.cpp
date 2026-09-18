@@ -922,7 +922,8 @@ bool FluidRenderer::PostActive() const {
     return m_psoPost && (po.postBlurPx > 0.01f || po.postGlow > 0.0005f ||
                          po.filmDust > 0.0005f || po.filmHairs > 0.0005f ||
                          po.filmScratches > 0.0005f || po.filmLeak > 0.0005f ||
-                         po.filmNoise > 0.0005f || po.filmStock > 0.0005f);
+                         po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
+                         po.fog > 0.0005f || po.bloom > 0.0005f);
 }
 
 // One FP16 frame-sized texture: RTV slot kFrames*2+1 (after the back buffers,
@@ -1023,6 +1024,15 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[18] = fmaxf(fmaxf(po.filmNoiseSize, 0.25f) * scale, 0.25f);
     c[19] = fmaxf(scale, 1e-4f);
     c[20] = fminf(fmaxf(po.filmStock, 0.0f), 1.0f);
+    // "light in the water": the haze reach is a fraction of the frame (it is
+    // a distance in the picture), the bloom radius is in this frame's texels
+    c[21] = fminf(fmaxf(po.fog, 0.0f), 1.0f);
+    c[22] = fminf(fmaxf(po.bloom, 0.0f), 1.0f);
+    c[23] = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
+    c[24] = fmaxf(po.fogPx, 1.0f) / 1440.0f;
+    c[25] = fmaxf(po.bloomPx, 1.0f) * scale;
+    c[26] = po.lightX;
+    c[27] = po.lightY;
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());

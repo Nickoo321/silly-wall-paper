@@ -115,3 +115,10 @@ Q (REVISED, user 2026-09-18 18:20): the bloom and the VOLUMETRIC FOG are ONE tas
    centre, off-frame), light_drift (0..1, default 1). The user: "idk how it would look" -- render
    three strengths (subtle / medium / strong) for them to pick from; keep OLED true black deep in the
    dark far from the light (haze must fall to zero, not lift the whole frame).
+
+P addendum (user 2026-09-18 18:30, ref film-overlay-ref-5-colour-leak-stock.jpg): the light leak is COLOURED
+   -- warm core (red -> orange -> yellow) fading to a cool green/teal fringe, entering from one edge with
+   soft vertical bands (gate/sprocket shadows), drifting and coming/going like the other artefacts.
+   Plus a separate FILM STOCK grade key [post] film_stock (0..1, default 0): lifted teal shadows, warm
+   highlights, slightly different per-channel curves (cross-process feel). Keep every key; the user
+   will grade everything by hand on the panel afterwards, so expose all of it in Settings.

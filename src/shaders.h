@@ -592,6 +592,9 @@ cbuffer AcidCB : register(b1) {
     float4 laP24;        // x axisX(uv) y axisY(uv) z focusDepth  w dofMaxPx(1440p)
     float4 laP25;        // x fieldCurve y tilt     z cos(tiltAng) w sin(tiltAng)
     float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
+    // --- droplet lens shading (item X) ------------------------------------
+    float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
+    float4 laP28;        // x lampX(uv) y lampY(uv)  z -  w -
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -1892,6 +1895,81 @@ R"hlsl(
         float3 bright = (sgnB > 0.0) ? oilC : inkC;
         col += lerp(bright, float3(1.0, 1.0, 1.0), 0.35) * (k * br * 0.60);
         col *= 1.0 - k * ec * 0.35;
+    }
+    // ---- DROPLET LENS SHADING (droplet_lens, item X) ---------------------
+    // The user, holding the oil-and-water reference beside our live frame: "I
+    // was thinking of the oil boundary layer -- some mechanics of how it
+    // should be gradual -- and it translated to it just being blurry. The
+    // ratio of blurry to focused is off." In the reference every droplet down
+    // to four pixels is CRISP at its edge and GRADUAL inside it. Ours were
+    // soft-edged flat fills, which is the opposite trade.
+    //
+    // So: nothing here blurs anything. Four terms, all of them read off the
+    // signed distance and the surface gradient the pass already has --
+    //   (a) a radial interior gradient: a droplet is a plano-convex LENS over
+    //       the backlight, so its middle is lighter than its shoulder;
+    //   (b) a dark band just inside the boundary, on the oil side;
+    //   (c) a thin BRIGHT refractive rim hugging the boundary -- the
+    //       meniscus the reference shows on every droplet, crisp and the same
+    //       few px wide at every size, as against the existing [post] halo,
+    //       which is deliberately weak and 8-15 px wide;
+    //   (d) a small specular, offset toward the RIG's lamp, so it swings when
+    //       the lamp does instead of being painted on.
+    //
+    // All of it gated by smoothstep(gl) * isoOk, which is the cheap test for
+    // "is there a CURVED surface here": a droplet's kernel stays steep right
+    // through its middle, while deep inside a big merged mass the gradient
+    // collapses. That is what keeps the film flat, keeps the OLED's black
+    // black in the middle of a mass, and gives the lens treatment to the
+    // things that are actually lenses.
+    [branch] if (laP27.x > 0.0005) {
+        float k0  = saturate(laP27.x);
+        float lg  = smoothstep(0.35, 1.20, gl) * isoOk;
+        float sIn = (sdf >= 0.0) ? 1.0 : -1.0;     // +1 in the oil, -1 in a hole
+        float din = abs(sdf);                      // distance INTO whichever body
+        // This lens's own radius, off the FULL gradient: lensR above is
+        // deliberately blob-biased and floored at 0.02 p-units (~29 px), which
+        // is right for the film's bands and useless for a 4-px droplet.
+        float lensRD = clamp(0.78 / max(gl, 1e-3), 0.0012, 0.35);
+        float u   = saturate(din / max(lensRD * 0.72, 1e-6));
+        // (a) the interior: smootherstep so there is no knee at the rim and
+        // none at the middle -- gradual is the whole point of the term.
+        [branch] if (laP27.y > 0.0005) {
+            float dome = u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
+            // a hole is a lens too: its middle passes more of the film's own
+            // light than its shoulder does, so it lifts toward the film
+            // colour. An oil droplet lifts toward the backlight instead.
+            float3 tgt = (sIn > 0.0) ? lerp(col, float3(1.0, 1.0, 1.0), 0.55) : oilC;
+            col = lerp(col, tgt, k0 * saturate(laP27.y) * dome * lg * 0.55);
+        }
+        float bw = max(laP27.z, bmin * 1.5 * PX1440);
+        // (b) the dark band, on the OIL side only: inside a hole it would be
+        // black on black, and this way the same term shades an oil droplet's
+        // shoulder and the film's own lip at the edge of a hole.
+        float xb  = (sdf - bw * 1.15) / bw;
+        float bnd = exp(-xb * xb) * step(0.0, sdf);
+        col *= 1.0 - k0 * 0.30 * bnd * lg;
+        // (c) the bright refractive rim, hugging the boundary just outside
+        // the dark band. Authored in px and floored, never scaled by the
+        // element's size, which is what makes a 4-px droplet carry the same
+        // crisp rim a mass does instead of a sub-pixel smear.
+        float xm  = (sdf + bw * 0.55) / (bw * 0.85);
+        float men = exp(-xm * xm);
+        col += lerp(oilC, float3(1.0, 1.0, 1.0), 0.45) * (k0 * 0.30 * men * lg);
+        // (d) the specular. nOut is the outward direction of whichever body
+        // this pixel is inside, so one expression lights a droplet and a hole
+        // alike, and both turn to face the lamp when the rig moves it.
+        [branch] if (laP27.w > 0.0005) {
+            float2 Lv = float2(laP28.x * aspect, laP28.y) - pp;
+            float2 Ld = Lv / max(length(Lv), 1e-6);
+            float2 nO = (-sIn / gl) * grad;
+            float  f  = saturate(dot(nO, Ld));
+            float  f2 = f * f; f2 = f2 * f2;              // ^4: a small hotspot
+            float  w  = (u - 0.58) / 0.30;
+            float  sp = f2 * exp(-w * w);
+            col += lerp(oilC, float3(1.0, 1.0, 1.0), 0.80)
+                 * (k0 * saturate(laP27.w) * sp * lg * 0.50);
+        }
     }
     // ---- outside glow (oil_glow): the lens spills a little of its own
     // colour into the ink around it -- diffuse, never a line (refs 4/5).

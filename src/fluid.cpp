@@ -3502,9 +3502,19 @@ void FluidRenderer::StepAcidDroplets(float dt) {
         std::vector<int> remap(m_acidDrops.size(), -1);
         std::vector<AcidDrop> keep;
         keep.reserve(m_acidDrops.size());
+        // dissolve_s stretches a death from a third of a second to seconds, so
+        // the array would fill with droplets that have long since gone under
+        // the contribution gate -- dead weight in an O(blobs) per droplet loop.
+        // The gate is EXACTLY zero below 0.35 of the resolvable floor (see the
+        // sp2 ramp in the motion loop), so anything under that is retired at
+        // once and nothing can pop.
+        const float pxY0 = 1.0f / fmaxf((float)m_height, 1.0f);
+        const float retireR = cons
+            ? 0.34f * fmaxf(1.2f * pxY0, 1.6f * fmaxf(a.rimWidth, 1e-5f))
+            : rMin * 0.08f;
         for (size_t i = 0; i < m_acidDrops.size(); i++) {
             const AcidDrop& d = m_acidDrops[i];
-            if (d.rt <= 0.0f && d.r < rMin * 0.08f) continue;   // gone, invisibly
+            if (d.rt <= 0.0f && d.r < retireR) continue;        // gone, invisibly
             remap[i] = (int)keep.size();
             keep.push_back(d);
         }

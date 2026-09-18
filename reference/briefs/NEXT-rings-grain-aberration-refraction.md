@@ -150,3 +150,15 @@ R. (user 2026-09-18 18:50, sketch reference/shots/photos/sketch-perspective-came
    lens) to a new angle/offset, then still again. Keys: focus_tilt_period (mean seconds between
    readjustments, randomised), focus_tilt_move_s (duration of a move). Same for the focus distance:
    an occasional refocus, not a drift. The LAMP (Q) keeps its slow continuous idle drift.
+
+S. (user 2026-09-18 19:00) CONSERVATION: "matter cannot be created or destroyed" -- dark oil that just
+   spawns in from nothing looks wrong (rare, but it happens on the panel). Audit every place the sim
+   creates or removes mass: blob (re)seeding, blob respawn when one drifts off-frame or shrinks, the
+   droplet emitter (kind 0 holes and kind 1 oil), ring births, merges/absorption (area-conserving
+   already?), and the palette/hue sweep if it ever pops a blob. Rule: nothing appears at a visible
+   size in the open. New material must either (a) enter from OFF-FRAME (drift in across an edge),
+   (b) grow from a tiny seed that is below the visible threshold and swells over seconds (a droplet
+   budding off / rising out of a mass), or (c) split off an existing mass (pinch-off) so the total
+   visible area is conserved; removal likewise: shrink, merge into a neighbour, or leave across an
+   edge -- never vanish. Log each spawn site in the report with what it now does. Also check the
+   fullscreen-pause resume and the dt clamp: a big time jump must not teleport or respawn blobs.

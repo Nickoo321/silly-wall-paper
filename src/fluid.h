@@ -371,15 +371,17 @@ struct LiquidAcidConfig {
     float dropletRingLift  = 0.15f; // interior lightening 0..1   droplet_ring_lift
     float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
 
-    // --- LOCAL REFRACTION DOUBLES (spot_double_*) -------------------------
-    // "more like a double image / refraction, but not as a vignette, just
-    // around spots, randomly generated." A faint second, radially displaced
-    // image of the ink around a RANDOM subset of spots (droplets and blobs),
-    // chosen per element by a fixed seed. 0 = off and not one extra sample.
-    float spotDoubleFrac     = 0.0f;   // 0..1 of spots          spot_double_frac
-    float spotDoubleOffset   = 2.5f;   // px displacement      spot_double_offset
-    float spotDoubleStrength = 0.35f;  // 0..1 blend         spot_double_strength
-    float spotDoubleRadius   = 1.6f;   // x spot radius        spot_double_radius
+    // --- BACKLIGHT PENUMBRA (oil_penumbra) --------------------------------
+    // The user's diagram: the lamp is under the middle of the dish, so the
+    // oil immediately around a black mass is lit less than the open sheet --
+    // and a pigment lit less does not merely dim, it shifts hue ("like the
+    // sky and the sun angle"). A soft S-curved band on the DYE side of every
+    // isoline, a few px wide, that darkens and turns the oil colour a little.
+    // Very subtle by design: it should register as depth, never as an outline.
+    float oilPenumbra   = 0.0f;     // 0..1 amount              oil_penumbra
+    float oilPenumbraPx = 8.0f;     // band width, px at 1440p  oil_penumbra_px
+    float oilPenumbraHue= 12.0f;    // degrees                  oil_penumbra_hue
+    float oilPenumbraDark = 0.15f;  // 0..1 darkening          oil_penumbra_dark
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
@@ -570,10 +572,31 @@ struct PostConfig {
     float filmGrainSize  = 1.5f;   // px per grain cell      film_grain_size
     float filmGrainSpeed = 1.0f;   // 1 = a new pattern every frame  film_grain_speed
     float filmGrainColor = 0.0f;   // 0 mono .. 1 RGB       film_grain_color
-    // Chromatic-aberration VIGNETTE: a radial R/B split that grows from the
-    // centre outward, zero in the middle of the frame.
-    float aberration     = 0.0f;   // 0..1 amount                aberration
-    float aberrationMaxPx= 3.0f;   // px split at the corners  aberration_max_px
+    // Chromatic aberration, LATERAL and per-edge (the reference's warm/cool
+    // fringe): R and B displaced in opposite directions along the local edge
+    // normal, G untouched, so every hard edge gets one warm and one cool side.
+    // Authored in px at 1440p and scaled with the frame, because it is an
+    // optical effect and not a pixel one.
+    float aberration     = 0.0f;   // 0..1 master                aberration
+    float aberrationPx   = 0.8f;   // px at 1440p             aberration_px
+    float aberrationField= 0.5f;   // extra toward the frame edge  aberration_field
+    // A slight darkening toward the corners -- the field stop, never a circle.
+    float vignette       = 0.0f;   // 0..1                         vignette
+    // Lens defocus on the isolines themselves (the user: "these edges are way
+    // too accurate and focused"). px at 1440p; widens the coverage AA band,
+    // the film edge and the rim/meniscus, and leaves the grain sharp.
+    float softness       = 0.0f;   // px at 1440p                  softness
+    // --- BRIGHT-FIELD HALO (the microscope "double contour") --------------
+    // The user's reference photos of oil under a macro lens: every dark shape
+    // carries a soft bright glow hugging its outside, with a faint darker echo
+    // beyond it -- phase contrast, not a stroked line. "Very weak, but quite
+    // wide." Rendered off the SAME signed distance the rim and meniscus use,
+    // so it belongs to the surface instead of being pasted over it. The keys
+    // live in [post] with the rest of the camera family; only the liquid_acid
+    // look has an isoline to hang them on, so only it implements them.
+    float halo    = 0.0f;           // 0..1 lift toward oil/white     halo
+    float haloPx  = 12.0f;          // band width in px at 1440p      halo_px
+
 };
 
 struct MirrorConfig {
@@ -1090,7 +1113,6 @@ private:
         int   kind;      // 0 = water trapped in oil (hole), 1 = oil on ink
         int   mergeTo;   // index of the droplet this one is pouring into, else -1
         int   ring;      // 1 = hollow "lens" droplet (drawn as an annulus)
-        int   dbl;       // 1 = this spot carries a local refraction double
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
     };
     std::vector<AcidDrop> m_acidDrops;

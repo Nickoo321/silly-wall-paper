@@ -1061,8 +1061,9 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
         fminf(fmaxf(po.filmGrain, 0.0f), 1.0f), fmaxf(po.filmGrainSize, 0.25f),
         fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
-        fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationMaxPx, 0.0f),
-        0.0f, 0.0f,
+        fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationPx, 0.0f),
+        fminf(fmaxf(po.aberrationField, 0.0f), 2.0f),
+        fminf(fmaxf(po.vignette, 0.0f), 1.0f),
     };
     memcpy(out, c, sizeof(c));
 }
@@ -2087,9 +2088,9 @@ struct AcidParamsGPU {
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
-    float p18[4], p19[4], p20[4], p21[4], men[4];
+    float p18[4], p19[4], p20[4], p21[4], p22[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 496, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 512, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -2887,7 +2888,6 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             };
             out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < a.dropletRingFrac)
                      ? 1 : 0;
-            out.dbl  = (hash01(x, y, 0x85EBCA6Bu) < a.spotDoubleFrac) ? 1 : 0;
             return true;
         }
         return false;
@@ -3471,13 +3471,7 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].c[0] = b.comb;
         dst[i].c[1] = b.cdx;
         dst[i].c[2] = b.cdy;
-        // spot_double_frac: which SPOTS carry a local refraction double. The
-        // choice is a hash of the blob's index, so it is fixed for that blob
-        // (and for a shot replay) instead of flickering frame to frame, and
-        // it costs nothing to carry -- .c.w was the one unused slot.
-        uint32_t h = (uint32_t)i * 2654435761u;
-        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
-        dst[i].c[3] = ((h >> 8) * (1.0f / 16777216.0f) < a.spotDoubleFrac) ? 1.0f : 0.0f;
+        dst[i].c[3] = 0.0f;
     }
 
     AcidParamsGPU p = {};
@@ -3538,17 +3532,23 @@ void FluidRenderer::UploadAcidConstants() {
     float p20[4] = { fminf(fmaxf(a.dropletRingWidth, 0.02f), 0.60f),
                      fminf(fmaxf(a.dropletRingLift, 0.0f), 1.0f),
                      fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f), 0.0f };
-    // spot_double: .x is only the ON flag -- WHICH spots are doubled is a
-    // per-element seeded choice carried in the blob's .c.w and the droplet's
-    // packed .w, so a spot keeps (or does not keep) its double for its life.
-    float p21[4] = { (a.spotDoubleFrac > 1e-4f) ? 1.0f : 0.0f,
-                     fmaxf(a.spotDoubleOffset, 0.0f),
-                     fminf(fmaxf(a.spotDoubleStrength, 0.0f), 1.0f),
-                     fmaxf(a.spotDoubleRadius, 0.05f) };
+    // [post] halo / halo_px / softness. All three are optical widths authored
+    // in px at 1440p and handed to the shader as a FRACTION of the frame, so
+    // a 960x540 preview and the 1440p panel show the same lens.
+    const PostConfig& po = m_cfg.post;
+    float p21[4] = { fminf(fmaxf(po.halo, 0.0f), 1.0f),
+                     fmaxf(po.haloPx, 0.5f) / 1440.0f,
+                     fmaxf(po.softness, 0.0f) / 1440.0f, 0.0f };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
     memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
     memcpy(p.p18, p18, 16); memcpy(p.p19, p19, 16);
-    memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16);
+    // oil_penumbra: width authored in px at 1440p, carried as a fraction of
+    // the frame so a preview and the panel show the same band.
+    float p22[4] = { fminf(fmaxf(a.oilPenumbra, 0.0f), 1.0f),
+                     fmaxf(a.oilPenumbraPx, 0.5f) / 1440.0f,
+                     a.oilPenumbraHue,
+                     fminf(fmaxf(a.oilPenumbraDark, 0.0f), 1.0f) };
+    memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
@@ -3571,12 +3571,11 @@ void FluidRenderer::UploadAcidConstants() {
                 // SIGN carries the kind: negative = a hole in the oil.
                 dd[k].a[2] = (d.kind == 0) ? -d.r : d.r;
                 // .w packs the contribution gate (0..1, see StepAcidDroplets)
-                // with the two per-droplet FLAGS the shader needs:
-                //   w = gate + 2*ring + 4*spot_double.
-                // Flags rather than sizes, so the particle stays one float4:
-                // the ring's width and the double's reach are global keys.
-                dd[k].a[3] = d.gate + (d.ring ? 2.0f : 0.0f)
-                                    + (d.dbl  ? 4.0f : 0.0f);
+                // with the one per-droplet FLAG the shader needs:
+                //   w = gate + 2*ring.
+                // A flag rather than a size, so the particle stays one float4:
+                // the ring's width is a global key.
+                dd[k].a[3] = d.gate + (d.ring ? 2.0f : 0.0f);
             }
             for (int c = 0; c < NC; c++) {
                 int first = m_dropletCellStart[c], cnt = m_dropletCellCount[c];

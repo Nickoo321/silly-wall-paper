@@ -462,7 +462,7 @@ cbuffer MirrorCB : register(b3) {
     // and needs exactly the same two numbers (time, aspect) that mrP0 already
     // carries. Both amounts are 0 by default and the code is branched out.
     float4 poP0;   // x film_grain y grain_size z grain_speed w grain_color
-    float4 poP1;   // x aberration y aberration_max_px  z -   w -
+    float4 poP1;   // x aberration y aberr_px z aberr_field w vignette
 };
 
 // |d| with the corner rounded off over a band of half-width s: equals abs(d)
@@ -584,7 +584,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
     float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w -
-    float4 laP21;        // x spotDblOn  y dblOffsetPx z dblStrength w dblRadius
+    float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w -
+    float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -879,13 +880,8 @@ float4 PSMain(VSOut i) : SV_Target {
     float2 grad  = float2(0.0, 0.0);
     float  colW = 0.0;
     float3 colSum = float3(0.0, 0.0, 0.0);
-    // ---- spot doubles + ring interiors, gathered while the field is built --
-    // dblW/dblDir = the strongest selected spot at this pixel and the
-    // direction away from its centre (the refraction direction); ringIn = how
-    // deep inside a hollow droplet's interior this pixel is. All three are 0
-    // unless the matching key is on, and both features then cost one branch.
-    float  dblW = 0.0;
-    float2 dblDir = float2(0.0, 0.0);
+    // How deep inside a hollow droplet's interior this pixel is; 0 unless
+    // droplet_ring_frac is on.
     float  ringIn = 0.0;
     int nb = (int)laP0.x;
     const float thresh = laP0.y;
@@ -917,15 +913,6 @@ float4 PSMain(VSOut i) : SV_Target {
             qs = float2(q.x, q.y / e);
         }
         float  d2 = dot(qs, qs);
-        // spot_double_frac: B.c.w is 1 on the randomly selected blobs (and
-        // holes -- a hole is a negative blob, and the user asked for both).
-        // Uniform branch, so an ini without the key never reaches it.
-        [branch] if (laP21.x > 0.5 && B.c.w > 0.5) {
-            float dd = length(q);
-            float t  = saturate(1.0 - dd / max(B.a.z * laP21.w, 1e-5));
-            float wgt = t * t * (3.0 - 2.0 * t);
-            if (wgt > dblW) { dblW = wgt; dblDir = q / max(dd, 1e-6); }
-        }
         float  sup = B.a.z * laP0.z;              // support radius
         float  s2 = sup * sup;
         if (d2 >= s2) continue;
@@ -995,32 +982,20 @@ float4 PSMain(VSOut i) : SV_Target {
                 [loop]
                 for (uint di = 0; di < cell.y; di++) {
                     float4 D = AcidDrops[cell.x + di];
-                    // .w packs three things (see UploadAcidConstants):
-                    //   w = gate + 2*ring + 4*spotDouble, gate in [0,1].
-                    // Flags, not sizes: the ring's width and the double's
-                    // reach are global keys, so nothing per-droplet is lost
-                    // and the particle stays one float4.
+                    // .w packs the gate with the ring FLAG (see
+                    // UploadAcidConstants): w = gate + 2*ring, gate in [0,1].
+                    // A flag, not a size: the ring's width is a global key, so
+                    // nothing per-droplet is lost and the particle stays one
+                    // float4.
                     float  dwf  = D.w;
-                    float  dbl  = (dwf > 3.5) ? 1.0 : 0.0; dwf -= 4.0 * dbl;
-                    float  rng  = (dwf > 1.5) ? 1.0 : 0.0; dwf -= 2.0 * rng;
-                    float  gate = dwf;
+                    float  rng  = (dwf > 1.5) ? 1.0 : 0.0;
+                    float  gate = dwf - 2.0 * rng;
                     float2 dq = pp - float2(D.x * aspect, D.y);
                     float  R  = abs(D.z);
                     float  ds = R * laP19.x;
                     float  ds2 = ds * ds;
                     float  dd2 = dot(dq, dq);
                     if (dd2 >= ds2) continue;
-                    // ---- local refraction double (spot_double_*) ---------
-                    // Nothing is sampled here: the winning direction and
-                    // weight are carried out of the loop and cost ONE extra
-                    // dye tap for the whole pixel, next to the refraction
-                    // offset that is already taken.
-                    [branch] if (laP21.x > 0.5 && dbl > 0.5) {
-                        float dd = sqrt(dd2);
-                        float t  = saturate(1.0 - dd / max(R * laP21.w, 1e-5));
-                        float wgt = gate * t * t * (3.0 - 2.0 * t);
-                        if (wgt > dblW) { dblW = wgt; dblDir = dq / max(dd, 1e-6); }
-                    }
                     [branch] if (rng > 0.5) {
                         // HOLLOW LENS: the punch is a BAND centred on the
                         // droplet's own visible radius, so the interior never
@@ -1103,7 +1078,18 @@ R"hlsl(
     float3 oilBase = (colW > 1e-9) ? colSum / colW : laOil[0].rgb;
     float  gl   = length(grad) + 1e-6;
     float  sdf  = clamp((field - thresh) / gl, -0.25, 0.25);  // >0 inside the oil
+    // ---- [post] softness: nothing in a macro shot is razor-sharp ---------
+    // The user, on the live panel: "these edges are way too accurate and
+    // focused." A lens defocuses the SURFACE, so this widens the isoline's own
+    // transition rather than blurring the frame: the coverage AA band, the
+    // film-edge band and the rim/meniscus widths all grow by the same blur
+    // radius. The grain, which is added after everything, stays sharp -- which
+    // is exactly right: the grain is in the camera, the blur is in the lens.
+    // laP21.z is the radius in uv-y (authored in px at 1440p), and the field
+    // units it takes here are that distance times the local |grad|.
+    float  soft = laP21.z;
     float  aaF  = fwidth(field) * laP0.w + 1e-4;
+    if (soft > 1e-6) aaF += soft * gl;
     float  cov  = smoothstep(thresh - aaF, thresh + aaF, field);
     // ---- local lens radius and film thickness (oil_thin_edge) -----------
     // The Wyvill kernel gives the blob radius for free: at the isoline
@@ -1165,6 +1151,8 @@ R"hlsl(
     // hence a key and both shipped, to be judged live from the tray.
     float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
     if (laP18.w > 0.5) edgeW = max(laP1.x * 2.5, 1e-5);
+    // ...and no film edge may be tighter than the lens's own blur circle.
+    if (soft > 1e-6) edgeW = max(edgeW, soft * 2.0);
     float  thk   = 1.0;                       // 1 = full-thickness oil
     // oil_transparency needs the same thickness proxy even when the soft
     // thin edge itself is off: a transparent film MUST be clearest where it
@@ -1228,21 +1216,6 @@ R"hlsl(
 #endif
     float3 C = Dye.SampleLevel(linearClamp, uv, 0).rgb;
 #ifdef LIQUID_ACID
-    // ---- spot_double: a local refraction DOUBLE around chosen spots ------
-    // "not as a vignette, just like around spots, randomly generated": the
-    // surroundings seen a second time, displaced along the direction away
-    // from the nearest selected spot's centre, fading out over
-    // spot_double_radius of its own radius. One extra dye tap, and only on
-    // the pixels a selected spot actually reaches -- the field pass already
-    // found the winner, so nothing is searched here. Deliberately applied to
-    // the ink BEFORE the ink pipeline, so the double inherits the bands, the
-    // absorption and the defocus instead of being pasted over them, and the
-    // film edge band and the meniscus (both keyed on the FIELD) are untouched.
-    [branch] if (laP21.x > 0.5 && dblW > 0.0) {
-        float2 off = dblDir * (laP21.y * dblW) * texelSize;
-        float3 C2  = Dye.SampleLevel(linearClamp, saturate(uv + off), 0).rgb;
-        C = lerp(C, C2, saturate(laP21.z) * dblW);
-    }
     // ---- oil_ink_blur ----------------------------------------------------
     // The ink under a film of oil is slightly out of focus (refs 3/4/7): the
     // marbling reads through, but softened, and more so where the oil is
@@ -1587,6 +1560,12 @@ R"hlsl(
     }
     float rimHW = max(laP1.x * rimMul, 1e-5);
     float menHW = clamp(laP2.y * rimMul * menHWx, 1e-5, 0.024);
+    // A defocused hairline is a wider, fainter hairline: widths add in
+    // quadrature, the way a Gaussian convolves with a Gaussian.
+    if (soft > 1e-6) {
+        rimHW = sqrt(rimHW * rimHW + soft * soft);
+        menHW = sqrt(menHW * menHW + soft * soft);
+    }
     float rimCtr = laP12.z > 0.5 ?  rimHW : laP1.y;
     float menCtr = laP12.z > 0.5 ? -menHW : -laP7.z;
     if (laP14.y > 0.0005) menCtr = lerp(menCtr, -menHW * 0.55, saturate(laP14.y));
@@ -1609,6 +1588,9 @@ R"hlsl(
     float rimK = saturate(laP1.z) * haloInk * (1.0 - 0.65 * saturate(laP13.x));
     oilC *= 1.0 - rimK * rimB;
 
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // Film alpha: with oil_thin_edge the disc fades out over the thickness
     // band instead of over 1-2 px of coverage AA. Squared, because a lens
     // thins fast near its edge.
@@ -1625,6 +1607,48 @@ R"hlsl(
         alpha = lerp(cov, aS * aS, saturate(laP13.x));
     }
     float3 col = lerp(inkC, oilC, alpha);
+    // ---- BACKLIGHT PENUMBRA (oil_penumbra) -------------------------------
+    // The lamp is under the middle of the dish: the oil right next to a black
+    // mass receives less of it than the open sheet does, and a pigment lit
+    // less shifts hue as well as level. A smootherstep band on the OIL side
+    // of the isoline only -- it can never touch the black, because it is
+    // multiplied by the coverage it sits on.
+    [branch] if (laP22.x > 0.0005) {
+        float u = saturate(sdf / max(laP22.y, 1e-5));
+        float b = 1.0 - u * u * u * (u * (u * 6.0 - 15.0) + 10.0);
+        float k = saturate(laP22.x) * b * cov * isoOk;
+        float3 lit = CssHueRotate(col, laP22.z) * (1.0 - saturate(laP22.w));
+        col = lerp(col, lit, k);
+    }
+    // ---- BRIGHT-FIELD HALO ([post] halo / halo_px) -----------------------
+    // The microscope look the user is after: every dark shape carries a soft
+    // bright glow hugging its outside, with a faint darker echo further out --
+    // the "double contour" of a phase-contrast image. "Very weak, but quite
+    // wide", so this is a low-amplitude lift over a band many pixels across
+    // with a smooth falloff, never a stroked line.
+    //
+    // Which side is the bright one is decided per pixel from the two colours
+    // that meet here, so the halo always sits OUTSIDE the darker of the two:
+    // over black ink it glows on the oil side of a hole, and it would flip by
+    // itself under a dark oil on a bright ink.
+    // Gated by the same |grad| and isoOk tests the meniscus carries, or a
+    // shallow plateau that never crosses the threshold would grow a halo with
+    // no surface under it.
+    [branch] if (laP21.x > 0.0005) {
+        float hw = max(laP21.y, 1e-5);
+        // a bigger shape carries a slightly wider halo, as a lens does
+        hw *= lerp(1.0, clamp(lensR / 0.12, 0.6, 2.0), 0.5);
+        float lo = dot(oilC, float3(0.2126, 0.7152, 0.0722));
+        float li = dot(inkC, float3(0.2126, 0.7152, 0.0722));
+        float sgnB = (lo >= li) ? 1.0 : -1.0;       // +1: the oil is the bright side
+        float u  = (sdf * sgnB) / hw;               // distance into the BRIGHT side
+        float br = exp(-u * u);                     // the glow, hugging the edge
+        float ec = exp(-(u - 2.6) * (u - 2.6));     // the faint echo beyond it
+        float k  = saturate(laP21.x) * smoothstep(0.5, 1.5, gl) * isoOk;
+        float3 bright = (sgnB > 0.0) ? oilC : inkC;
+        col += lerp(bright, float3(1.0, 1.0, 1.0), 0.35) * (k * br * 0.60);
+        col *= 1.0 - k * ec * 0.35;
+    }
     // ---- outside glow (oil_glow): the lens spills a little of its own
     // colour into the ink around it -- diffuse, never a line (refs 4/5).
     if (laP14.z > 0.0005) {
@@ -1815,22 +1839,41 @@ R"hlsl(
     // mirror with it. Both amounts default to 0 and neither branch is entered
     // then, so style=fluid is untouched down to the bit unless asked.
     // Order: aberration first (it is the lens), grain second (it is the film).
-    [branch] if (poP1.x > 0.0005) {
-        // CHROMATIC-ABERRATION VIGNETTE. The composite is not in a texture --
-        // the oil discs, rims and halos are computed here -- so there is
-        // nothing to re-sample per channel. Instead the channel shift is a
-        // first-order expansion of the image about this pixel,
-        //   C(x + d) ~= C + d.x * dC/dx + d.y * dC/dy,
-        // taken from the quad's own derivatives. That is free, it covers the
-        // WHOLE composite rather than just the dye, and it is accurate at the
-        // offsets this effect lives at (0..3 px; 0.75 px at the corners in the
-        // shipped presets). Red is pushed outward and blue inward, growing as
-        // r^2 from the centre, so the middle of the frame is exactly clean.
-        float2 d   = i.pos.xy * texelSize - 0.5;
-        float2 off = d * (length(d) * 2.0 * poP1.x * max(poP1.y, 0.0));
+    [branch] if (poP1.x > 0.0005 || poP1.w > 0.0005) {
+        // LATERAL CHROMATIC ABERRATION, per EDGE -- the reference's warm/cool
+        // fringe. A real lens focuses red and blue at slightly different
+        // magnifications, so every hard edge carries a warm fringe on one side
+        // and a cool one on the other; the radial corner split is only what
+        // that looks like averaged over a whole frame. There is nothing to
+        // re-sample here (the oil discs and rims are computed, not stored), so
+        // the two channels are displaced by a first-order expansion of the
+        // composite about this pixel, from the quad's own derivatives -- which
+        // is what a sub-pixel shift IS, and it covers every edge in the frame
+        // rather than only the dye.
         float3 cdx = ddx(C), cdy = ddy(C);
-        float3 sh  = cdx * off.x + cdy * off.y;
-        C = max(float3(C.r + sh.r, C.g, C.b - sh.b), 0.0);
+        [branch] if (poP1.x > 0.0005) {
+            const float3 W = float3(0.2126, 0.7152, 0.0722);
+            float2 eg = float2(dot(cdx, W), dot(cdy, W));   // the edge normal
+            float  el = length(eg);
+            float2 n  = (el > 1e-6) ? eg / el : float2(0.0, 0.0);
+            // px authored at 1440p, scaled with the frame: this is an optical
+            // effect, so it must be the same FRACTION of the picture at any
+            // resolution. r grows it modestly toward the field edge.
+            float2 d  = i.pos.xy * texelSize - 0.5;
+            float  px = poP1.y * (1.0 / max(texelSize.y, 1e-7)) / 1440.0
+                      * (1.0 + poP1.z * length(d) * 2.0);
+            float2 off = n * (px * poP1.x);
+            float  dR = dot(float2(cdx.r, cdy.r),  off);
+            float  dB = dot(float2(cdx.b, cdy.b), -off);
+            C = max(float3(C.r + dR, C.g, C.b + dB), 0.0);
+        }
+        // A slight fall-off toward the corners: the field stop of a macro
+        // lens, never a circle with an edge.
+        [branch] if (poP1.w > 0.0005) {
+            float2 d = i.pos.xy * texelSize - 0.5;
+            float  r2 = dot(d, d) * 2.0;
+            C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
+        }
     }
     [branch] if (poP0.x > 0.0005) {
         // FILM GRAIN, luminance-weighted: the mids and darks carry it (that is

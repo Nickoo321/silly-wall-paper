@@ -366,7 +366,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmGrainSpeed = getF(S, L"film_grain_speed", po.filmGrainSpeed);
         po.filmGrainColor = getF(S, L"film_grain_color", po.filmGrainColor);
         po.aberration     = getF(S, L"aberration", po.aberration);
-        po.aberrationMaxPx= getF(S, L"aberration_max_px", po.aberrationMaxPx);
+        po.aberrationPx   = getF(S, L"aberration_px", po.aberrationPx);
+        po.aberrationField= getF(S, L"aberration_field", po.aberrationField);
+        po.vignette       = getF(S, L"vignette", po.vignette);
+        po.softness       = getF(S, L"softness", po.softness);
+        po.halo           = getF(S, L"halo", po.halo);
+        po.haloPx         = getF(S, L"halo_px", po.haloPx);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -498,14 +503,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRise    = getF(S, L"droplet_rise", a.dropletRise);
         a.oilEdgeMode    = getI(S, L"oil_edge_mode", a.oilEdgeMode);
         a.oilEdgeCurve   = getF(S, L"oil_edge_curve", a.oilEdgeCurve);
+        a.oilPenumbra    = getF(S, L"oil_penumbra", a.oilPenumbra);
+        a.oilPenumbraPx  = getF(S, L"oil_penumbra_px", a.oilPenumbraPx);
+        a.oilPenumbraHue = getF(S, L"oil_penumbra_hue", a.oilPenumbraHue);
+        a.oilPenumbraDark= getF(S, L"oil_penumbra_dark", a.oilPenumbraDark);
         a.dropletRingFrac  = getF(S, L"droplet_ring_frac", a.dropletRingFrac);
         a.dropletRingWidth = getF(S, L"droplet_ring_width", a.dropletRingWidth);
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
-        a.spotDoubleFrac     = getF(S, L"spot_double_frac", a.spotDoubleFrac);
-        a.spotDoubleOffset   = getF(S, L"spot_double_offset", a.spotDoubleOffset);
-        a.spotDoubleStrength = getF(S, L"spot_double_strength", a.spotDoubleStrength);
-        a.spotDoubleRadius   = getF(S, L"spot_double_radius", a.spotDoubleRadius);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1463,7 +1468,12 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_grain_speed", po.filmGrainSpeed, 2);
         putF(S, L"film_grain_color", po.filmGrainColor, 3);
         putF(S, L"aberration", po.aberration, 3);
-        putF(S, L"aberration_max_px", po.aberrationMaxPx, 2);
+        putF(S, L"aberration_px", po.aberrationPx, 2);
+        putF(S, L"aberration_field", po.aberrationField, 2);
+        putF(S, L"vignette", po.vignette, 3);
+        putF(S, L"softness", po.softness, 2);
+        putF(S, L"halo", po.halo, 3);
+        putF(S, L"halo_px", po.haloPx, 1);
     }
     {
         const DropConfig& d = c.drops;
@@ -1581,14 +1591,14 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_rise", a.dropletRise, 3);
         putI(S, L"oil_edge_mode", a.oilEdgeMode);
         putF(S, L"oil_edge_curve", a.oilEdgeCurve, 3);
+        putF(S, L"oil_penumbra", a.oilPenumbra, 3);
+        putF(S, L"oil_penumbra_px", a.oilPenumbraPx, 1);
+        putF(S, L"oil_penumbra_hue", a.oilPenumbraHue, 1);
+        putF(S, L"oil_penumbra_dark", a.oilPenumbraDark, 3);
         putF(S, L"droplet_ring_frac", a.dropletRingFrac, 3);
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
-        putF(S, L"spot_double_frac", a.spotDoubleFrac, 3);
-        putF(S, L"spot_double_offset", a.spotDoubleOffset, 2);
-        putF(S, L"spot_double_strength", a.spotDoubleStrength, 3);
-        putF(S, L"spot_double_radius", a.spotDoubleRadius, 2);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

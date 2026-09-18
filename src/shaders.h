@@ -2415,9 +2415,16 @@ R"hlsl(
                 float y1 = y0 + Hy * (0.35 + 0.65 * PHash21(float2(tq + 31.1, fj * 4.7)));
                 float yv = smoothstep(y0 - 40.0, y0 + 40.0, P.y)
                          * (1.0 - smoothstep(y1 - 60.0, y1 + 60.0, P.y));
-                add += (1.0 - smoothstep(wd, wd + 1.2, abs(P.x - xc))) * yv * env
-                     * (0.6 + 0.4 * PHash21(float2(ff, fj * 17.3)))
-                     * (0.055 * (0.4 + 0.6 * saturate(pp3.z)));
+                // The user, on the first version: "no film has a line like
+                // that" -- a clean 1-px rule down the frame. A real gate
+                // scratch is faint, its edges are soft, and it is BROKEN along
+                // its length: the emulsion is torn in stretches, not cut, so
+                // it reads as a flickering dashed thread, never a ruled line.
+                float seg = PHash21(float2(floor(P.y / 14.0) + tq * 3.1, fj * 9.7 + ff * 0.13));
+                float brk = smoothstep(0.35, 0.75, seg);           // ~55% of segments lit
+                add += (1.0 - smoothstep(wd, wd + 2.6, abs(P.x - xc))) * yv * env * brk
+                     * (0.5 + 0.5 * PHash21(float2(ff, fj * 17.3)))
+                     * (0.022 * (0.4 + 0.6 * saturate(pp3.z)));
             }
         }
         // LIGHT LEAK: a COLOURED wash entering from one edge -- a warm core

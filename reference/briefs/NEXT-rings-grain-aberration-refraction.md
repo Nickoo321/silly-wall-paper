@@ -212,3 +212,10 @@ T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's B
    smear that drifts, slight refraction, a subtle highlight from the lamp, maybe a faint fingerprint
    or condensation haze -- all full-frame, never a mask or a border. The vignette stays as it is
    (gentle), nothing that reads as a hole in the display.
+   T note 4 (user 19:20, OLED burn-in): EVERYTHING must move -- nothing (lid sheen, ghost, haze, glint,
+   leak, lamp) may sit at a fixed screen position, ever. Driving idea: the haze/sheen pattern moves
+   WITH the fluid -- the sim's own velocity field (the 64x36 low-res velocity readback already exists)
+   advects the haze/condensation/lid-smear pattern, so a burst on the right that moves the oil also
+   pushes the haze ("heat" moving it). Rule for every post effect: position = slow idle drift + an
+   advection/warp term from the fluid velocity, and long-period wander so no pixel is bright for
+   minutes. Applies to the lamp (Q), the lid (T note 3), the leak (P), the bloom centre.

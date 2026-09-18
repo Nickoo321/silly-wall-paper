@@ -252,3 +252,10 @@ U. IDEAS (Fable, user asked 19:25; sole constraint: nothing exists on screen per
    (BR2049 scope cell, bone scan, LAPD optics sheet with coloured lens flares/ring ghosts and
    rainbow fringes on a warm field, brain) -- note the LAPD sheet's coloured ring ghosts and soft
    rainbow flare are exactly idea 5's ghosts + the halation bloom; full-frame versions only.
+   V KEY REF (user 19:40): endgoal-ref-13-br2049-lapd-optics.jpg (the six-panel LAPD sheet) is EXACTLY
+   the internal artifacting wanted: concentric coloured ring ghosts (lens-element reflections of the
+   bright field: red/amber/green rings, offset from centre), soft rainbow fringes, a warm veiling
+   flare across the field, bright curved streaks (the cover glass edge catching the lamp), a hot
+   spot with a wide amber glow, faint iridescent (oil-film) colour sweeps on the surface. All of it
+   drifts and reorients (idea 4/5: the ghosts' offset vector follows the lamp), full-frame, no
+   circular mask. This sheet defines task V's look; the lid (T note 3) is the physical excuse for it.

@@ -398,6 +398,17 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.lightX         = getF(S, L"light_x", po.lightX);
         po.lightY         = getF(S, L"light_y", po.lightY);
         po.lightDrift     = getF(S, L"light_drift", po.lightDrift);
+        po.cameraFov      = getF(S, L"camera_fov", po.cameraFov);
+        po.cameraFocus    = getF(S, L"camera_focus", po.cameraFocus);
+        po.cameraFieldCurve = getF(S, L"camera_field_curve", po.cameraFieldCurve);
+        po.cameraAxisX    = getF(S, L"camera_axis_x", po.cameraAxisX);
+        po.cameraAxisY    = getF(S, L"camera_axis_y", po.cameraAxisY);
+        po.focusTilt      = getF(S, L"focus_tilt", po.focusTilt);
+        po.focusTiltAngle = getF(S, L"focus_tilt_angle", po.focusTiltAngle);
+        po.focusBandPx    = getF(S, L"focus_band_px", po.focusBandPx);
+        po.focusTiltPeriod= getF(S, L"focus_tilt_period", po.focusTiltPeriod);
+        po.focusTiltMoveS = getF(S, L"focus_tilt_move_s", po.focusTiltMoveS);
+        po.dofMaxPx       = getF(S, L"dof_max_px", po.dofMaxPx);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -543,6 +554,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
         a.dropletRingWobble= getF(S, L"droplet_ring_wobble", a.dropletRingWobble);
+        a.dropletDepth     = getF(S, L"droplet_depth", a.dropletDepth);
+        a.depthRise        = getF(S, L"depth_rise", a.depthRise);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1532,6 +1545,17 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"light_x", po.lightX, 3);
         putF(S, L"light_y", po.lightY, 3);
         putF(S, L"light_drift", po.lightDrift, 3);
+        putF(S, L"camera_fov", po.cameraFov, 2);
+        putF(S, L"camera_focus", po.cameraFocus, 3);
+        putF(S, L"camera_field_curve", po.cameraFieldCurve, 3);
+        putF(S, L"camera_axis_x", po.cameraAxisX, 3);
+        putF(S, L"camera_axis_y", po.cameraAxisY, 3);
+        putF(S, L"focus_tilt", po.focusTilt, 3);
+        putF(S, L"focus_tilt_angle", po.focusTiltAngle, 1);
+        putF(S, L"focus_band_px", po.focusBandPx, 0);
+        putF(S, L"focus_tilt_period", po.focusTiltPeriod, 1);
+        putF(S, L"focus_tilt_move_s", po.focusTiltMoveS, 2);
+        putF(S, L"dof_max_px", po.dofMaxPx, 2);
     }
     {
         const DropConfig& d = c.drops;
@@ -1663,6 +1687,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
         putF(S, L"droplet_ring_wobble", a.dropletRingWobble, 3);
+        putF(S, L"droplet_depth", a.dropletDepth, 3);
+        putF(S, L"depth_rise", a.depthRise, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

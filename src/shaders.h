@@ -588,6 +588,10 @@ cbuffer AcidCB : register(b1) {
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
     float4 laP23;        // x cellInk    y cellOil    z cellScale(uv) w cellDrift(uv/s)
     float4 laMen;        // meniscus halo colour, rgb
+    // --- perspective camera + depth of field + tilt (items N + R) ---------
+    float4 laP24;        // x axisX(uv) y axisY(uv) z focusDepth  w dofMaxPx(1440p)
+    float4 laP25;        // x fieldCurve y tilt     z cos(tiltAng) w sin(tiltAng)
+    float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w -
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -913,6 +917,12 @@ float4 PSMain(VSOut i) : SV_Target {
     // the one-pixel fwidth() spike exactly on a seam.
     float mirrorSeam;
     float2 uv = MirrorFold(i.uv, mirrorSeam);
+    // The [post] camera pass reads this pixel's CIRCLE OF CONFUSION out of the
+    // render target's ALPHA (px at 1440p). Only the acid look can produce one
+    // -- it is the only look with an isoline and a per-droplet depth -- so
+    // every other path leaves the 1.0 the target has always carried, and the
+    // post pass is told (dof_max_px = 0) not to read it.
+    float outCoc = 1.0;
 #ifdef LIQUID_ACID
     // ---- oil metaball field (evaluated first: it refracts the ink sample) ----
     const float aspect = laP6.w;
@@ -989,6 +999,9 @@ float4 PSMain(VSOut i) : SV_Target {
             colW   += w4;
         }
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- droplets: the SAME surface, not an overlay ----------------------
     // Every droplet's Wyvill kernel is added into `field`/`grad` BEFORE the
     // threshold, so a trapped water droplet is a literal hole in the oil and
@@ -1005,6 +1018,18 @@ float4 PSMain(VSOut i) : SV_Target {
     // in `grad` on purpose: the blob field varies over ~0.1 p-units and a
     // droplet over ~0.01, so the droplet term dominates the edge anyway.
     float2 gradB = grad;      // blobs only -- the surface the LENS belongs to
+    // ---- per-pixel DEPTH, for the circle of confusion (items N + R) ------
+    // A weighted mean of the depths of whatever covers this pixel, primed
+    // with the MASSES' own plane (0.5) at a low weight: open film reads as the
+    // base depth, a pixel well inside a droplet reads as that droplet's, and
+    // the ground between them is a smooth blend rather than a stencil -- which
+    // matters, because a hard depth edge would print a hard blur edge in the
+    // post pass and look like a cut-out instead of a lens.
+    float depSum = 0.5 * 0.25, depW = 0.25;
+    // Where the optical axis meets the dish, in p-space. Everything about the
+    // perspective view -- foreshortening, field curvature, the tilt gradient
+    // -- is measured from here.
+    const float2 axP = float2(laP24.x * aspect, laP24.y);
     if (laP18.x > 0.5) {
         const int gw = (int)laP18.y, gh = (int)laP18.z;
         const int cx = clamp((int)floor(uv.x * gw), 0, gw - 1);
@@ -1028,9 +1053,18 @@ float4 PSMain(VSOut i) : SV_Target {
                     // A flag, not a size: the ring's width is a global key, so
                     // nothing per-droplet is lost and the particle stays one
                     // float4.
+                    // ...and, above both, an 8-bit DEPTH with 0 as the "no
+                    // depth" sentinel: w = 4*dq + 2*ring + gate. Three extra
+                    // ALU in the hottest loop of the frame, against a second
+                    // buffer fetch per droplet per pixel if depth had its own
+                    // record -- and with droplet_depth 0 the arithmetic here
+                    // is exactly the two lines it replaces.
                     float  dwf  = D.w;
-                    float  rng  = (dwf > 1.5) ? 1.0 : 0.0;
-                    float  gate = dwf - 2.0 * rng;
+                    float  dqz  = floor(dwf * 0.25);
+                    float  dwr  = dwf - 4.0 * dqz;
+                    float  rng  = (dwr > 1.5) ? 1.0 : 0.0;
+                    float  gate = dwr - 2.0 * rng;
+                    float  ddep = (dqz > 0.5) ? (dqz - 1.0) * (1.0 / 254.0) : 0.5;
                     float2 dq = pp - float2(D.x * aspect, D.y);
                     float  R  = abs(D.z);
                     float  ds = R * laP19.x;
@@ -1046,8 +1080,38 @@ float4 PSMain(VSOut i) : SV_Target {
                         // centre line, so the dark rim, the meniscus and the
                         // thickness ramp all wrap the annulus exactly as they
                         // wrap a disc: no special-case shading anywhere.
-                        float  dd = sqrt(dd2);
-                        float2 un = dq / max(dd, 1e-6);
+                        // ---- PERSPECTIVE: seen at an angle, not from above -
+                        // The user's sketch: a LENS at the tip of a view cone
+                        // over a flat dish. Only the point where the optical
+                        // axis meets the dish is seen face on; every other
+                        // element is seen at an angle that grows with its
+                        // distance from that point, so a ring there is a
+                        // circle in PERSPECTIVE -- foreshortened along the
+                        // radius toward the axis, its far wall thicker than
+                        // its near one. That is the real answer to "these are
+                        // pixel perfect circles": not a wobble bolted on, but
+                        // a camera that cannot draw a symmetric one off-axis.
+                        // camera_fov 0 leaves invc exactly 1 and every line
+                        // below is the arithmetic that was here before.
+                        float2 av   = float2(1.0, 0.0);
+                        float  tanT = 0.0, invc = 1.0;
+                        float2 dqv  = dq;
+                        [branch] if (laP26.z > 0.0) {
+                            float2 toAx = axP - float2(D.x * aspect, D.y);
+                            float  la   = length(toAx);
+                            [branch] if (la > 1e-5) {
+                                av   = toAx / la;
+                                tanT = laP26.z * la;
+                                // the apparent extent along that radius is
+                                // multiplied by cos(theta), so testing the
+                                // pixel against a circle means stretching its
+                                // offset along it by 1/cos(theta).
+                                invc = sqrt(1.0 + tanT * tanT);
+                                dqv  = dq + av * (dot(dq, av) * (invc - 1.0));
+                            }
+                        }
+                        float  dd = length(dqv);
+                        float2 un = dqv / max(dd, 1e-6);
                         // ---- never a perfect circle -----------------------
                         // The user, on the first rings: "these are pixel
                         // perfect circles." The band's radius is a Fourier
@@ -1068,6 +1132,15 @@ float4 PSMain(VSOut i) : SV_Target {
                         // the ring bulges out and thicker where it pinches in,
                         // so the wall is not a uniform stroke either.
                         bw *= clamp(1.0 - 1.6 * wv, 0.55, 1.7);
+                        // ...and the OBLIQUE view thickens the wall on the far
+                        // side and thins it on the near one: the line of sight
+                        // crosses more of the bubble's skin where it enters at
+                        // a glancing angle. dot(un, av) is +1 on the side
+                        // facing the optical axis, -1 on the side away from
+                        // it, so this is one mad and it is exactly the
+                        // asymmetry a stamped "O" can never have.
+                        float  asym = clamp(0.90 * tanT, 0.0, 0.45);
+                        bw *= 1.0 - asym * dot(un, av);
                         float  sgn = dd - Rp;
                         float  su = 1.0 - (sgn * sgn) / (bw * bw);
                         if (su > 0.0) {
@@ -1081,15 +1154,30 @@ float4 PSMain(VSOut i) : SV_Target {
                             // the halo wrapped square on the wall.
                             float2 gs = un - (R * wd / max(dd, 1e-6))
                                              * float2(-un.y, un.x);
+                            // gs lives in the foreshortened frame; the map
+                            // back to p-space is the same symmetric stretch,
+                            // so the rim, the meniscus and the halo stay
+                            // square on the wall of an oblique ring instead of
+                            // sliding round it. Identity at camera_fov 0.
+                            gs += av * (dot(gs, av) * (invc - 1.0));
                             float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gate) * gs;
                             dNeg += dw; gNeg += dg;
+                            depSum += dw * ddep; depW += dw;
                         }
                         // droplet_ring_lift: the interior is a little lens, so
                         // it reads slightly brighter than the film around it.
                         // max(), not a sum, so a raft of touching rings does
                         // not stack into a glowing patch.
                         float li = saturate((Rp - 0.5 * bw - dd) / max(0.5 * Rp, 1e-5));
-                        ringIn = max(ringIn, li * gate);
+                        // The oblique view also swings the highlight: a lens
+                        // tipped away from you shows its bright face on the
+                        // side turned toward the axis. So the interior lift is
+                        // not centred either -- the whole ring is asymmetric,
+                        // wall and light together, which is what stops it
+                        // reading as a glyph.
+                        li *= 1.0 + clamp(1.10 * tanT, 0.0, 0.55) * dot(un, av);
+                        ringIn = max(ringIn, saturate(li) * gate);
+                        depSum += li * gate * ddep * 0.5; depW += li * gate * 0.5;
                         continue;
                     }
                     float  du = 1.0 - dd2 / ds2;
@@ -1098,6 +1186,7 @@ float4 PSMain(VSOut i) : SV_Target {
                     float2 dg = (-6.0 * du2 / ds2) * dq * gate;
                     if (D.z < 0.0) { dNeg += dw; gNeg += dg; }
                     else           { dPos += dw; gPos += dg; }
+                    depSum += dw * ddep; depW += dw;
                 }
             }
         }
@@ -1137,6 +1226,35 @@ float4 PSMain(VSOut i) : SV_Target {
             colSum += laOil[3].rgb * wl;
             colW   += wl;
         }
+    }
+    // ---- CIRCLE OF CONFUSION -> the render target's ALPHA (items N + R) ---
+    // The [post] pass used to defocus the whole frame by one radius, which is
+    // what a flatbed scanner does, not a lens. A lens has ONE surface in focus
+    // and everything else blurs in proportion to how far off it is -- the
+    // Requiem frame the user picked out is one cell sharp with the rings
+    // behind it dissolved into ghosts. So the depth of field is decided HERE,
+    // where the depths are known, and handed to the post pass per pixel:
+    //   * the surface in focus is not a plane parallel to the dish. It is
+    //     CURVED (camera_field_curve: a real lens cannot hold the centre and
+    //     the corners at once) and TILTED (focus_tilt: the freelensing sweet
+    //     spot, a slanted strip of sharpness), both measured from where the
+    //     optical axis meets the dish;
+    //   * focus_band_px is a width in the PICTURE, so it is turned into a
+    //     depth tolerance by the local gradient of that surface -- the sharp
+    //     strip is that many pixels across however hard the lens is tilted,
+    //     which is the number a photographer would actually reach for;
+    //   * outside the band the radius ramps up over a fixed depth interval
+    //     and is clamped at dof_max_px, so a far element goes soft and stays
+    //     soft instead of dissolving.
+    [branch] if (laP24.w > 0.0) {
+        float2 qo  = pp - axP;
+        float  rr  = length(qo);
+        float  fz  = laP24.z + laP25.x * rr * rr
+                             + laP25.y * dot(qo, float2(laP25.z, laP25.w));
+        float  gm  = abs(laP25.y) + 2.0 * abs(laP25.x) * rr;
+        float  tol = 0.5 * laP26.x * gm;
+        float  dz  = abs(depSum / max(depW, 1e-6) - fz);
+        outCoc = laP24.w * saturate((dz - tol) * laP26.y);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -2096,7 +2214,7 @@ R"hlsl(
             }
             lin *= min(o, ikP6.y) / v;
         }
-        return float4(lin, 1.0);
+        return float4(lin, outCoc);
     }
 #endif
     float gain = 1.0;
@@ -2104,7 +2222,7 @@ R"hlsl(
         float t = smoothstep(knee, max(capBright, knee + 0.01), m);
         gain = lerp(1.0, peakGain, t * t);
     }
-    return float4(lin * sdrScale * gain, 1.0);
+    return float4(lin * sdrScale * gain, outCoc);
 }
 )hlsl";
 
@@ -2140,7 +2258,7 @@ cbuffer PostPassCB : register(b0) {
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
     float4 pp5;   // x stock      y fog        z bloom              w lightDrift
     float4 pp6;   // x fogReach(uv) y bloomPx(this res) z lightX       w lightY
-    float4 pp7;
+    float4 pp7;   // x dofMaxPx(this res; 0 = alpha is not a CoC)   y,z,w -
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2235,9 +2353,22 @@ float3 Wide(float2 uv, float2 r) {
 float4 PSMain(VSOut i) : SV_Target {
     const float3 W = float3(0.2126, 0.7152, 0.0722);
     float2 uv = i.uv;
-    float3 c  = Src.SampleLevel(linearClamp, uv, 0).rgb;
+    float4 c4 = Src.SampleLevel(linearClamp, uv, 0);
+    float3 c  = c4.rgb;
     float3 d  = c;
-    [branch] if (pp0.z > 0.01) d = Disc(uv, pp0.z * pp0.xy);
+    // ---- DEPTH OF FIELD: one defocus radius PER PIXEL --------------------
+    // post_blur_px is the lens's own softness, the floor under everything;
+    // the display pass has written this pixel's circle of confusion into the
+    // source's ALPHA (px at 1440p), so an element far from the plane of focus
+    // gets a wider disc than the one sitting in it. Gather-style: the radius
+    // comes from the CENTRE pixel, which is what makes it one texture read
+    // and no second pass, at the price of a sharp element bleeding very
+    // slightly into a blurred neighbour's disc -- invisible at these radii,
+    // and cheaper than any scatter that would fix it. pp7.x = 0 means no look
+    // wrote a CoC and alpha is the plain 1.0, so it is never read.
+    float rPx = pp0.z;
+    [branch] if (pp7.x > 0.0005) rPx = max(rPx, min(c4.a * pp4.w, pp7.x));
+    [branch] if (rPx > 0.01) d = Disc(uv, rPx * pp0.xy);
     [branch] if (pp0.w > 0.0005) {
         float3 g = Wide(uv, pp1.x * pp0.xy);
         // glowDark > 0 leans the glare toward the DARK side: dark features

@@ -1959,6 +1959,9 @@ R"hlsl(
             C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
         }
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     [branch] if (poP0.x > 0.0005) {
         // FILM GRAIN, luminance-weighted: the mids and darks carry it (that is
         // where emulsion noise lives and where the ink already looks grainy),

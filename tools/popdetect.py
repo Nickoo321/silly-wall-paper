@@ -52,20 +52,41 @@ def band_stats(a, b, w, h):
 
 
 def masks(path):
+    """Strict masks AND loose ones, for hysteresis.
+
+    The strict thresholds alone lie. Measured on the real frames: every single
+    "appeared hole" component at 1440p was a pixel going from brightness ~49 to
+    ~39 -- a 3% drift in a near-black gradient that happens to straddle the
+    hard cut at 40. It is invisible, it is not a droplet, and there were ~37 of
+    them per frame pair purely because 1440p has seven times as many pixels
+    sitting within a few levels of the boundary (which is also why the count
+    looked resolution-dependent, and why that looked like evidence for tiny
+    droplets). So a component only counts as new if it does not overlap the
+    LOOSE mask of the previous frame -- i.e. those pixels were not even close
+    to being a hole before. That is the difference between measuring the sim
+    and measuring the instrument.
+    """
     im = Image.open(path).convert('RGB')
     w, h = im.size
     px = im.load()
     oil = bytearray(w * h)
     hole = bytearray(w * h)
+    oil_loose = bytearray(w * h)
+    hole_loose = bytearray(w * h)
     for y in range(h):
         base = y * w
         for x in range(w):
             r, g, b = px[x, y]
+            m = max(r, g, b)
             if r > 150:
                 oil[base + x] = 1
-            if r < 40 and g < 40 and b < 40:
+            if r > 120:
+                oil_loose[base + x] = 1
+            if m < 40:
                 hole[base + x] = 1
-    return w, h, oil, hole
+            if m < 70:
+                hole_loose[base + x] = 1
+    return w, h, oil, hole, oil_loose, hole_loose
 
 
 def components(mask, w, h, minpx):
@@ -125,12 +146,12 @@ def main():
     for f in files:
         cur = masks(f)
         if prev is not None:
-            w, h, oil, hole = cur
-            _, _, poil, phole = prev
-            ao, apo = pops(components(oil, w, h, minpx), poil)
-            ah, aph = pops(components(hole, w, h, minpx), phole)
-            vo, vpo = pops(components(poil, w, h, minpx), oil)
-            vh, vph = pops(components(phole, w, h, minpx), hole)
+            w, h, oil, hole, oilL, holeL = cur
+            _, _, poil, phole, poilL, pholeL = prev
+            ao, apo = pops(components(oil, w, h, minpx), poilL)
+            ah, aph = pops(components(hole, w, h, minpx), pholeL)
+            vo, vpo = pops(components(poil, w, h, minpx), oilL)
+            vh, vph = pops(components(phole, w, h, minpx), holeL)
             bt, bn, bm = band_stats(Image.open(prevf).convert('RGB'),
                                     Image.open(f).convert('RGB'), w, h)
             print('  %-22s pops oil %2d/%2d hole %2d/%2d | band %5d px, %4d jumpy, mean d %.1f'

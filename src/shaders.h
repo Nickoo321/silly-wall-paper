@@ -2514,15 +2514,27 @@ float4 PSMain(VSOut i) : SV_Target {
             float  rad = pp6.y * (1.0 + 0.12 * sin(tq * 0.0197 + 0.9));
             float2 ctr = uv + float2(sin(tq * 0.0131), cos(tq * 0.0173))
                             * (rad * 0.10 * pp0.xy);
+            // The user photographed faint concentric RINGS around every bright
+            // droplet sitting in the black: two rings of taps at fixed radii
+            // ARE two circles, and a point source lights each of them up. So
+            // the taps now cover the whole disc -- four radii with Gaussian
+            // weights, and the radius itself jittered per pixel -- and a point
+            // source blooms into a smooth wash, never a halo with edges.
             float  jit = PHash21(i.pos.xy * 0.37) * 6.2831853;
+            float  rj  = 0.80 + 0.40 * PHash21(i.pos.yx * 0.53 + 17.1);
             float3 bl  = float3(0.0, 0.0, 0.0);
-            [unroll] for (int m = 0; m < 8; m++) {
-                float  an = (float)m * 0.7853982 + jit;
-                float2 dd = float2(cos(an), sin(an)) * (rad * pp0.xy);
-                bl += max(Src.SampleLevel(linearClamp, ctr + dd, 0).rgb, 0.0);
-                bl += max(Src.SampleLevel(linearClamp, ctr + dd * 0.55, 0).rgb, 0.0) * 1.3;
+            float  bw  = 0.0;
+            [unroll] for (int m = 0; m < 6; m++) {
+                float  an = (float)m * 1.0471976 + jit;
+                float2 un = float2(cos(an), sin(an));
+                [unroll] for (int k = 0; k < 4; k++) {
+                    float  fr = (0.18 + 0.27 * (float)k) * rj;
+                    float  w  = exp(-fr * fr * 1.6);
+                    bl += max(Src.SampleLevel(linearClamp, ctr + un * (fr * rad * pp0.xy), 0).rgb, 0.0) * w;
+                    bw += w;
+                }
             }
-            bl /= 18.4;
+            bl /= max(bw, 1e-4);
             float wd = 1.0 - smoothstep(0.10, 0.75, lum0);
             float lw = 0.75 + 0.50 * exp(-dl / max(pp6.x * 1.5, 1e-4));
             d += bl * (saturate(pp5.z) * 0.20 * wd * lw);

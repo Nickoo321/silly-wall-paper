@@ -19,7 +19,11 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 2)
 Register-ScheduledTask -TaskName $name -Action $action -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $name
-Start-Sleep -Seconds 8
+# Wait for the task to FINISH (up to 90 s): unregistering a still-running task kills it, and on a
+# loaded machine (builds/renders) PowerShell can take longer than a fixed sleep just to start.
+$deadline = (Get-Date).AddSeconds(90)
+do { Start-Sleep -Seconds 2; $st = (Get-ScheduledTask -TaskName $name).State } while ($st -eq "Running" -and (Get-Date) -lt $deadline)
+if ($st -eq "Running") { Write-Host "task still running after 90 s; leaving it registered"; exit 1 }
 $info = Get-ScheduledTaskInfo -TaskName $name
 Unregister-ScheduledTask -TaskName $name -Confirm:$false
 Write-Host ("task result {0}; log tail:" -f $info.LastTaskResult)

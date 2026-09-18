@@ -2968,12 +2968,38 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             float g = side / fmaxf(0.5f * d.r, 1e-5f);
             g = g < 0.0f ? 0.0f : (g > 1.0f ? 1.0f : g);
             g = g * g * (3.0f - 2.0f * g);
+            // ---- "an actual hole, or invisible": no rim without a fill ----
+            // Being on the right side is not enough. The droplet's own PEAK
+            // kernel has to carry the local field across the isoline, or it
+            // draws nothing but a rim around nothing -- the hollow rings with
+            // an oil centre the user photographed. A positive droplet that
+            // has drifted into a deep hole can never lift the field back over
+            // the threshold; a negative one has to beat whatever oil it is
+            // under (the shader scales its punch by the LOCAL field, which is
+            // what normally makes this work at any thickness, but not where
+            // the two fight). Fade it out over a small field margin rather
+            // than switching it, so nothing pops.
+            float over;
+            if (d.kind == 0) over = thresh - (f2 - fmaxf(f2, 1.0f) * a.dropletWeight);
+            // kind 1 carries the local deficit plus its authored weight (see
+            // the shader), so it always crosses -- the test is here for
+            // symmetry and to keep the two definitions in one place.
+            else             over = a.dropletOilW;
+            float pg = over / 0.18f;
+            pg = pg < 0.0f ? 0.0f : (pg > 1.0f ? 1.0f : pg);
+            g *= pg * pg * (3.0f - 2.0f * pg);
             // ...and fade out below about a pixel. A sub-pixel droplet cannot
             // be resolved -- no pixel lands near enough to its centre for the
             // kernel to reach full strength and punch through -- so it, too,
             // would contribute nothing but a gradient spike.
+            // The floor is a pixel OR the dark rim's own width, whichever is
+            // larger: a droplet whose hole would come out narrower than the
+            // rim band painted around it is all rim and no fill, which is the
+            // other half of the ring. rim_width is a half-width in the same
+            // p-units as r.
             const float pxY = 1.0f / fmaxf((float)m_height, 1.0f);
-            float sp2 = (d.r - 0.35f * pxY) / fmaxf(0.85f * pxY, 1e-9f);
+            const float rFloor = fmaxf(1.2f * pxY, 1.6f * fmaxf(a.rimWidth, 1e-5f));
+            float sp2 = (d.r - 0.35f * rFloor) / fmaxf(0.65f * rFloor, 1e-9f);
             sp2 = sp2 < 0.0f ? 0.0f : (sp2 > 1.0f ? 1.0f : sp2);
             d.gate = g * sp2 * sp2 * (3.0f - 2.0f * sp2);
         }

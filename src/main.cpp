@@ -2086,8 +2086,14 @@ static int RunShotMode() {
             const double iv = (double)o.seriesInterval;
             const bool wholeSec = fabs((double)o.delaySec - llround((double)o.delaySec)) < 1e-4
                                && fabs(iv - llround(iv)) < 1e-4;
-            if (wholeSec) swprintf_s(suffix, L"-%03d", (int)llround(target));
-            else          swprintf_s(suffix, L"-%04d", (int)llround(target * 10.0));
+            // ...and a FRAME-step series (interval well under a tenth, used by
+            // the pop detector, which needs consecutive frames) needs finer
+            // still: six digits of MILLISECONDS.
+            const bool wholeTenth = fabs((double)o.delaySec * 10.0 - llround((double)o.delaySec * 10.0)) < 1e-3
+                                 && fabs(iv * 10.0 - llround(iv * 10.0)) < 1e-3;
+            if (wholeSec)         swprintf_s(suffix, L"-%03d", (int)llround(target));
+            else if (wholeTenth)  swprintf_s(suffix, L"-%04d", (int)llround(target * 10.0));
+            else                  swprintf_s(suffix, L"-%06d", (int)llround(target * 1000.0));
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));

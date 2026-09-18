@@ -980,8 +980,16 @@ float4 PSMain(VSOut i) : SV_Target {
             grad  -= gNeg * pun;
         }
         if (dPos > 0.0) {
-            field += dPos * laP19.z;
-            grad  += gPos * laP19.z;
+            // Symmetric with the hole punch above, and for the same reason: a
+            // FIXED positive weight only clears the isoline where the ink is
+            // already close to it, so an oil droplet that drifted into a deep
+            // hole raised the field a little, crossed nothing, and left just
+            // its rim -- a pink-ringed dot inside a black tail, which is one
+            // of the three the user photographed. Carry whatever deficit is
+            // actually here, plus the authored weight on top.
+            float pup = laP19.z + max(thresh - field, 0.0);
+            field += dPos * pup;
+            grad  += gPos * pup;
             // same soft-max fill blend the blobs use, so an oil droplet takes
             // the palette's own bright shade and merges colour with a blob it
             // touches instead of stamping a flat disc over it.
@@ -1024,6 +1032,12 @@ float4 PSMain(VSOut i) : SV_Target {
     // and a narrow band put a hard bright seam around the plume it was meant
     // to clean up. Wide = gradual = invisible.
     float isoOk   = 1.0 - smoothstep(1.35, 6.00, sdfWarp);
+    // NOTE (2026-09-17): lensR must come from the SAME gradient as sdf. Taking
+    // it from the blob-only gradient to stop droplets jittering the soft band
+    // was tried and is wrong: sdf still divided by the full |grad|, the ratio
+    // sdf/edgeW that the thin-film model rests on came apart, and the oil went
+    // black. Decoupling the two is a change to the film-edge design, which is
+    // parked until the user decides between the wide soft edge and a crisp one.
     float  lensR = clamp(0.78 / max(gl, 1e-3), 0.02, 0.35);
     float  edgeW = clamp(max(laP13.y, 0.02) * lensR, laP1.x * 2.0, 0.060);
     float  thk   = 1.0;                       // 1 = full-thickness oil

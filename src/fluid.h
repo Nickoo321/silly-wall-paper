@@ -1102,14 +1102,32 @@ private:
     // Droplet particle sim: nucleation, advection by the oil, attraction,
     // coalescence, dissolution; then the uniform-grid bin the shader reads.
     void StepAcidDroplets(float dt);
-    // [post] focus_tilt / camera_focus: the OCCASIONAL READJUSTMENT. Holds the
-    // focus plane still for focus_tilt_period seconds (randomised), then eases
-    // to a new tilt angle and focus distance over focus_tilt_move_s with a
-    // slight overshoot and settle -- a hand on a lens, not a drift.
-    void StepCameraFocus(float dt);
-    float m_camAngleNow = 0.0f;     // current tilt direction, radians
-    float m_camFocusNow = 0.5f;     // current focus depth
-    float m_camAngleA = 0.0f, m_camAngleB = 0.0f;  // move endpoints
+
+    // ---- THE RIG ---------------------------------------------------------
+    // One physical assembly -- lamp, lens, focus ring -- stepped once a frame
+    // on the CPU and uploaded to the post pass as ONE contiguous block of
+    // constants (b3, where the display pass keeps its mirror block; the post
+    // pass never binds that one). The lamp's idle drift, the focus/tilt
+    // readjustment and, later, the lid ghosts, the flare and the vignette
+    // centre are all motions of the SAME object: if they read different
+    // numbers they disagree on screen and the illusion is over. So they read
+    // these. A later task extends this struct and the block; it must not have
+    // to touch the camera code to do it.
+    struct CameraRig {
+        float lampX = 0.5f, lampY = 1.20f;  // the off-view lamp, uv, drifted
+        float axisX = 0.5f, axisY = 0.5f;   // where the optical axis meets the dish
+        float tiltAngle = 0.0f;             // radians; direction of the focus gradient
+        float tiltAmt   = 0.0f;             // focus depth gained per unit along it
+        float focus     = 0.5f;             // focus depth
+        float movePhase = 1.0f;             // 0..1 through the current readjustment
+    };
+    CameraRig m_rig;
+    // Steps the whole rig: the lamp's continuous idle drift (brief Q) and the
+    // focus/tilt OCCASIONAL READJUSTMENT (brief R correction) -- deliberately
+    // two different kinds of motion on one body, which is what makes it read
+    // as a rig somebody is operating rather than a shader.
+    void StepCameraRig(float dt);
+    float m_camAngleA = 0.0f, m_camAngleB = 0.0f;  // readjustment endpoints
     float m_camFocusA = 0.5f, m_camFocusB = 0.5f;
     float m_camHold = 0.0f;         // s left of the still hold
     float m_camMoveT = -1.0f;       // >= 0 while a readjustment is running

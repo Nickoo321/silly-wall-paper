@@ -1227,6 +1227,9 @@ R"hlsl(
             colW   += wl;
         }
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- CIRCLE OF CONFUSION -> the render target's ALPHA (items N + R) ---
     // The [post] pass used to defocus the whole frame by one radius, which is
     // what a flatbed scanner does, not a lens. A lens has ONE surface in focus
@@ -1254,7 +1257,15 @@ R"hlsl(
         float  gm  = abs(laP25.y) + 2.0 * abs(laP25.x) * rr;
         float  tol = 0.5 * laP26.x * gm;
         float  dz  = abs(depSum / max(depW, 1e-6) - fz);
-        outCoc = laP24.w * saturate((dz - tol) * laP26.y);
+        // ...and it falls away FAST. The user's focus reference is a macro
+        // shot where the one plane in focus resolves fine texture and
+        // everything off it is already a wash: a shallow depth of field with a
+        // STEEP shoulder, not a gentle ramp. So the radius leaves zero the
+        // moment the element clears the sharp band and is most of the way to
+        // the clamp within a tenth of the depth range -- x*(2-x) rather than a
+        // straight line, over a deliberately short span.
+        float  x   = saturate((dz - tol) * laP26.y);
+        outCoc = laP24.w * x * (2.0 - x);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -2256,9 +2267,21 @@ cbuffer PostPassCB : register(b0) {
     float4 pp2;   // x grainColor y time       z sdrScale           w glowDark
     float4 pp3;   // x dust       y hairs      z scratches          w leak
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
-    float4 pp5;   // x stock      y fog        z bloom              w lightDrift
-    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z lightX       w lightY
-    float4 pp7;   // x dofMaxPx(this res; 0 = alpha is not a CoC)   y,z,w -
+    float4 pp5;   // x stock      y fog        z bloom   w dofMaxPx(this res; 0 = alpha is not a CoC)
+    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z -          w -
+    float4 pp7;   // spare
+};
+// ---- THE RIG -------------------------------------------------------------
+// One lamp and one lens on one body, stepped on the CPU (FluidRenderer::
+// StepCameraRig) and handed over as a single block, so the haze, the bloom,
+// the depth of field and -- later -- the lid ghosts, the flare and the
+// vignette centre cannot disagree about where the rig is. rg2..rg4 are
+// reserved for those. This is b3, which the display pass uses for its mirror
+// fold and this pass has never bound.
+cbuffer RigCB : register(b3) {
+    float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
+    float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
+    float4 rg2, rg3, rg4;
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2313,17 +2336,32 @@ float3 Emulsion(float3 d, float3 nz, float amt, float sdr) {
 // of a defocused lens is a flat disc, not a Gaussian, which is why a defocused
 // hairline becomes a soft band of the same darkness spread wider rather than
 // a faint smear. Bilinear taps between texels make it smoother than its count.
-float3 Disc(float2 uv, float2 r) {
-    float3 s = Src.SampleLevel(linearClamp, uv, 0).rgb;
+// Three EQUAL-AREA annuli (radii sqrt(1/6), sqrt(3/6), sqrt(5/6)) with equal
+// total weight each, plus a light centre tap: that is a flat disc sampled
+// uniformly by area, where a ring pattern chosen by eye is not. It matters now
+// that the radius is per-pixel and reaches ten-odd px on the far layer -- the
+// old 19 taps printed a visible 12-pointed star round every out-of-focus
+// highlight at that size. `jit` turns each pixel's tap angles by its own hash,
+// so what banding is left dissolves into noise the grain is about to cover.
+float3 Disc(float2 uv, float2 r, float jit) {
+    float3 s = Src.SampleLevel(linearClamp, uv, 0).rgb * 0.06;
+    float  w = 0.06;
     [unroll] for (int k = 0; k < 6; k++) {
-        float a = (float)k * 1.0471976 + 0.35;
-        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.5 * r), 0).rgb;
+        float a = (float)k * 1.0471976 + jit;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.41 * r), 0).rgb * 0.0556;
+        w += 0.0556;
     }
-    [unroll] for (int j = 0; j < 12; j++) {
-        float a = (float)j * 0.5235988;
-        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * r, 0).rgb;
+    [unroll] for (int j = 0; j < 10; j++) {
+        float a = (float)j * 0.6283185 + jit * 1.7 + 0.31;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.71 * r), 0).rgb * 0.0333;
+        w += 0.0333;
     }
-    return s / 19.0;
+    [unroll] for (int m = 0; m < 14; m++) {
+        float a = (float)m * 0.4487990 + jit * 2.3 + 0.73;
+        s += Src.SampleLevel(linearClamp, uv + float2(cos(a), sin(a)) * (0.91 * r), 0).rgb * 0.0238;
+        w += 0.0238;
+    }
+    return s / w;
 }
 // Wide, soft-shouldered blur, 37 taps on three rings with falling weights:
 // the veiling glare of a real lens (scatter in the glass and the film base),
@@ -2366,9 +2404,23 @@ float4 PSMain(VSOut i) : SV_Target {
     // slightly into a blurred neighbour's disc -- invisible at these radii,
     // and cheaper than any scatter that would fix it. pp7.x = 0 means no look
     // wrote a CoC and alpha is the plain 1.0, so it is never read.
+    // The user, on the first depth-of-field frame: "what's in focus is
+    // EXTREMELY in focus." The dreaminess is supposed to come from the haze,
+    // the bloom and the elements that are OFF the plane -- not from a global
+    // softness sitting on the sharp slice too. So with a CoC in hand
+    // post_blur_px stops being a floor under the whole frame and becomes the
+    // lens's softness on pixels that have ALREADY left focus, faded in with
+    // the CoC itself: on the plane the radius is exactly zero and the Disc is
+    // never entered, which is as sharp as the renderer can be.
     float rPx = pp0.z;
-    [branch] if (pp7.x > 0.0005) rPx = max(rPx, min(c4.a * pp4.w, pp7.x));
-    [branch] if (rPx > 0.01) d = Disc(uv, rPx * pp0.xy);
+    [branch] if (pp5.w > 0.0005) {
+        float coc = min(c4.a * pp4.w, pp5.w);
+        rPx = max(coc, pp0.z * saturate(coc));
+    }
+    [branch] if (rPx > 0.01) {
+        float jit = 6.2831853 * PHash21(i.pos.xy * 0.0173 + 0.31);
+        d = Disc(uv, rPx * pp0.xy, jit);
+    }
     [branch] if (pp0.w > 0.0005) {
         float3 g = Wide(uv, pp1.x * pp0.xy);
         // glowDark > 0 leans the glare toward the DARK side: dark features
@@ -2400,12 +2452,9 @@ float4 PSMain(VSOut i) : SV_Target {
     [branch] if (pp5.y > 0.0005 || pp5.z > 0.0005) {
         float  tq  = pp2.y;
         float  asp = pp0.y / max(pp0.x, 1e-9);           // W/H
-        float2 L   = float2(pp6.z, pp6.w);
-        [branch] if (pp5.w > 0.0005) {
-            float kd = saturate(pp5.w);
-            L += float2(0.055 * sin(tq * 0.0171) + 0.030 * sin(tq * 0.0413 + 1.7),
-                        0.040 * sin(tq * 0.0233 + 0.6) + 0.022 * sin(tq * 0.0561 + 2.3)) * kd;
-        }
+        // the lamp, already drifted, straight off the rig -- same sines as
+        // before, evaluated once on the CPU instead of once per pixel
+        float2 L   = rg0.xy;
         float2 qL  = float2((uv.x - L.x) * asp, uv.y - L.y);
         float  dl  = length(qL);
         float  sdrL = max(pp2.z, 1e-3);

@@ -430,6 +430,18 @@ struct LiquidAcidConfig {
     float celluloseScale = 40.0f;   // feature size, px at 1440p  cellulose_scale
     float celluloseDrift = 1.0f;    // 0..1 with the rise motion  cellulose_drift
 
+    // --- PER-DROPLET DEPTH (item N) ---------------------------------------
+    // Every droplet and ring gets a depth in 0..1, hashed from its birth
+    // position (so it is fixed for life and costs the sim no random draws) and
+    // spread about the masses' own base depth of 0.5 by droplet_depth. The
+    // display pass turns it into a circle of confusion (see [post] dof_max_px
+    // and the camera keys), so the frame has a real near/far instead of one
+    // global defocus. depth_rise is the user's own idea: the BACK layer climbs
+    // a little faster than the front, which reads as parallax the moment the
+    // eye has a sharp plane to compare it against. Both 0 = today.
+    float dropletDepth = 0.0f;      // 0..1 spread about 0.5     droplet_depth
+    float depthRise    = 0.0f;      // back-layer rise bonus        depth_rise
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".
@@ -738,6 +750,42 @@ struct PostConfig {
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x
     float lightY     = 1.20f;     //                                 light_y
     float lightDrift = 1.0f;      // 0..1 idle motion            light_drift
+
+    // --- PERSPECTIVE CAMERA + DEPTH OF FIELD + TILT (items N + R) ---------
+    // Up to here the camera was an orthographic scanner with ONE global
+    // defocus: every element the same distance away, every ring a stamped
+    // circle, one blur radius for the whole frame. The user's sketch is a
+    // LENS at the tip of a view cone looking down at a flat dish, so:
+    //   * each droplet/ring carries its own depth (droplet_depth), the display
+    //     pass turns |depth - focus| into a CIRCLE OF CONFUSION and writes it
+    //     into the FP16 post target's ALPHA, and the post pass sizes its
+    //     defocus disc per pixel from that -- so one element can be sharp
+    //     while the ring behind it is a ghost (the Requiem reference);
+    //   * the focal "plane" is not flat relative to the dish: camera_field_
+    //     curve bends it with distance from the optical axis, so the centre
+    //     and the corners of the frame cannot both be sharp;
+    //   * focus_tilt slants it (a Lensbaby / freelensing sweet spot), and both
+    //     the tilt and the focus distance move by OCCASIONAL READJUSTMENT --
+    //     still for focus_tilt_period seconds, then a short eased move with a
+    //     slight overshoot and settle, then still again -- never a continuous
+    //     drift. (Drifting is the lamp's job, not the focus ring's.)
+    //   * camera_fov > 0 makes the view PERSPECTIVE: an off-axis ring is seen
+    //     obliquely, so it foreshortens radially toward the axis, its wall
+    //     reads thicker on the far side, and its highlight favours the side
+    //     facing the axis. 0 = orthographic = exactly today's geometry.
+    // Every key defaults to today's behaviour, and dof_max_px = 0 keeps the
+    // CoC channel and the per-pixel disc entirely out of the frame.
+    float cameraFov       = 0.0f;   // deg across the frame; 0 = ortho     camera_fov
+    float cameraFocus     = 0.5f;   // depth the lens is focused on      camera_focus
+    float cameraFieldCurve= 0.0f;   // focus depth per (dist from axis)^2 camera_field_curve
+    float cameraAxisX     = 0.5f;   // where the optical axis meets the dish camera_axis_x
+    float cameraAxisY     = 0.5f;   //                                    camera_axis_y
+    float focusTilt       = 0.0f;   // focus depth per unit along the tilt  focus_tilt
+    float focusTiltAngle  = 0.0f;   // deg; direction that gradient points focus_tilt_angle
+    float focusBandPx     = 260.0f; // width of the sharp strip, px at 1440p focus_band_px
+    float focusTiltPeriod = 0.0f;   // mean s between readjustments; 0 = never focus_tilt_period
+    float focusTiltMoveS  = 1.4f;   // how long one readjustment takes, s  focus_tilt_move_s
+    float dofMaxPx        = 0.0f;   // CoC clamp, px at 1440p; 0 = no DoF   dof_max_px
 };
 
 struct MirrorConfig {
@@ -1077,6 +1125,38 @@ private:
     // Droplet particle sim: nucleation, advection by the oil, attraction,
     // coalescence, dissolution; then the uniform-grid bin the shader reads.
     void StepAcidDroplets(float dt);
+
+    // ---- THE RIG ---------------------------------------------------------
+    // One physical assembly -- lamp, lens, focus ring -- stepped once a frame
+    // on the CPU and uploaded to the post pass as ONE contiguous block of
+    // constants (b3, where the display pass keeps its mirror block; the post
+    // pass never binds that one). The lamp's idle drift, the focus/tilt
+    // readjustment and, later, the lid ghosts, the flare and the vignette
+    // centre are all motions of the SAME object: if they read different
+    // numbers they disagree on screen and the illusion is over. So they read
+    // these. A later task extends this struct and the block; it must not have
+    // to touch the camera code to do it.
+    struct CameraRig {
+        float lampX = 0.5f, lampY = 1.20f;  // the off-view lamp, uv, drifted
+        float axisX = 0.5f, axisY = 0.5f;   // where the optical axis meets the dish
+        float tiltAngle = 0.0f;             // radians; direction of the focus gradient
+        float tiltAmt   = 0.0f;             // focus depth gained per unit along it
+        float focus     = 0.5f;             // focus depth
+        float movePhase = 1.0f;             // 0..1 through the current readjustment
+    };
+    CameraRig m_rig;
+    // Steps the whole rig: the lamp's continuous idle drift (brief Q) and the
+    // focus/tilt OCCASIONAL READJUSTMENT (brief R correction) -- deliberately
+    // two different kinds of motion on one body, which is what makes it read
+    // as a rig somebody is operating rather than a shader.
+    void StepCameraRig(float dt);
+    float m_camAngleA = 0.0f, m_camAngleB = 0.0f;  // readjustment endpoints
+    float m_camFocusA = 0.5f, m_camFocusB = 0.5f;
+    float m_camHold = 0.0f;         // s left of the still hold
+    float m_camMoveT = -1.0f;       // >= 0 while a readjustment is running
+    float m_camMoveDur = 1.0f;
+    bool  m_camInit = false;
+    uint32_t m_camRng = 0x9E3779B9u;
     // Blob field + gradient + the local oil's own velocity at one uv point.
     // The CPU twin of the shader's metaball loop, used to keep a trapped
     // droplet inside the oil and to make it ride that oil.
@@ -1284,6 +1364,10 @@ private:
         float seed;      // 0..1, hashed from the birth position; fixed for
                          // life. Drives the ring's out-of-round shape, so a
                          // ring never changes its identity frame to frame.
+        float depth;     // 0..1, 0.5 = the masses' plane; hashed at birth from
+                         // the same position, so switching droplet_depth on
+                         // never moves the population. Drives the circle of
+                         // confusion and the depth_rise speed bonus.
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
         float tauR;      // seconds for r to relax toward rt. 0 = the shared
                          // 0.34 s default; set per droplet by the birth and

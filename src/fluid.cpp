@@ -919,11 +919,17 @@ bool FluidRenderer::PostActive() const {
     // and the second noise layer live in it as much as the defocus does, and
     // film_stock is applied there too. All default to 0, so style=fluid still
     // never enters it.
+    // dof_max_px counts only on the acid look: the circle of confusion is
+    // written by the LIQUID_ACID block of the display pass and nothing else
+    // has an isoline or a droplet depth to derive one from, so on any other
+    // style the alpha channel is still a plain 1.0 and must not be read as a
+    // blur radius.
     return m_psoPost && (po.postBlurPx > 0.01f || po.postGlow > 0.0005f ||
                          po.filmDust > 0.0005f || po.filmHairs > 0.0005f ||
                          po.filmScratches > 0.0005f || po.filmLeak > 0.0005f ||
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
-                         po.fog > 0.0005f || po.bloom > 0.0005f);
+                         po.fog > 0.0005f || po.bloom > 0.0005f ||
+                         (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
 // One FP16 frame-sized texture: RTV slot kFrames*2+1 (after the back buffers,
@@ -1028,15 +1034,35 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // a distance in the picture), the bloom radius is in this frame's texels
     c[21] = fminf(fmaxf(po.fog, 0.0f), 1.0f);
     c[22] = fminf(fmaxf(po.bloom, 0.0f), 1.0f);
-    c[23] = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
+    // DEPTH OF FIELD. The display pass has already written this pixel's circle
+    // of confusion, in px at 1440p, into the source's ALPHA; this is the clamp
+    // on it, in THIS frame's texels, and its being non-zero is what tells the
+    // pass that alpha is a blur radius at all rather than the plain 1.0 every
+    // other path writes. Only the acid look produces a CoC (see PostActive).
+    c[23] = (m_cfg.acid.enabled && po.dofMaxPx > 0.01f) ? po.dofMaxPx * scale : 0.0f;
     c[24] = fmaxf(po.fogPx, 1.0f) / 1440.0f;
     c[25] = fmaxf(po.bloomPx, 1.0f) * scale;
-    c[26] = po.lightX;
-    c[27] = po.lightY;
+    // c[26..31] spare. light_x / light_y / light_drift used to live here; the
+    // lamp is part of the RIG now and arrives in its own block below.
+
+    // ---- THE RIG, as ONE contiguous block ---------------------------------
+    // b3 -- the root-constant block the display pass uses for the mirror fold
+    // and the post pass has never bound. 20 constants, of which the rig is the
+    // first 8 and the rest are reserved for the lid ghosts, the flare and the
+    // vignette centre, all of which are motions of this same body and must be
+    // read from these numbers rather than re-derived beside them.
+    float rig[20] = {};
+    rig[0] = m_rig.lampX;   rig[1] = m_rig.lampY;
+    rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
+    rig[4] = m_rig.tiltAngle;
+    rig[5] = m_rig.tiltAmt;
+    rig[6] = m_rig.focus;
+    rig[7] = m_rig.movePhase;
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(6, 20, rig, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_postSrv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -1669,6 +1695,11 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         }
     }
 
+    // The camera rig -- lamp, optical axis, focus plane -- moves whether or
+    // not the acid look is on: [post] fog and bloom hang off the lamp and any
+    // style can name them.
+    StepCameraRig(dt);
+
     // Liquid Acid oil layer: advect the blobs with the fluid we just stepped
     // (one frame of readback latency), then hand them to the display pass.
     if (m_cfg.acid.enabled) {
@@ -2241,8 +2272,9 @@ struct AcidParamsGPU {
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
     float p18[4], p19[4], p20[4], p21[4], p22[4], p23[4], men[4];
+    float p24[4], p25[4], p26[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 528, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 576, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -3130,6 +3162,14 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // stream, so the population is identical whatever the shape keys
             // say, and fixed for life, so a ring never morphs into another.
             out.seed = hash01(x, y, 0x85EBCA6Bu);
+            // ...and the DEPTH, from the same place and for the same reason:
+            // a droplet's distance from the lens is part of its identity, so
+            // it is fixed for life, and drawing it from a hash rather than
+            // from the sim's stream means switching droplet_depth on does not
+            // move a single droplet. 0.5 is the masses' own plane; the spread
+            // about it is applied where it is USED, so the key can be turned
+            // while the sim runs without re-rolling anybody.
+            out.depth = hash01(x, y, 0xB5297A4Du);
             return true;
         }
         return false;
@@ -3195,6 +3235,17 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             tx = vu * a.flowGain;
             ty = vv * a.flowGain;
         }
+        // ---- depth_rise: the back layer climbs faster ---------------------
+        // The user's own idea, watching the live panel: "the back particles
+        // going up faster". Parallax the wrong way round on purpose -- a real
+        // lens would show the FAR layer moving less -- but this is a thin film
+        // seen from above, not a landscape, and what it buys is that the
+        // out-of-focus layer separates from the sharp one in MOTION as well as
+        // in blur, which is what makes the depth read at all. Symmetric about
+        // the masses' own plane (0.5), so the population's mean climb rate is
+        // untouched and the rise looks exactly as fast as it did.
+        if (a.depthRise > 1e-5f && a.riseSpeed > 1e-6f)
+            ty -= a.riseSpeed * a.depthRise * (d.depth - 0.5f);
         // slow Brownian jitter -- damped by oil_viscosity: a droplet suspended
         // in a thick liquid does not twitch.
         tx += (rf() * 2.0f - 1.0f) * a.dropletJitter * dvJit;
@@ -3688,6 +3739,97 @@ void FluidRenderer::StepOilDrag(float dt) {
     }
 }
 
+// ---- THE RIG: one lamp, one lens, two kinds of motion ---------------------
+// The LAMP drifts continuously -- a sum of slow sines over seconds to a
+// minute, the frame's idle animation (brief Q). The FOCUS does not: the user
+// was explicit that the tilt is not a drift but an OCCASIONAL READJUSTMENT.
+// It holds still for tens of seconds to minutes, then somebody re-tilts the
+// lens -- a second or two of eased movement with a slight overshoot and
+// settle, like a hand letting go of a barrel -- and then it is still again.
+// Both live on the same body and are stepped here, so everything downstream
+// (the haze, the bloom, the depth of field and, later, the lid ghosts, the
+// flare and the vignette centre) reads ONE set of numbers and agrees about
+// where the rig is.
+void FluidRenderer::StepCameraRig(float dt) {
+    const PostConfig& po = m_cfg.post;
+    const float DEG = 0.01745329252f;
+    auto rf = [this]() {
+        m_camRng ^= m_camRng << 13; m_camRng ^= m_camRng >> 17; m_camRng ^= m_camRng << 5;
+        return (float)(m_camRng & 0xFFFFFFu) * (1.0f / 16777216.0f);
+    };
+    // ---- the lamp (was computed in kPostSrc; the numbers are its own, so
+    // the haze and the bloom come out exactly as they did before) ----------
+    m_rig.lampX = po.lightX;
+    m_rig.lampY = po.lightY;
+    if (po.lightDrift > 0.0005f) {
+        const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
+        const float t  = m_time;
+        m_rig.lampX += (0.055f * sinf(t * 0.0171f) + 0.030f * sinf(t * 0.0413f + 1.7f)) * kd;
+        m_rig.lampY += (0.040f * sinf(t * 0.0233f + 0.6f) + 0.022f * sinf(t * 0.0561f + 2.3f)) * kd;
+    }
+    m_rig.axisX   = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
+    m_rig.axisY   = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    m_rig.tiltAmt = po.focusTilt;
+
+    // ---- the focus ring ---------------------------------------------------
+    if (!m_camInit) {
+        m_rig.tiltAngle = m_camAngleA = m_camAngleB = po.focusTiltAngle * DEG;
+        m_rig.focus = m_camFocusA = m_camFocusB = po.cameraFocus;
+        m_camHold = fmaxf(po.focusTiltPeriod, 0.0f) * (0.55f + 0.9f * rf());
+        m_camMoveT = -1.0f;
+        m_rig.movePhase = 1.0f;
+        m_camInit = true;
+    }
+    // period 0 = the lens is bolted down: the authored angle and focus, and
+    // not a single float of state moving. This is the shipped default.
+    if (po.focusTiltPeriod < 0.01f) {
+        m_rig.tiltAngle = po.focusTiltAngle * DEG;
+        m_rig.focus     = po.cameraFocus;
+        m_rig.movePhase = 1.0f;
+        m_camMoveT = -1.0f;
+        return;
+    }
+    if (m_camMoveT >= 0.0f) {
+        m_camMoveT += dt;
+        const float u = fminf(m_camMoveT / fmaxf(m_camMoveDur, 0.05f), 1.0f);
+        // A damped spring written out in closed form rather than integrated:
+        // starts from rest, overshoots by ~7% around the middle of the move,
+        // settles. The last tenth is cross-faded to exactly 1 so the machine
+        // has a clean end and the next hold starts from the target, not from
+        // the spring's 0.7% residual.
+        const float ec = expf(-5.2f * u);
+        const float w  = 7.2f;
+        float e = 1.0f - ec * (cosf(w * u) + (5.2f / w) * sinf(w * u));
+        float t = (u - 0.90f) / 0.10f;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        e += (1.0f - e) * (t * t * (3.0f - 2.0f * t));
+        m_rig.tiltAngle = m_camAngleA + (m_camAngleB - m_camAngleA) * e;
+        m_rig.focus     = m_camFocusA + (m_camFocusB - m_camFocusA) * e;
+        m_rig.movePhase = u;
+        if (u >= 1.0f) {
+            m_rig.tiltAngle = m_camAngleA = m_camAngleB;
+            m_rig.focus     = m_camFocusA = m_camFocusB;
+            m_camMoveT = -1.0f;
+            m_camHold  = po.focusTiltPeriod * (0.55f + 0.9f * rf());
+        }
+        return;
+    }
+    m_rig.movePhase = 1.0f;
+    m_camHold -= dt;
+    if (m_camHold > 0.0f) return;
+    // A new readjustment. The angle is re-aimed by up to +-70 deg off the
+    // authored one (a re-tilt, not a spin) and the focus distance by up to
+    // +-0.22 of the depth range -- enough to hand the sharp plane to a
+    // different layer of droplets, not enough to lose the picture.
+    m_camAngleA = m_rig.tiltAngle;
+    m_camFocusA = m_rig.focus;
+    m_camAngleB = po.focusTiltAngle * DEG + (rf() * 2.0f - 1.0f) * 70.0f * DEG;
+    m_camFocusB = po.cameraFocus + (rf() * 2.0f - 1.0f) * 0.22f;
+    m_camMoveDur = fmaxf(po.focusTiltMoveS, 0.15f) * (0.8f + 0.4f * rf());
+    m_camMoveT = 0.0f;
+    m_rig.movePhase = 0.0f;
+}
+
 void FluidRenderer::UploadAcidConstants() {
     const LiquidAcidConfig& a = m_cfg.acid;
     const UINT fi = m_frameIndex;
@@ -3885,9 +4027,39 @@ void FluidRenderer::UploadAcidConstants() {
                      cellM * fmaxf(a.celluloseOil, 0.0f),
                      fmaxf(a.celluloseScale, 2.0f) / 1440.0f,
                      fmaxf(a.riseSpeed, 0.0f) * fminf(fmaxf(a.celluloseDrift, 0.0f), 1.0f) };
+    // ---- PERSPECTIVE CAMERA + DEPTH OF FIELD + TILT ----------------------
+    // The optical axis is given in uv and used in the shader's p-space (x
+    // times the aspect), so it is handed over already scaled. camera_fov is
+    // authored in degrees ACROSS the frame and carried as the tangent per
+    // p-unit of distance from the axis: tan(theta) = fovK * r, which is what
+    // the ring branch wants and costs it no trig. focus_band_px is a WIDTH in
+    // the picture, so the shader turns it into a depth tolerance by
+    // multiplying it by the local gradient of the focus plane -- the sharp
+    // strip really is that many pixels wide however hard the lens is tilted.
+    const float DEG = 0.01745329252f;
+    const bool  dofOn = (po.dofMaxPx > 0.01f);
+    const float fovK  = (po.cameraFov > 0.01f)
+                      ? tanf(fminf(po.cameraFov, 170.0f) * 0.5f * DEG) / 0.5f : 0.0f;
+    float p24[4] = { m_rig.axisX, m_rig.axisY,
+                     dofOn ? m_rig.focus : 0.5f,
+                     dofOn ? fmaxf(po.dofMaxPx, 0.0f) : 0.0f };
+    float p25[4] = { po.cameraFieldCurve, m_rig.tiltAmt,
+                     cosf(m_rig.tiltAngle), sinf(m_rig.tiltAngle) };
+    // .y = 1 / the depth interval over which the CoC ramps from the edge of
+    // the sharp band to the full dof_max_px. A TENTH of the depth range, and
+    // the shader's ramp is shouldered on top of that: the user's reference is
+    // a macro lens whose one sharp plane resolves fine texture while
+    // everything off it is already a wash, so the falloff has to be steep.
+    // Fixed rather than another key -- it is the aperture, and camera_focus,
+    // focus_band_px and droplet_depth already aim the plane.
+    float p26[4] = { fmaxf(po.focusBandPx, 0.0f) / 1440.0f,
+                     1.0f / 0.12f,
+                     fovK,
+                     0.0f };
     memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
     memcpy(p.p23, p23, 16);
     memcpy(p.men, men, 16);
+    memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
     // ---- droplet particle buffers ---------------------------------------
@@ -3908,12 +4080,25 @@ void FluidRenderer::UploadAcidConstants() {
                 dd[k].a[1] = d.y;
                 // SIGN carries the kind: negative = a hole in the oil.
                 dd[k].a[2] = (d.kind == 0) ? -d.r : d.r;
-                // .w packs the contribution gate (0..1, see StepAcidDroplets)
-                // with the one per-droplet FLAG the shader needs:
-                //   w = gate + 2*ring.
-                // A flag rather than a size, so the particle stays one float4:
-                // the ring's width is a global key.
-                dd[k].a[3] = d.gate + (d.ring ? 2.0f : 0.0f);
+                // .w packs the contribution gate (0..1, see StepAcidDroplets),
+                // the one per-droplet FLAG the shader needs, and now the
+                // DEPTH, quantised to 8 bits and shifted above both:
+                //   w = 4*dq + 2*ring + gate,   dq = 0 or 1 + round(depth*254)
+                // The particle stays ONE float4, which is the whole point: the
+                // droplet loop is the hottest code in the frame and a second
+                // fetch per droplet per pixel would cost more than the whole
+                // depth of field does. A float32 holds this exactly enough --
+                // at w ~ 1023 the spacing is 6e-5, four orders below anything
+                // the gate can express. dq = 0 is the SENTINEL for "no depth",
+                // so with droplet_depth 0 this line writes bit-for-bit the
+                // value it wrote before the feature existed.
+                const float dsp = fminf(fmaxf(a.dropletDepth, 0.0f), 1.0f);
+                float dq = 0.0f;
+                if (dsp > 1e-5f) {
+                    const float dep = fminf(fmaxf(0.5f + (d.depth - 0.5f) * dsp, 0.0f), 1.0f);
+                    dq = 1.0f + floorf(dep * 254.0f + 0.5f);
+                }
+                dd[k].a[3] = 4.0f * dq + d.gate + (d.ring ? 2.0f : 0.0f);
                 if (!d.ring) continue;
                 // ---- the ring's SHAPE, in the second half of the buffer ---
                 // "These are pixel perfect circles." A ring's radius is a

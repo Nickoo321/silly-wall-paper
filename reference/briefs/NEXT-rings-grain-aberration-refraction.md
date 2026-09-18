@@ -162,3 +162,23 @@ S. (user 2026-09-18 19:00) CONSERVATION: "matter cannot be created or destroyed"
    visible area is conserved; removal likewise: shrink, merge into a neighbour, or leave across an
    edge -- never vanish. Log each spawn site in the report with what it now does. Also check the
    fullscreen-pause resume and the dt clamp: a big time jump must not teleport or respawn blobs.
+
+T. END GOAL (user 2026-09-18 18:40, refs reference/shots/photos/endgoal-ref-1..5.jpg): "very very dreamy,
+   aesthetic, hyper-realistic colours, as if a very very nice film camera is taking a photo of this oil
+   thing; clearly restricted, like you're in a scope; maybe internal reflections; still the oil; depth,
+   looks real." Named ingredients (Fable's reading, for the user to confirm on their phone):
+   1. OIL-AND-WATER MACRO photography (search "oil and water macro photography abstract"): droplets
+      that REFRACT a coloured background, razor-thin focus, big soft bokeh discs, saturated but
+      physically plausible colour -> our droplets/rings should refract the film behind them (item N+R
+      depth + a refraction term inside each lens), not just be flat holes.
+   2. CINESTILL 800T HALATION (search "cinestill 800t halation"): a warm red-orange glow bleeding around
+      every hot highlight (the film's missing anti-halation layer), teal shadows, amber lights ->
+      a halation key in the post pass: bloom taken ONLY from the brightest pixels, tinted warm, tighter
+      than the fog bloom (item Q is the wide one).
+   3. SCOPE / EYEPIECE (search "microscope eyepiece view phone photo", "rifle scope view"): the image
+      lives inside a CIRCULAR field stop with a soft dark edge, slight barrel curvature at the rim,
+      the outside is black or near-black; faint INTERNAL REFLECTIONS on the eyepiece glass (a ghost of
+      the bright areas, offset and dim, drifting with the lamp) and a glint on the rim -> keys [post]
+      scope (0..1), scope_radius, scope_edge_px, scope_ghost (internal reflection), scope_rim.
+   4. DEPTH: N+R (perspective, per-element focus, tilt) + Q (lamp/fog) already queued.
+   Everything additive to the current look; the oil stays the subject.

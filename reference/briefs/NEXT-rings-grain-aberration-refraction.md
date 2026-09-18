@@ -182,3 +182,16 @@ T. END GOAL (user 2026-09-18 18:40, refs reference/shots/photos/endgoal-ref-1..5
       scope (0..1), scope_radius, scope_edge_px, scope_ghost (internal reflection), scope_rim.
    4. DEPTH: N+R (perspective, per-element focus, tilt) + Q (lamp/fog) already queued.
    Everything additive to the current look; the oil stays the subject.
+
+T (REVISED, user 2026-09-18 19:00, refs endgoal-ref-6..10 = Territory Studio's Blade Runner 2049 screen
+   graphics, the "Triboro - Bioluminescence" mood board): "more dreamy than oil-water macro; not exactly
+   film, but obviously artifacted BY THE CAMERA." The look is a LAB INSTRUMENT'S CAMERA looking at a
+   petri dish on a lightbox: (1) the DISH itself is in frame -- a circular rim with a glint, specimen
+   lit from below, optionally a faint counting grid under it; (2) instrument optics, not film stock:
+   heavy soft bloom of every highlight, low-contrast haze, slight barrel distortion, chroma bleed
+   toward the edges, soft vignette, the picture sometimes seen THROUGH curved glass or a monitor tube
+   (rounded-rectangle mask, faint scanlines, edge smear -- the Denabase shot); (3) colour: a duotone
+   grade (teal/cyan/violet or red-lamp) on the surround while the specimen stays hyper-saturated
+   pastel (bioluminescent colonies, cream discs on dark agar); (4) optional instrument UI marks
+   (frame lines, tiny markers, no text) -- only as a separate preset, "it should still be the oil".
+   Replaces the CineStill/eyepiece reading above where they differ; halation stays as bloom.

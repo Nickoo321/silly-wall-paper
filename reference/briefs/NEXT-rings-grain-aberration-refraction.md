@@ -122,3 +122,18 @@ P addendum (user 2026-09-18 18:30, ref film-overlay-ref-5-colour-leak-stock.jpg)
    Plus a separate FILM STOCK grade key [post] film_stock (0..1, default 0): lifted teal shadows, warm
    highlights, slightly different per-channel curves (cross-process feel). Keep every key; the user
    will grade everything by hand on the panel afterwards, so expose all of it in Settings.
+
+R. (user 2026-09-18 18:50, sketch reference/shots/photos/sketch-perspective-camera.jpg: a lens at the tip of a
+   view cone looking at the flat dish) The camera is PERSPECTIVE, not orthographic, and that is the
+   real fix for "perfect circles": (1) a hollow ring/bubble is a body with height, and the focal plane
+   is a plane, so no ring is entirely in focus "unless very lucky" -- with per-droplet depth (item N)
+   the blur is |depth - focus| per element, and the focal plane is effectively CURVED relative to the
+   flat dish (field curvature), so centre and edge of the frame cannot both be sharp; (2) every element
+   is seen at the angle between the optical axis and the ray to it: off-axis rings foreshorten
+   radially (minor axis pointing at the frame centre, growing with distance from it), the wall reads
+   thicker on the far side and thinner on the near side, and the rim/highlight favours the side facing
+   the axis -- INTRINSICALLY asymmetric, never a stamped O; (3) the off-view lamp (Q) adds the second
+   asymmetry (lit side / shadow side). Keys: [post]/[liquid_acid] camera_fov (0 = orthographic =
+   today), camera_focus (depth of the focal plane), camera_field_curve, camera_axis_x/y (where the
+   optical axis meets the dish; default centre, may drift slowly with the lamp). Implement together
+   with N (depth) as ONE task: "perspective camera + depth of field".

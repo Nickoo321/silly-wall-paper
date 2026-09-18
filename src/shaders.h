@@ -457,6 +457,12 @@ cbuffer MirrorCB : register(b3) {
     float4 mrP0;   // x mode     y segments  z aspect         w time
     float4 mrP1;   // xy centre              z rotate_period  w drift
     float4 mrP2;   // x soft     y source    z -              w -
+    // ---- [post]: the final composite trim, shared by every look ----------
+    // Same root-constants slot because it is bound on exactly the same draws
+    // and needs exactly the same two numbers (time, aspect) that mrP0 already
+    // carries. Both amounts are 0 by default and the code is branched out.
+    float4 poP0;   // x film_grain y grain_size z grain_speed w grain_color
+    float4 poP1;   // x aberration y aberration_max_px  z -   w -
 };
 
 // |d| with the corner rounded off over a band of half-width s: equals abs(d)
@@ -538,6 +544,15 @@ float2 MirrorFold(float2 uv, out float seam) {
     return s;
 }
 
+// Cheap hash for the [post] film grain (no texture, no table). Same shape as
+// the acid look's own AcidHash21, duplicated here because that one lives
+// inside the LIQUID_ACID block and the grain belongs to every look.
+float PostHash21(float2 p) {
+    p = frac(p * float2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return frac(p.x * p.y);
+}
+
 #ifdef LIQUID_ACID
 // --------------------------------------------------------------------------
 // "Liquid Acid" look. Compiled as a SECOND PSO from this same source with
@@ -568,6 +583,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
+    float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w -
+    float4 laP21;        // x spotDblOn  y dblOffsetPx z dblStrength w dblRadius
     float4 laMen;        // meniscus halo colour, rgb
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
@@ -862,6 +879,14 @@ float4 PSMain(VSOut i) : SV_Target {
     float2 grad  = float2(0.0, 0.0);
     float  colW = 0.0;
     float3 colSum = float3(0.0, 0.0, 0.0);
+    // ---- spot doubles + ring interiors, gathered while the field is built --
+    // dblW/dblDir = the strongest selected spot at this pixel and the
+    // direction away from its centre (the refraction direction); ringIn = how
+    // deep inside a hollow droplet's interior this pixel is. All three are 0
+    // unless the matching key is on, and both features then cost one branch.
+    float  dblW = 0.0;
+    float2 dblDir = float2(0.0, 0.0);
+    float  ringIn = 0.0;
     int nb = (int)laP0.x;
     const float thresh = laP0.y;
     [loop]
@@ -892,6 +917,15 @@ float4 PSMain(VSOut i) : SV_Target {
             qs = float2(q.x, q.y / e);
         }
         float  d2 = dot(qs, qs);
+        // spot_double_frac: B.c.w is 1 on the randomly selected blobs (and
+        // holes -- a hole is a negative blob, and the user asked for both).
+        // Uniform branch, so an ini without the key never reaches it.
+        [branch] if (laP21.x > 0.5 && B.c.w > 0.5) {
+            float dd = length(q);
+            float t  = saturate(1.0 - dd / max(B.a.z * laP21.w, 1e-5));
+            float wgt = t * t * (3.0 - 2.0 * t);
+            if (wgt > dblW) { dblW = wgt; dblDir = q / max(dd, 1e-6); }
+        }
         float  sup = B.a.z * laP0.z;              // support radius
         float  s2 = sup * sup;
         if (d2 >= s2) continue;
@@ -961,15 +995,66 @@ float4 PSMain(VSOut i) : SV_Target {
                 [loop]
                 for (uint di = 0; di < cell.y; di++) {
                     float4 D = AcidDrops[cell.x + di];
+                    // .w packs three things (see UploadAcidConstants):
+                    //   w = gate + 2*ring + 4*spotDouble, gate in [0,1].
+                    // Flags, not sizes: the ring's width and the double's
+                    // reach are global keys, so nothing per-droplet is lost
+                    // and the particle stays one float4.
+                    float  dwf  = D.w;
+                    float  dbl  = (dwf > 3.5) ? 1.0 : 0.0; dwf -= 4.0 * dbl;
+                    float  rng  = (dwf > 1.5) ? 1.0 : 0.0; dwf -= 2.0 * rng;
+                    float  gate = dwf;
                     float2 dq = pp - float2(D.x * aspect, D.y);
-                    float  ds = abs(D.z) * laP19.x;
+                    float  R  = abs(D.z);
+                    float  ds = R * laP19.x;
                     float  ds2 = ds * ds;
                     float  dd2 = dot(dq, dq);
                     if (dd2 >= ds2) continue;
+                    // ---- local refraction double (spot_double_*) ---------
+                    // Nothing is sampled here: the winning direction and
+                    // weight are carried out of the loop and cost ONE extra
+                    // dye tap for the whole pixel, next to the refraction
+                    // offset that is already taken.
+                    [branch] if (laP21.x > 0.5 && dbl > 0.5) {
+                        float dd = sqrt(dd2);
+                        float t  = saturate(1.0 - dd / max(R * laP21.w, 1e-5));
+                        float wgt = gate * t * t * (3.0 - 2.0 * t);
+                        if (wgt > dblW) { dblW = wgt; dblDir = dq / max(dd, 1e-6); }
+                    }
+                    [branch] if (rng > 0.5) {
+                        // HOLLOW LENS: the punch is a BAND centred on the
+                        // droplet's own visible radius, so the interior never
+                        // crosses the isoline and keeps its oil -- the "empty
+                        // double" the user photographed, drawn deliberately.
+                        // Its gradient points radially away from the band's
+                        // centre line, so the dark rim, the meniscus and the
+                        // thickness ramp all wrap the annulus exactly as they
+                        // wrap a disc: no special-case shading anywhere.
+                        float  dd = sqrt(dd2);
+                        float  bw = max(saturate(laP20.x) * ds, 1e-6);
+                        float  sgn = dd - R;
+                        float  su = 1.0 - (sgn * sgn) / (bw * bw);
+                        if (su > 0.0) {
+                            float  su2 = su * su;
+                            float  dw  = su2 * su * gate;
+                            // d/d(dd) of the profile, carried onto the radial
+                            // unit vector: (-6 u^2 / b^2) * sgn * dq/dd.
+                            float2 dg  = ((-6.0 * su2 / (bw * bw)) * sgn * gate)
+                                       * (dq / max(dd, 1e-6));
+                            dNeg += dw; gNeg += dg;
+                        }
+                        // droplet_ring_lift: the interior is a little lens, so
+                        // it reads slightly brighter than the film around it.
+                        // max(), not a sum, so a raft of touching rings does
+                        // not stack into a glowing patch.
+                        float li = saturate((R - 0.5 * bw - dd) / max(0.5 * R, 1e-5));
+                        ringIn = max(ringIn, li * gate);
+                        continue;
+                    }
                     float  du = 1.0 - dd2 / ds2;
                     float  du2 = du * du;
-                    float  dw = du2 * du * D.w;
-                    float2 dg = (-6.0 * du2 / ds2) * dq * D.w;
+                    float  dw = du2 * du * gate;
+                    float2 dg = (-6.0 * du2 / ds2) * dq * gate;
                     if (D.z < 0.0) { dNeg += dw; gNeg += dg; }
                     else           { dPos += dw; gPos += dg; }
                 }
@@ -998,7 +1083,23 @@ float4 PSMain(VSOut i) : SV_Target {
             colSum += laOil[3].rgb * dq4;
             colW   += dq4;
         }
+        // ---- droplet_ring_lift: the interior of a hollow droplet ---------
+        // A bubble's middle is a lens, not a hole: it is the same film seen
+        // through a curved surface, so it sits a hair thicker and a hair
+        // brighter than the sheet around it. Both go in BEFORE the threshold
+        // and through the same soft-max fill the blobs use, so the interior
+        // keeps the local palette colour and the band around it is untouched.
+        [branch] if (ringIn > 0.0 && laP20.y > 0.0005) {
+            float k  = saturate(laP20.y);
+            field += ringIn * k * 0.25 * thresh;
+            float wl = ringIn * ringIn; wl = wl * wl * k;
+            colSum += laOil[3].rgb * wl;
+            colW   += wl;
+        }
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     float3 oilBase = (colW > 1e-9) ? colSum / colW : laOil[0].rgb;
     float  gl   = length(grad) + 1e-6;
     float  sdf  = clamp((field - thresh) / gl, -0.25, 0.25);  // >0 inside the oil
@@ -1070,6 +1171,19 @@ float4 PSMain(VSOut i) : SV_Target {
     // is thinnest, or it reads as a sheet of tinted glass cut with scissors.
     if (laP13.x > 0.0005 || laP15.x > 0.0005) {
         thk = smoothstep(0.0, edgeW, sdf);
+        // ---- oil_edge_curve --------------------------------------------
+        // The user, on the panel: "it looks like it goes from green to black,
+        // then stops; it should be more S-curved: distance vs mix of colours".
+        // smoothstep is an S in the middle but its ENDS are only C1 -- the
+        // ramp arrives at full thickness (and at black) with a visible knee.
+        // smootherstep (6t^5-15t^4+10t^3) is flat to second order at both
+        // ends, so both knees vanish. Same band, same width: a profile
+        // change only, and the branch is the original line at 0.
+        [branch] if (laP20.z > 0.0005) {
+            float t = saturate(sdf / max(edgeW, 1e-7));
+            thk = lerp(thk, t * t * t * (t * (t * 6.0 - 15.0) + 10.0),
+                       saturate(laP20.z));
+        }
         // ...but only as far as sdf can be believed. Where it cannot (isoOk
         // < 1: the field dips toward the threshold without crossing it, so
         // sdf collapses although the oil is thick) the thin-edge model would
@@ -1114,6 +1228,21 @@ R"hlsl(
 #endif
     float3 C = Dye.SampleLevel(linearClamp, uv, 0).rgb;
 #ifdef LIQUID_ACID
+    // ---- spot_double: a local refraction DOUBLE around chosen spots ------
+    // "not as a vignette, just like around spots, randomly generated": the
+    // surroundings seen a second time, displaced along the direction away
+    // from the nearest selected spot's centre, fading out over
+    // spot_double_radius of its own radius. One extra dye tap, and only on
+    // the pixels a selected spot actually reaches -- the field pass already
+    // found the winner, so nothing is searched here. Deliberately applied to
+    // the ink BEFORE the ink pipeline, so the double inherits the bands, the
+    // absorption and the defocus instead of being pasted over them, and the
+    // film edge band and the meniscus (both keyed on the FIELD) are untouched.
+    [branch] if (laP21.x > 0.5 && dblW > 0.0) {
+        float2 off = dblDir * (laP21.y * dblW) * texelSize;
+        float3 C2  = Dye.SampleLevel(linearClamp, saturate(uv + off), 0).rgb;
+        C = lerp(C, C2, saturate(laP21.z) * dblW);
+    }
     // ---- oil_ink_blur ----------------------------------------------------
     // The ink under a film of oil is slightly out of focus (refs 3/4/7): the
     // marbling reads through, but softened, and more so where the oil is
@@ -1486,6 +1615,13 @@ R"hlsl(
     float alpha = cov;
     if (laP13.x > 0.0005) {
         float aS = smoothstep(-edgeW * 0.35, edgeW, sdf);
+        // the same S as the thickness ramp, or the disc's opacity would
+        // arrive at the ink with the knee the colour no longer has.
+        [branch] if (laP20.z > 0.0005) {
+            float t = saturate((sdf + edgeW * 0.35) / max(edgeW * 1.35, 1e-7));
+            aS = lerp(aS, t * t * t * (t * (t * 6.0 - 15.0) + 10.0),
+                      saturate(laP20.z));
+        }
         alpha = lerp(cov, aS * aS, saturate(laP13.x));
     }
     float3 col = lerp(inkC, oilC, alpha);
@@ -1672,6 +1808,53 @@ R"hlsl(
         m = max(m, min(laP7.x * (1.0 + 2.5 * specAmt), 1.6) * alpha);
 #endif
 
+    // ======================= [post]: the last two steps ====================
+    // Shared by every look and applied AFTER everything else (post_chroma /
+    // post_lift included), in SCREEN space -- i.pos.xy, never the folded uv:
+    // a lens and a film emulsion sit in front of the picture, so they do not
+    // mirror with it. Both amounts default to 0 and neither branch is entered
+    // then, so style=fluid is untouched down to the bit unless asked.
+    // Order: aberration first (it is the lens), grain second (it is the film).
+    [branch] if (poP1.x > 0.0005) {
+        // CHROMATIC-ABERRATION VIGNETTE. The composite is not in a texture --
+        // the oil discs, rims and halos are computed here -- so there is
+        // nothing to re-sample per channel. Instead the channel shift is a
+        // first-order expansion of the image about this pixel,
+        //   C(x + d) ~= C + d.x * dC/dx + d.y * dC/dy,
+        // taken from the quad's own derivatives. That is free, it covers the
+        // WHOLE composite rather than just the dye, and it is accurate at the
+        // offsets this effect lives at (0..3 px; 0.75 px at the corners in the
+        // shipped presets). Red is pushed outward and blue inward, growing as
+        // r^2 from the centre, so the middle of the frame is exactly clean.
+        float2 d   = i.pos.xy * texelSize - 0.5;
+        float2 off = d * (length(d) * 2.0 * poP1.x * max(poP1.y, 0.0));
+        float3 cdx = ddx(C), cdy = ddy(C);
+        float3 sh  = cdx * off.x + cdy * off.y;
+        C = max(float3(C.r + sh.r, C.g, C.b - sh.b), 0.0);
+    }
+    [branch] if (poP0.x > 0.0005) {
+        // FILM GRAIN, luminance-weighted: the mids and darks carry it (that is
+        // where emulsion noise lives and where the ink already looks grainy),
+        // the peaks stay clean so a bright core never fizzes, and a pixel that
+        // is TRUE BLACK gets only a whisper -- an off OLED pixel is the best
+        // thing on this panel and grain would light the whole frame's floor.
+        float2 gc  = floor(i.pos.xy / max(poP0.y, 0.25));
+        // One new pattern per frame at speed 1 (144 = this machine's rate);
+        // lower speeds hold a pattern for several frames, which is the slow
+        // chatter of a big-grain stock.
+        float  tq  = floor(mrP0.w * 144.0 * max(poP0.z, 0.0));
+        float2 tj  = frac(tq * float2(0.1031, 0.0973)) * 733.0;
+        float  n0  = PostHash21(gc + tj);
+        float3 nz  = float3(n0, n0, n0);
+        [branch] if (poP0.w > 0.0005) {
+            nz = lerp(nz, float3(n0, PostHash21(gc + tj + 37.71),
+                                     PostHash21(gc + tj + 91.37)), saturate(poP0.w));
+        }
+        float lum = dot(C, float3(0.2126, 0.7152, 0.0722));
+        float w   = (1.0 - smoothstep(0.55, 1.00, lum))
+                  * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
+        C = max(C + (nz - 0.5) * (poP0.x * 0.5 * w), 0.0);
+    }
     float3 lin = SRGBToLinear(saturate(C));
     // Interpret the dye in a wider gamut and convert to the swap chain's 709
     // primaries. Out-of-gamut saturation comes out as negative components —

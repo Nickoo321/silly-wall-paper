@@ -351,7 +351,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         params[5].DescriptorTable = { 1, &rSrv3 };  // t3 (low-res velocity)
         params[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-        params[6].Constants = { 3, 0, 12 };         // b3 (MirrorCB)
+        params[6].Constants = { 3, 0, 20 };         // b3 (MirrorCB + [post])
         params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
         // Params 7/8 are the droplet particle sim's two structured buffers —
         // the particles (t2) and the uniform-grid cell table (t4) — as ROOT
@@ -1046,22 +1046,31 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
 // or lives in m_cfg.mirror.
 // ===========================================================================
 
-void FluidRenderer::BuildMirrorConstants(float out[12], int w, int h) const {
+// b3 also carries the [post] block (film grain + aberration vignette): it is
+// bound on exactly the same draws as the fold, it is look-agnostic in exactly
+// the same way, and it needs the two numbers -- time and aspect -- that mrP0
+// already holds. One root-constants slot for both.
+void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
     const MirrorConfig& mr = m_cfg.mirror;
+    const PostConfig& po = m_cfg.post;
     const float aspect = (float)(w > 0 ? w : 1) / (float)(h > 0 ? h : 1);
-    const float c[12] = {
+    const float c[20] = {
         (float)mr.mode, (float)mr.segments, aspect, m_time,
         mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
         fminf(fmaxf(mr.drift, 0.0f), 1.0f),
         fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
+        fminf(fmaxf(po.filmGrain, 0.0f), 1.0f), fmaxf(po.filmGrainSize, 0.25f),
+        fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
+        fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationMaxPx, 0.0f),
+        0.0f, 0.0f,
     };
     memcpy(out, c, sizeof(c));
 }
 
 void FluidRenderer::BindMirrorFold(int w, int h) {
-    float c[12];
+    float c[20];
     BuildMirrorConstants(c, w > 0 ? w : m_width, h > 0 ? h : m_height);
-    m_cmd->SetGraphicsRoot32BitConstants(6, 12, c, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(6, 20, c, 0);
 }
 
 // Must stay in step with MirrorFold()/MirFoldAxis() in kDisplaySrc. `soft` is
@@ -2078,9 +2087,9 @@ struct AcidParamsGPU {
     float ink[4][4];
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
-    float p18[4], p19[4], men[4];
+    float p18[4], p19[4], p20[4], p21[4], men[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 464, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 496, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -2860,6 +2869,25 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             out.rt = drawR();
             out.kind = kind;
             out.mergeTo = -1;
+            // HOLLOW or solid, and doubled or not: both are drawn ONCE, here,
+            // and fixed for the droplet's life -- a spot that changed its mind
+            // frame to frame would flicker, which is the one thing this sim
+            // exists to avoid. Drawn from a HASH OF THE BIRTH POSITION rather
+            // than from the sim's own stream, deliberately: consuming a random
+            // number here would shift every later draw, so merely switching
+            // one of these keys on would have moved the whole population and
+            // no A/B of them could be read.
+            auto hash01 = [](float hx, float hy, uint32_t salt) {
+                uint32_t a1, b1;
+                memcpy(&a1, &hx, 4); memcpy(&b1, &hy, 4);
+                uint32_t h = (a1 * 2654435761u) ^ (b1 * 2246822519u) ^ salt;
+                h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+                h *= 3266489917u; h ^= h >> 16;
+                return (h >> 8) * (1.0f / 16777216.0f);
+            };
+            out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < a.dropletRingFrac)
+                     ? 1 : 0;
+            out.dbl  = (hash01(x, y, 0x85EBCA6Bu) < a.spotDoubleFrac) ? 1 : 0;
             return true;
         }
         return false;
@@ -2998,7 +3026,17 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // other half of the ring. rim_width is a half-width in the same
             // p-units as r.
             const float pxY = 1.0f / fmaxf((float)m_height, 1.0f);
-            const float rFloor = fmaxf(1.2f * pxY, 1.6f * fmaxf(a.rimWidth, 1e-5f));
+            float rFloor = fmaxf(1.2f * pxY, 1.6f * fmaxf(a.rimWidth, 1e-5f));
+            // A RING has to clear a higher floor: what must be resolvable is
+            // its BAND, which is only a fraction of its radius across, not the
+            // whole droplet. Same rule as 7f0188d's ("no rim without a fill"),
+            // read for the shape that is deliberately hollow -- an unresolved
+            // ring is a grey smudge, and a smudge is what that fix removed.
+            if (d.ring) {
+                const float bandFrac = fmaxf(2.2f * fminf(fmaxf(a.dropletRingWidth,
+                                                               0.02f), 0.60f), 0.25f);
+                rFloor /= bandFrac;
+            }
             float sp2 = (d.r - 0.35f * rFloor) / fmaxf(0.65f * rFloor, 1e-9f);
             sp2 = sp2 < 0.0f ? 0.0f : (sp2 > 1.0f ? 1.0f : sp2);
             d.gate = g * sp2 * sp2 * (3.0f - 2.0f * sp2);
@@ -3048,6 +3086,19 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // ---- 3. surface tension: attraction, contact repulsion, coalescence ---
     const float mergeF = 1.0f - fminf(fmaxf(a.dropletMerge, 0.05f), 0.90f);
     std::vector<AcidDrop> satellites;
+    // ---- rings behave like BUBBLES, not lone lenses ----------------------
+    // The user, with photos of boiling oil and a soap raft: "it kinda looks
+    // like this, should probably clump." So two rings ATTRACT over a short
+    // range and then stop at a slight overlap instead of coalescing: their
+    // two bands overlap into ONE dark wall, which is exactly what a foam does
+    // and what a merge would destroy. kRingWall is that overlap (8% of the
+    // radius sum), kRingMaxTouch the raft cap -- a ring with that many
+    // neighbours is interior to a raft and stops pulling more in, so a raft
+    // grows at its edges and never collapses into one solid mass.
+    const float ringClump = fminf(fmaxf(a.dropletRingClump, 0.0f), 1.0f);
+    const float kRingWall = 0.92f;
+    const int   kRingMaxTouch = 6;          // hexagonal packing: fully ringed
+    std::vector<int> touchNew((size_t)n, 0);
     for (int ci = 0; ci < NC; ci++) {
         const int cx0 = ci % kDropGridW, cy0 = ci / kDropGridW;
         const int e0 = m_dropletCellStart[ci] + m_dropletCellCount[ci];
@@ -3074,13 +3125,30 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                         const float reach = 3.0f * sum;
                         if (d2 > reach * reach || d2 < 1e-12f) continue;
                         const float dd = sqrtf(d2), inv = 1.0f / dd;
-                        if (dd < sum * mergeF && di.mergeTo < 0 && dj.mergeTo < 0
+                        const bool bothRing = (di.ring && dj.ring);
+                        if (bothRing && dd < sum * 1.06f) {
+                            if (i < n) touchNew[i]++;
+                            if (j < n) touchNew[j]++;
+                        }
+                        // Two rings never merge (see kRingWall above); a ring
+                        // meeting a SOLID droplet is absorbed by it instead,
+                        // area-conserving, so the solid survives and the ring
+                        // pours into it exactly as a small drop pours into a
+                        // big one -- the survivor choice is the only change.
+                        if (!bothRing && dd < sum * mergeF
+                            && di.mergeTo < 0 && dj.mergeTo < 0
                             && di.rt > 0.0f && dj.rt > 0.0f) {
                             // COALESCE, area-conserving. The survivor is the
                             // larger one; the other pours into it (rt -> 0,
                             // centre pulled in) instead of being deleted, so
                             // the metaball union necks them together.
-                            const bool iBig = (di.rt >= dj.rt);
+                            bool iBig = (di.rt >= dj.rt);
+                            // ...unless one of them is a ring: then the SOLID
+                            // one is always the survivor, whatever the sizes,
+                            // and what comes out is a solid droplet of the
+                            // combined area. A hollow shell cannot swallow a
+                            // filled drop.
+                            if (di.ring != dj.ring) iBig = (dj.ring != 0);
                             const int bi = iBig ? i : j, sm = iBig ? j : i;
                             const float rb = m_acidDrops[bi].rt, rs = m_acidDrops[sm].rt;
                             const float area = rb * rb + rs * rs;
@@ -3109,7 +3177,25 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                             continue;
                         }
                         float acc;
-                        if (dd < sum) {
+                        if (bothRing) {
+                            // BUBBLE RAFT. Stop at kRingWall, so the two bands
+                            // overlap into a single shared wall and the pair
+                            // reads as foam rather than as two circles that
+                            // happen to touch; pull harder than solid droplets
+                            // do (droplet_ring_clump) so rings find each other
+                            // and pack, and stop pulling once a ring is
+                            // surrounded, which is what bounds a raft.
+                            const float wall = sum * kRingWall;
+                            if (dd < wall) {
+                                acc = (1.0f - dd / wall) * 0.55f;
+                            } else {
+                                const bool full = (di.touch >= kRingMaxTouch
+                                                || dj.touch >= kRingMaxTouch);
+                                const float pull = full ? 0.0f
+                                    : (a.dropletAttract + 3.0f * ringClump);
+                                acc = -pull * (1.0f - (dd - wall) / (2.0f * sum)) * 0.05f;
+                            }
+                        } else if (dd < sum) {
                             // contact repulsion: two droplets that are not
                             // merging stay round instead of interpenetrating
                             acc = (1.0f - dd / sum) * 0.35f;
@@ -3128,6 +3214,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     for (int i = 0; i < n; i++) {
         m_acidDrops[i].vx += ax[i] * dt;
         m_acidDrops[i].vy += ay[i] * dt;
+        m_acidDrops[i].touch = touchNew[i];   // raft occupancy, for next frame
     }
 
     // ---- 4. retire the fully dissolved, keeping mergeTo consistent -------
@@ -3384,7 +3471,13 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].c[0] = b.comb;
         dst[i].c[1] = b.cdx;
         dst[i].c[2] = b.cdy;
-        dst[i].c[3] = 0.0f;
+        // spot_double_frac: which SPOTS carry a local refraction double. The
+        // choice is a hash of the blob's index, so it is fixed for that blob
+        // (and for a shot replay) instead of flickering frame to frame, and
+        // it costs nothing to carry -- .c.w was the one unused slot.
+        uint32_t h = (uint32_t)i * 2654435761u;
+        h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+        dst[i].c[3] = ((h >> 8) * (1.0f / 16777216.0f) < a.spotDoubleFrac) ? 1.0f : 0.0f;
     }
 
     AcidParamsGPU p = {};
@@ -3439,9 +3532,23 @@ void FluidRenderer::UploadAcidConstants() {
                      (a.oilEdgeMode == 1) ? 1.0f : 0.0f };
     float p19[4] = { fmaxf(a.dropletSupport, 0.5f), fmaxf(a.dropletWeight, 0.0f),
                      fmaxf(a.dropletOilW, 0.0f), 0.0f };
+    // ring band half-width as a fraction of the droplet's SUPPORT radius, so
+    // the shader can build the annulus without a per-droplet size; the visible
+    // ring is about this fraction of the droplet across.
+    float p20[4] = { fminf(fmaxf(a.dropletRingWidth, 0.02f), 0.60f),
+                     fminf(fmaxf(a.dropletRingLift, 0.0f), 1.0f),
+                     fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f), 0.0f };
+    // spot_double: .x is only the ON flag -- WHICH spots are doubled is a
+    // per-element seeded choice carried in the blob's .c.w and the droplet's
+    // packed .w, so a spot keeps (or does not keep) its double for its life.
+    float p21[4] = { (a.spotDoubleFrac > 1e-4f) ? 1.0f : 0.0f,
+                     fmaxf(a.spotDoubleOffset, 0.0f),
+                     fminf(fmaxf(a.spotDoubleStrength, 0.0f), 1.0f),
+                     fmaxf(a.spotDoubleRadius, 0.05f) };
     memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
     memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
     memcpy(p.p18, p18, 16); memcpy(p.p19, p19, 16);
+    memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16);
     memcpy(p.men, men, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
@@ -3463,7 +3570,13 @@ void FluidRenderer::UploadAcidConstants() {
                 dd[k].a[1] = d.y;
                 // SIGN carries the kind: negative = a hole in the oil.
                 dd[k].a[2] = (d.kind == 0) ? -d.r : d.r;
-                dd[k].a[3] = d.gate;   // contribution scale (see StepAcidDroplets)
+                // .w packs the contribution gate (0..1, see StepAcidDroplets)
+                // with the two per-droplet FLAGS the shader needs:
+                //   w = gate + 2*ring + 4*spot_double.
+                // Flags rather than sizes, so the particle stays one float4:
+                // the ring's width and the double's reach are global keys.
+                dd[k].a[3] = d.gate + (d.ring ? 2.0f : 0.0f)
+                                    + (d.dbl  ? 4.0f : 0.0f);
             }
             for (int c = 0; c < NC; c++) {
                 int first = m_dropletCellStart[c], cnt = m_dropletCellCount[c];

@@ -356,6 +356,39 @@ struct LiquidAcidConfig {
     float dropletMerge  = 0.30f;    // overlap fraction that coalesces droplet_merge
     float dropletRise   = 0.30f;    // trapped water lags the oil, x rise_speed
 
+    // --- HOLLOW "LENS" droplets: the empty doubles the user liked ---------
+    // A ring droplet is drawn as a thin dark ANNULUS with the oil colour
+    // showing through its middle: the negative punch is a band centred on the
+    // droplet's own visible radius instead of a filled disc, so the interior
+    // never crosses the isoline. Everything else about it is a droplet --
+    // it drifts with the oil, it is confined to the film, it dissolves.
+    // Ring-ness is drawn once at nucleation and fixed for the droplet's life.
+    // Rings behave like BUBBLES: they attract each other and pack into rafts
+    // with a shared dark wall (two touching rings do NOT merge), while a
+    // SOLID droplet meeting a ring absorbs it, area-conserving.
+    float dropletRingFrac  = 0.0f;  // 0..1 of new kind-0 droplets  droplet_ring_frac
+    float dropletRingWidth = 0.18f; // rim width / radius        droplet_ring_width
+    float dropletRingLift  = 0.15f; // interior lightening 0..1   droplet_ring_lift
+    float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
+
+    // --- LOCAL REFRACTION DOUBLES (spot_double_*) -------------------------
+    // "more like a double image / refraction, but not as a vignette, just
+    // around spots, randomly generated." A faint second, radially displaced
+    // image of the ink around a RANDOM subset of spots (droplets and blobs),
+    // chosen per element by a fixed seed. 0 = off and not one extra sample.
+    float spotDoubleFrac     = 0.0f;   // 0..1 of spots          spot_double_frac
+    float spotDoubleOffset   = 2.5f;   // px displacement      spot_double_offset
+    float spotDoubleStrength = 0.35f;  // 0..1 blend         spot_double_strength
+    float spotDoubleRadius   = 1.6f;   // x spot radius        spot_double_radius
+
+    // --- edge PROFILE (oil_edge_curve) ------------------------------------
+    // The user, on the live panel: "smudge the border more -- it looks like it
+    // goes from green to black, then stops; it should be more S-curved".
+    // Reshapes the edge band's ramp (film thickness and film alpha) from
+    // smoothstep to smootherstep (6t^5-15t^4+10t^3) so both knees vanish.
+    // Does NOT widen the band. 0 = the shipped profile, byte-identical.
+    float oilEdgeCurve  = 0.0f;     //                        oil_edge_curve
+
     // How the oil's EDGE is drawn (the body -- transparency, absorption,
     // bump, refraction -- is the same either way).            oil_edge_mode
     //   0 the shipped soft film edge: the thickness band is proportional to
@@ -523,6 +556,26 @@ struct DropConfig {
 // MirrorFold() in the shader returns the source uv AND the distance to the
 // nearest fold line, so a later "side weight" can reuse the distance without
 // touching the mirror modes.
+// ---------------------------------------------------------------------------
+// [post] — the LAST thing that happens to the composite, for every look.
+// Applied after post_chroma / post_lift and after the acid's own grain, in
+// screen space (never folded by the mirror: film sits in front of the lens).
+// Both keys are 0 by default and the whole block is skipped when they are, so
+// style=fluid is bit-identical unless they are named.
+// ---------------------------------------------------------------------------
+struct PostConfig {
+    // Film grain over everything: luminance-weighted (mids and darks carry it,
+    // peaks stay clean, true black is only barely lifted), animated.
+    float filmGrain      = 0.0f;   // 0..1 amount                 film_grain
+    float filmGrainSize  = 1.5f;   // px per grain cell      film_grain_size
+    float filmGrainSpeed = 1.0f;   // 1 = a new pattern every frame  film_grain_speed
+    float filmGrainColor = 0.0f;   // 0 mono .. 1 RGB       film_grain_color
+    // Chromatic-aberration VIGNETTE: a radial R/B split that grows from the
+    // centre outward, zero in the middle of the frame.
+    float aberration     = 0.0f;   // 0..1 amount                aberration
+    float aberrationMaxPx= 3.0f;   // px split at the corners  aberration_max_px
+};
+
 struct MirrorConfig {
     // 0 off | 1 horizontal | 2 vertical | 3 quad (both) | 4 kaleidoscope
     int   mode = 0;
@@ -656,6 +709,8 @@ struct FluidConfig {
     DropConfig drops;
     // screen mirroring / kaleidoscope — display-only; inert unless mirror.mode
     MirrorConfig mirror;
+    // final composite trim (film grain, aberration vignette) — every look
+    PostConfig post;
 };
 
 // Per-frame input from the app shell (global cursor, desktop focus).
@@ -856,7 +911,10 @@ private:
     void BindInk();                 // root CBV b2 for the display draw
     // [mirror] root constants (b3) for the display draw, and the CPU twin of
     // the shader's fold used to put a pointer splat where the user sees it.
-    void BuildMirrorConstants(float out[12], int w, int h) const;
+    // b3 carries the mirror fold AND the [post] final-composite block (film
+    // grain, aberration vignette): one root-constants slot, bound on every
+    // display draw, shared by all three looks.
+    void BuildMirrorConstants(float out[20], int w, int h) const;
     void BindMirrorFold(int w = 0, int h = 0);   // 0 = this monitor's size
     // px in/out: the SOURCE pixel the pointer's screen pixel is showing.
     // flipX/flipY come back as the local d(source)/d(screen) for each axis, so
@@ -1031,6 +1089,9 @@ private:
         float gate;      // 0..1 contribution scale; see StepAcidDroplets
         int   kind;      // 0 = water trapped in oil (hole), 1 = oil on ink
         int   mergeTo;   // index of the droplet this one is pouring into, else -1
+        int   ring;      // 1 = hollow "lens" droplet (drawn as an annulus)
+        int   dbl;       // 1 = this spot carries a local refraction double
+        int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
     };
     std::vector<AcidDrop> m_acidDrops;
     std::vector<int>   m_dropletCellStart;  // kDropGridW*kDropGridH + 1

@@ -354,6 +354,20 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         mr.centerX = getF(S, L"center_x", mr.centerX);
         mr.centerY = getF(S, L"center_y", mr.centerY);
     }
+    // ---- [post]: film grain + aberration vignette, EVERY look --------------
+    // The last thing that happens to the composite. Both amounts default to 0
+    // and the shader branches the whole block out then, so an ini that does
+    // not name these keys renders exactly as it did.
+    {
+        PostConfig& po = cfg.post;
+        const wchar_t* S = L"post";
+        po.filmGrain      = getF(S, L"film_grain", po.filmGrain);
+        po.filmGrainSize  = getF(S, L"film_grain_size", po.filmGrainSize);
+        po.filmGrainSpeed = getF(S, L"film_grain_speed", po.filmGrainSpeed);
+        po.filmGrainColor = getF(S, L"film_grain_color", po.filmGrainColor);
+        po.aberration     = getF(S, L"aberration", po.aberration);
+        po.aberrationMaxPx= getF(S, L"aberration_max_px", po.aberrationMaxPx);
+    }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
         DropConfig& d = cfg.drops;
@@ -483,6 +497,15 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletMerge   = getF(S, L"droplet_merge", a.dropletMerge);
         a.dropletRise    = getF(S, L"droplet_rise", a.dropletRise);
         a.oilEdgeMode    = getI(S, L"oil_edge_mode", a.oilEdgeMode);
+        a.oilEdgeCurve   = getF(S, L"oil_edge_curve", a.oilEdgeCurve);
+        a.dropletRingFrac  = getF(S, L"droplet_ring_frac", a.dropletRingFrac);
+        a.dropletRingWidth = getF(S, L"droplet_ring_width", a.dropletRingWidth);
+        a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
+        a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
+        a.spotDoubleFrac     = getF(S, L"spot_double_frac", a.spotDoubleFrac);
+        a.spotDoubleOffset   = getF(S, L"spot_double_offset", a.spotDoubleOffset);
+        a.spotDoubleStrength = getF(S, L"spot_double_strength", a.spotDoubleStrength);
+        a.spotDoubleRadius   = getF(S, L"spot_double_radius", a.spotDoubleRadius);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1433,6 +1456,16 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         WritePrivateProfileStringW(S, L"center", nullptr, path);   // delete the pair form
     }
     {
+        const PostConfig& po = c.post;
+        const wchar_t* S = L"post";
+        putF(S, L"film_grain", po.filmGrain, 3);
+        putF(S, L"film_grain_size", po.filmGrainSize, 2);
+        putF(S, L"film_grain_speed", po.filmGrainSpeed, 2);
+        putF(S, L"film_grain_color", po.filmGrainColor, 3);
+        putF(S, L"aberration", po.aberration, 3);
+        putF(S, L"aberration_max_px", po.aberrationMaxPx, 2);
+    }
+    {
         const DropConfig& d = c.drops;
         const wchar_t* S = L"drops";
         putI(S, L"drops", d.enabled);
@@ -1547,6 +1580,15 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_merge", a.dropletMerge, 3);
         putF(S, L"droplet_rise", a.dropletRise, 3);
         putI(S, L"oil_edge_mode", a.oilEdgeMode);
+        putF(S, L"oil_edge_curve", a.oilEdgeCurve, 3);
+        putF(S, L"droplet_ring_frac", a.dropletRingFrac, 3);
+        putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
+        putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
+        putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
+        putF(S, L"spot_double_frac", a.spotDoubleFrac, 3);
+        putF(S, L"spot_double_offset", a.spotDoubleOffset, 2);
+        putF(S, L"spot_double_strength", a.spotDoubleStrength, 3);
+        putF(S, L"spot_double_radius", a.spotDoubleRadius, 2);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);
@@ -2528,10 +2570,22 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
         QueryPerformanceCounter(&now);
         float dt = (float)((double)(now.QuadPart - prev.QuadPart) / (double)freq.QuadPart);
+        // A STALL MUST NOT BECOME A JUMP. If something else takes the GPU for a
+        // moment (another process building or rendering, a driver hiccup, a
+        // resume), the next dt arrives as a tenth of a second or more and the
+        // sim integrates all of it in one step -- the whole picture lurches,
+        // which is exactly what the user sees as a frame jump. Clamp what the
+        // sim and the mood conductor INTEGRATE to a few frames' worth; the
+        // measured dt is kept below for the fps stat and the frame cap, so
+        // neither the pacing nor fps_limit changes. The --shot path steps a
+        // fixed 1/144 s and never reaches this loop, so captures are
+        // bit-identical.
+        const float kMaxStep = 1.0f / 30.0f;
+        const float simDt = (dt < kMaxStep) ? dt : kMaxStep;
 
         // Mood conductor: dwell/shift/emit/return transitions between
         // moods\*.ini recipes (replaces the old instant-swap interludes)
-        UpdateMoods(renderer, dt);
+        UpdateMoods(renderer, simDt);
 
         // FPS cap from settings (Present is also vsynced)
         float fpsLim = g_fpsOverride > 0.0f ? g_fpsOverride : renderer.Config().fpsLimit;
@@ -2578,7 +2632,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         float sdrScale = g_hdrActive ? (g_sdrWhiteNits / 80.0f) : 1.0f;
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
         renderer.SetHdrOptions(peak, g_gamutMode);
-        renderer.Frame(dt, sdrScale, g_hdrActive, fin);
+        renderer.Frame(simDt, sdrScale, g_hdrActive, fin);
     }
 
     printf("Shutting down...\n");

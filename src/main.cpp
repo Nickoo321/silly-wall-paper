@@ -318,6 +318,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         k.parallax     = getF(S, L"parallax", k.parallax);
         k.parallaxScale= getF(S, L"parallax_scale", k.parallaxScale);
         k.parallaxDrift= getF(S, L"parallax_drift", k.parallaxDrift);
+        k.tonemap      = getI(S, L"tonemap", k.tonemap);
+        k.whiteNits    = getF(S, L"white_nits", k.whiteNits);
+        k.blackNits    = getF(S, L"black_nits", k.blackNits);
+        k.toneKnee     = getF(S, L"tone_knee", k.toneKnee);
+        k.toneChroma   = getF(S, L"tone_chroma", k.toneChroma);
+        k.tintHueBlend = getF(S, L"tint_hue_blend", k.tintHueBlend);
         struct { const wchar_t* key; float* dst; } triples[] = {
             { L"paper_color", k.paper }, { L"tint_thin", k.tintThin },
             { L"tint_thick",  k.tintThick },
@@ -1449,6 +1455,12 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"parallax", k.parallax, 3);
         putF(S, L"parallax_scale", k.parallaxScale, 3);
         putF(S, L"parallax_drift", k.parallaxDrift, 4);
+        putI(S, L"tonemap", k.tonemap);
+        putF(S, L"white_nits", k.whiteNits, 1);
+        putF(S, L"black_nits", k.blackNits, 2);
+        putF(S, L"tone_knee", k.toneKnee, 3);
+        putF(S, L"tone_chroma", k.toneChroma, 3);
+        putF(S, L"tint_hue_blend", k.tintHueBlend, 3);
         putRgb(S, L"paper_color", k.paper);
         putRgb(S, L"tint_thin", k.tintThin);
         putRgb(S, L"tint_thick", k.tintThick);
@@ -1878,12 +1890,26 @@ static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rg
     double lumSum = 0.0;
     size_t aboveWhite = 0, negative = 0;
     float maxScrgb = 0.0f;
+    // 10-bin NITS histogram of the max channel (scRGB 1.0 = 80 nits by
+    // definition). Fixed edges so any two runs are directly comparable; the
+    // point of it is to see how many distinct brightness STEPS a look uses,
+    // which the mean and the max between them cannot show.
+    static const float kNitEdge[9] = { 1, 5, 15, 40, 80, 160, 240, 400, 600 };
+    size_t nitHist[10] = {};
+    float minNits = 1e9f;
 
     for (size_t p = 0; p < n; p++) {
         float r = rgba[p * 4 + 0], g = rgba[p * 4 + 1], b = rgba[p * 4 + 2];
         if (r != r) r = 0; if (g != g) g = 0; if (b != b) b = 0;   // NaN guard
         if (r < 0.0f || g < 0.0f || b < 0.0f) negative++;
         maxScrgb = fmaxf(maxScrgb, fmaxf(r, fmaxf(g, b)));
+        {
+            const float nits = fmaxf(r, fmaxf(g, b)) * 80.0f;
+            minNits = fminf(minNits, nits);
+            int bin = 0;
+            while (bin < 9 && nits >= kNitEdge[bin]) bin++;
+            nitHist[bin]++;
+        }
         // Rec.709 luminance of the scRGB value (1.0 = 80 nits)
         lumSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
         if (fmaxf(r, fmaxf(g, b)) > sdrScale) aboveWhite++;
@@ -1918,6 +1944,38 @@ static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rg
             100.0 * aboveWhite / (double)n, maxScrgb, maxScrgb * 80.0f,
             100.0 * negative / (double)n,
             okS ? "ok" : "FAILED", okH ? "ok" : "FAILED");
+    ShotLog("[shot] nits min=%.1f mean=%.1f max=%.0f  hist%% "
+            "[<1]%.2f [1-5]%.2f [5-15]%.2f [15-40]%.2f [40-80]%.2f "
+            "[80-160]%.2f [160-240]%.2f [240-400]%.2f [400-600]%.2f [600+]%.2f\n",
+            minNits, meanLum * 80.0, maxScrgb * 80.0f,
+            100.0 * nitHist[0] / (double)n, 100.0 * nitHist[1] / (double)n,
+            100.0 * nitHist[2] / (double)n, 100.0 * nitHist[3] / (double)n,
+            100.0 * nitHist[4] / (double)n, 100.0 * nitHist[5] / (double)n,
+            100.0 * nitHist[6] / (double)n, 100.0 * nitHist[7] / (double)n,
+            100.0 * nitHist[8] / (double)n, 100.0 * nitHist[9] / (double)n);
+}
+
+// Refresh rate of the monitor the wallpaper lives on, cached (a display-mode
+// change is rare and a stale value for a second is harmless). 0 -> 60 so the
+// software FPS cap keeps its old behaviour if the query ever fails.
+static float MonitorRefreshHz() {
+    static float hz = 0.0f;
+    static ULONGLONG checked = 0;
+    const ULONGLONG now = GetTickCount64();
+    if (hz > 0.0f && now - checked < 2000) return hz;
+    checked = now;
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (g_monitor && GetMonitorInfoW(g_monitor, &mi) &&
+        EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) &&
+        dm.dmDisplayFrequency > 1) {
+        hz = (float)dm.dmDisplayFrequency;
+    } else if (hz <= 0.0f) {
+        hz = 60.0f;
+    }
+    return hz;
 }
 
 // Cheap pre-scan so the normal launch path below stays untouched.
@@ -2609,11 +2667,29 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         // moods\*.ini recipes (replaces the old instant-swap interludes)
         UpdateMoods(renderer, simDt);
 
-        // FPS cap from settings (Present is also vsynced)
+        // FPS cap from settings. Present(1, 0) is ALSO vsynced, and the two
+        // caps fight each other at high refresh: the wait below has a ~2 ms
+        // floor, so on a 240 Hz panel (4.17 ms vblank interval) a loop asking
+        // for 240 fps sleeps straight past the vblank it was aiming at, and
+        // vsync then rounds the miss up to a whole extra refresh -- a hard
+        // 120 fps, which is exactly what the analyzer measured on the ink
+        // look. So: when the requested cap is at or above the monitor's own
+        // refresh rate, there is nothing for the software cap to do and it is
+        // skipped entirely; vsync paces the loop on its own.
         float fpsLim = g_fpsOverride > 0.0f ? g_fpsOverride : renderer.Config().fpsLimit;
         if (fpsLim < 10.0f) fpsLim = 10.0f;
-        if (dt < 1.0f / (fpsLim + 2.0f)) {
-            MsgWaitForMultipleObjects(0, nullptr, FALSE, 2, QS_ALLINPUT);
+        const float refreshHz = MonitorRefreshHz();
+        if (fpsLim < refreshHz - 1.0f) {
+            if (dt < 1.0f / (fpsLim + 2.0f)) {
+                MsgWaitForMultipleObjects(0, nullptr, FALSE, 2, QS_ALLINPUT);
+                continue;
+            }
+        } else if (dt < 1.0f / (refreshHz * 3.0f)) {
+            // Vsync is the pacer now. This floor never trips on a presenting
+            // window (a vblank is 3x further apart than it); it exists so that
+            // a Present that STOPS blocking -- an occluded wallpaper behind a
+            // fullscreen app -- cannot turn the loop into a busy spin.
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 1, QS_ALLINPUT);
             continue;
         }
         prev = now;

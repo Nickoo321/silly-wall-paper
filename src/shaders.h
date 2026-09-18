@@ -725,11 +725,32 @@ cbuffer InkCB : register(b2) {
     float4 ikP1;        // x edgeLo,   y edgeHi,  z inverted,     w vignette
     float4 ikP2;        // x parallax, y parallaxScale, z parallaxDrift, w time
     float4 ikP3;        // x coreKnee, y hdrCore, z motionLo, w motionHi
-    float4 ikP4;        // x motionOpacity, y veilFloor, z tintMidDip, w -
+    float4 ikP4;        // x motionOpacity, y veilFloor, z tintMidDip, w tonemap
     float4 ikPaper;     // paper / background colour
     float4 ikTintThin;  // inverted: light through a thin veil
     float4 ikTintThick; // inverted: light out of an opaque core
+    float4 ikP5;        // x whiteScRGB, y blackScRGB, z toneKnee, w toneChroma
+    float4 ikP6;        // x tintHueBlend, y peakScRGB, z -, w -
 };
+
+// HSV for the duotone pair blend. Named apart from the LIQUID_ACID pair so
+// both can live in the acid PSO.
+float3 InkRgb2Hsv(float3 c) {
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float d = mx - mn;
+    float h = 0.0;
+    if (d > 1e-6) {
+        if (mx == c.r)      h = frac(((c.g - c.b) / d) / 6.0);
+        else if (mx == c.g) h = (((c.b - c.r) / d) + 2.0) / 6.0;
+        else                h = (((c.r - c.g) / d) + 4.0) / 6.0;
+    }
+    return float3(h, (mx > 1e-6) ? d / mx : 0.0, mx);
+}
+float3 InkHsv2Rgb(float3 c) {
+    float3 p = abs(frac(c.x + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return c.z * lerp(float3(1.0, 1.0, 1.0), saturate(p - 1.0), c.y);
+}
 
 // Ink "thickness" carried by one dye texel. Max channel, not luma: a coloured
 // ink must absorb by its strongest component or a pure blue drop reads thinner
@@ -814,6 +835,23 @@ float3 InkWater(float3 C, float2 uv, float2 texel, float2 pos, out float hdrM) {
     if (ikP4.y > 0.001) op = saturate((op - ikP4.y) / max(1.0 - ikP4.y, 1e-3));
     float  tk = smoothstep(min(ikP3.x, 0.99), 1.0, op);
     float3 tint = lerp(ikTintThin.rgb, ikTintThick.rgb, tk);
+    // tint_hue_blend: THE reason a vermillion ink reads as pale peach. The RGB
+    // lerp above walks a COMPLEMENTARY pair straight through grey — teal
+    // (0.04,0.63,0.65) to vermillion (0.90,0.27,0.15) crosses (0.47,0.45,0.40),
+    // a dead beige — and `tk` spends most of a plume in that middle, so the
+    // beige is most of what the look actually shows. Restore the blend's
+    // SATURATION and VALUE to the anchors' own (lerped), keeping the RGB-lerp
+    // HUE: the duotone stays a duotone (no third colour is invented, which is
+    // what walking the hue wheel does — teal->vermillion the short way is a
+    // trip through green and yellow) but nothing in it is ever washed out.
+    if (ikP6.x > 0.001) {
+        float3 hsv = InkRgb2Hsv(tint);
+        float3 a = InkRgb2Hsv(ikTintThin.rgb), b = InkRgb2Hsv(ikTintThick.rgb);
+        float w = saturate(ikP6.x);
+        hsv.y = lerp(hsv.y, lerp(a.y, b.y, tk), w);
+        hsv.z = lerp(hsv.z, lerp(a.z, b.z, tk), w);
+        tint = InkHsv2Rgb(hsv);
+    }
     // Complementary tints blend to grey-brown at the midpoint (the flat "mud"
     // on smooth mid-density plumes). Real ink goes DARK where it is neither
     // thin nor saturated, so dip the blend toward black around the midpoint.
@@ -1966,6 +2004,46 @@ R"hlsl(
     // than SDR white (a saturated red at 600 nits, not a white core). Driven
     // by the raw dye intensity with a soft knee: below `knee` exact parity,
     // reaching peakGain at the dye cap. Identity when peak_nits = 0.
+#ifdef INK
+    // ---- [ink] tone_chroma / tonemap ------------------------------------
+    // Chroma hold first, in linear light, about the pixel's own luma — the
+    // same trim [liquid_acid] post_chroma makes. Raising the white point
+    // below must never read as a wash.
+    if (abs(ikP5.w - 1.0) > 0.001) {
+        // NOT clamped at 0 the way [liquid_acid] post_chroma is: with
+        // gamut > 0 the out-of-gamut components are NEGATIVE on purpose and
+        // the QD-OLED shows them, so clamping here would throw away exactly
+        // the saturation this key exists to protect.
+        float il = dot(lin, float3(0.2126, 0.7152, 0.0722));
+        lin = il.xxx + (lin - il.xxx) * ikP5.w;
+    }
+    // HDR RANGE MAPPING. The parity-plus gain below spends headroom only on
+    // dye that is nearly at the brightness CAP; the ink composite is an
+    // absorption result that never gets there, so with `tonemap` 0 the whole
+    // frame is squeezed into SDR white however much headroom the panel has.
+    //
+    // Here the composite's OWN 0..1 range is mapped onto [black, white] nits
+    // instead, hue-preserving (one scale on all three channels, exactly like
+    // the gain). `tone_knee` blends in a smoothstep S: the mids gain slope
+    // (1.5x at the midpoint) and therefore more distinguishable steps, at the
+    // cost of the extreme toe and shoulder. The parity-plus gain is then
+    // retargeted ABOVE the new white, so hot moving cores (hdr_core, motion
+    // gated) still run up toward peak_nits instead of stopping at white.
+    if (ikP4.w > 0.5) {
+        float v = max(lin.r, max(lin.g, lin.b));
+        if (v > 1e-5) {
+            float x = saturate(v);
+            float s = lerp(x, x * x * (3.0 - 2.0 * x), saturate(ikP5.z));
+            float o = ikP5.y + (ikP5.x - ikP5.y) * s;   // scRGB (1.0 = 80 nits)
+            if (peakGain > 1.001) {
+                float t = smoothstep(knee, max(capBright, knee + 0.01), m);
+                o *= lerp(1.0, max(ikP6.y / max(ikP5.x, 1e-4), 1.0), t * t);
+            }
+            lin *= min(o, ikP6.y) / v;
+        }
+        return float4(lin, 1.0);
+    }
+#endif
     float gain = 1.0;
     if (peakGain > 1.001) {
         float t = smoothstep(knee, max(capBright, knee + 0.01), m);

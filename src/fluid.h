@@ -505,6 +505,39 @@ struct InkConfig {
     float parallax     = 0.0f;      // cheap 2nd layer: 0 = off               parallax
     float parallaxScale= 0.92f;     //                                        parallax_scale
     float parallaxDrift= 0.004f;    //                                        parallax_drift
+    // -----------------------------------------------------------------------
+    // HDR RANGE MAPPING for the ink look ([ink] tonemap).
+    //
+    // The shared "parity-plus" highlight gain (see BuildDisplayConstantsEx)
+    // only spends headroom on dye that is nearly at the brightness CAP, which
+    // is the right model for the WE fluid look and useless for ink: the ink
+    // composite is an absorption result that never gets near the cap (with
+    // hdr_core 0.3 and [hdr] knee 0.70 the gain is identically 1), so the
+    // whole frame lives inside SDR white and its tonal range is squeezed.
+    //
+    // tonemap=1 replaces that gain for style=ink with an explicit map of the
+    // composite's own 0..1 range onto [black_nits, white_nits], with an
+    // optional S-curve for mid separation and the parity-plus gain retargeted
+    // above white_nits so hot moving cores still run to peak_nits.
+    // Every value below is inert while tonemap = 0.
+    int   tonemap      = 0;         // 0 = legacy gain, 1 = range map    tonemap
+    float whiteNits    = 0.0f;      // nits at composite 1.0; 0 = SDR white
+                                    // (80 * sdr_scale), i.e. today's level white_nits
+    float blackNits    = 0.0f;      // nits at composite 0.0             black_nits
+    float toneKnee     = 0.0f;      // 0 = straight ramp, 1 = full S-curve
+                                    // (more steps through the mids)     tone_knee
+    // Chroma hold, same math as [liquid_acid] post_chroma: scale the pixel
+    // away from its own luma in linear light, so raising the white point can
+    // never read as a wash. 1 = untouched. Applies to style=ink whatever
+    // `tonemap` is.                                              tone_chroma
+    float toneChroma   = 1.0f;
+    // Duotone blend space. The thin/thick tint pair is cross-faded per pixel
+    // by `tk`; done in RGB (0, the shipped behaviour) a COMPLEMENTARY pair
+    // passes through grey at the midpoint, which is exactly why a teal/
+    // vermillion ink reads as grey-blue and pale peach over most of a plume.
+    // 1 blends hue/sat/value instead (short way round the wheel), so every
+    // intermediate is as saturated as the two anchors.       tint_hue_blend
+    float tintHueBlend = 0.0f;
 };
 
 // ---------------------------------------------------------------------------

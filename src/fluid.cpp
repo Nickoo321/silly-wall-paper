@@ -2233,8 +2233,9 @@ struct DropCellGPU { uint32_t first, count; };
 struct InkParamsGPU {
     float p0[4], p1[4], p2[4], p3[4], p4[4];
     float paper[4], tintThin[4], tintThick[4];
+    float p5[4], p6[4];
 };
-static_assert(sizeof(InkParamsGPU) == 128, "InkCB layout");
+static_assert(sizeof(InkParamsGPU) == 160, "InkCB layout");
 
 // CPU mirror of AcidHueShift in shaders.h: rotate HUE ONLY, holding saturation
 // and value, so a swept colour is exactly as vivid at its new hue as it was at
@@ -3795,9 +3796,35 @@ void FluidRenderer::UploadInkConstants() {
     const float p1[4] = { k.edgeLo, k.edgeHi, k.inverted ? 1.0f : 0.0f, k.vignette };
     const float p2[4] = { k.parallax, k.parallaxScale, k.parallaxDrift, m_time };
     const float p3[4] = { k.coreKnee, k.hdrCore, k.motionLo, k.motionHi };
-    const float p4[4] = { k.motionOpacity, k.veilFloor, k.tintMidDip, 0.0f };
+    const float p4[4] = { k.motionOpacity, k.veilFloor, k.tintMidDip,
+                          (k.tonemap > 0) ? 1.0f : 0.0f };
     memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16);
     memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16); memcpy(p.p4, p4, 16);
+
+    // ---- [ink] tonemap: resolve the nits targets into scRGB -------------
+    // The display shader works in scRGB, where 1.0 = 80 nits by definition,
+    // so every "_nits" key is just a divide. white_nits = 0 means "the SDR
+    // white level we already sit at" (80 * sdr_scale), which makes tonemap=1
+    // a pure curve change; the presets set it explicitly.
+    // With HDR OFF the swap chain clips at 1.0, so both ceilings come down to
+    // SDR white — the look must survive HDR on AND off (AGENTS.md).
+    const float sdrScale = fmaxf(m_sdrScale, 0.01f);
+    float whiteSc = (k.whiteNits > 0.5f) ? k.whiteNits / 80.0f : sdrScale;
+    float peakSc  = (m_cfg.hdrPeakNits > 0.5f) ? m_cfg.hdrPeakNits / 80.0f
+                                               : whiteSc;
+    if (!m_hdrActive) { whiteSc = fminf(whiteSc, sdrScale); peakSc = sdrScale; }
+    // peak_nits is the CEILING, so the tray's peak menu (CMD_PEAK_*) caps the
+    // ink curve too: a peak set below white_nits pulls the white point down
+    // with it rather than being ignored.
+    whiteSc = fminf(whiteSc, peakSc);
+    float blackSc = fmaxf(k.blackNits, 0.0f) / 80.0f;
+    blackSc = fminf(blackSc, whiteSc);
+    const float p5[4] = { whiteSc, blackSc,
+                          fminf(fmaxf(k.toneKnee, 0.0f), 1.0f),
+                          fmaxf(k.toneChroma, 0.0f) };
+    const float p6[4] = { fminf(fmaxf(k.tintHueBlend, 0.0f), 1.0f),
+                          peakSc, 0.0f, 0.0f };
+    memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16);
 
     // ---- duotone PAIR ROTATION ([ink] pair_sweep_period) -----------------
     // With the sweep off these are just the authored tints. With it on, the

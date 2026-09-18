@@ -2277,9 +2277,9 @@ struct AcidParamsGPU {
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
     float p18[4], p19[4], p20[4], p21[4], p22[4], p23[4], men[4];
-    float p24[4], p25[4], p26[4];
+    float p24[4], p25[4], p26[4], p27[4], p28[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 576, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 608, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -4181,7 +4181,18 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
     memcpy(p.p23, p23, 16);
     memcpy(p.men, men, 16);
+    // ---- DROPLET LENS SHADING (item X) -----------------------------------
+    // The band width is authored in px at 1440p like every other optical
+    // width here and carried as a fraction of the frame. The LAMP comes off
+    // the rig, so the specular swings with the same light the haze and the
+    // bloom hang off instead of inventing a second one.
+    float p27[4] = { fminf(fmaxf(a.dropletLens, 0.0f), 1.0f),
+                     fminf(fmaxf(a.dropletLensCentre, 0.0f), 1.0f),
+                     fmaxf(a.dropletLensBand, 0.25f) / 1440.0f,
+                     fminf(fmaxf(a.dropletSpec, 0.0f), 1.0f) };
+    float p28[4] = { m_rig.lampX, m_rig.lampY, 0.0f, 0.0f };
     memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
+    memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
     // ---- droplet particle buffers ---------------------------------------

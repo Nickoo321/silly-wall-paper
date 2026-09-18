@@ -495,6 +495,29 @@ struct LiquidAcidConfig {
     float diffraction   = 0.0f;     // 0..1 master                 diffraction
     float diffractionPx = 1.5f;     // spread width, px at 1440p diffraction_px
 
+    // --- DROPLET LENS SHADING (item X) ------------------------------------
+    // The user, holding the oil-and-water reference against our live frame:
+    // "I was thinking of the oil boundary layer -- some mechanics of how it
+    // should be gradual -- and it translated to it just being blurry. The
+    // ratio of blurry to focused is off." In the reference every droplet down
+    // to four pixels is CRISP at its edge and GRADUAL inside it: a thin bright
+    // refractive rim just outside, a darker band just inside, a lighter centre
+    // because the droplet is a lens focusing the backlight, and a small
+    // specular from the lamp. Ours were soft-edged flat fills. None of this
+    // adds any blur -- the crispness comes from the edge, the gradualness from
+    // the interior, and they are different things.
+    //   droplet_lens        0..1 master; 0 = off
+    //   droplet_lens_centre how much lighter the middle is than the shoulder
+    //   droplet_lens_band   width of the dark inner band AND of the bright
+    //                       rim outside it, px at 1440p (floored by band_min,
+    //                       so a 4-px droplet gets the same shading a mass does)
+    //   droplet_spec        a small highlight, offset toward the rig's lamp,
+    //                       so it swings when the lamp does
+    float dropletLens       = 0.0f;   //                     droplet_lens
+    float dropletLensCentre = 0.30f;  //              droplet_lens_centre
+    float dropletLensBand   = 3.0f;   // px at 1440p    droplet_lens_band
+    float dropletSpec       = 0.0f;   //                     droplet_spec
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".

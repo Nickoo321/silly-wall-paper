@@ -144,3 +144,9 @@ R. (user 2026-09-18 18:50, sketch reference/shots/photos/sketch-perspective-came
    (deg, drifts when focus_tilt_drift > 0), focus_band_px (width of the sharp strip). This is the
    same per-pixel circle-of-confusion machinery as the perspective camera: CoC = f(element depth,
    field curvature, tilt-plane distance); implement all three in the one N+R task.
+   R correction (user 18:58): the tilt does NOT drift continuously. It is an OCCASIONAL READJUSTMENT: the
+   focus plane holds still for a while (tens of seconds to minutes), then someone "re-tilts" the
+   lens -- a short eased move (a second or two, maybe a slight overshoot/settle like a hand on a
+   lens) to a new angle/offset, then still again. Keys: focus_tilt_period (mean seconds between
+   readjustments, randomised), focus_tilt_move_s (duration of a move). Same for the focus distance:
+   an occasional refocus, not a drift. The LAMP (Q) keeps its slow continuous idle drift.

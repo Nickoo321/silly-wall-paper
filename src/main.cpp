@@ -527,6 +527,10 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingWidth = getF(S, L"droplet_ring_width", a.dropletRingWidth);
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
+        // --- conservation of mass (brief S) ---
+        a.conserveMass     = getF(S, L"conserve_mass",  a.conserveMass);
+        a.spawnGrowS       = getF(S, L"spawn_grow_s",   a.spawnGrowS);
+        a.dissolveS        = getF(S, L"dissolve_s",     a.dissolveS);
         a.dropletRingWobble= getF(S, L"droplet_ring_wobble", a.dropletRingWobble);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
@@ -1632,6 +1636,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
+        putF(S, L"conserve_mass", a.conserveMass, 3);
+        putF(S, L"spawn_grow_s", a.spawnGrowS, 3);
+        putF(S, L"dissolve_s", a.dissolveS, 3);
         putF(S, L"droplet_ring_wobble", a.dropletRingWobble, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
@@ -2231,6 +2238,16 @@ static int RunShotMode() {
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));
+        // DIAGNOSTIC ONLY (brief A): FW_ACID_DUMP=1 writes a CSV of the acid
+        // sim's CPU state beside each capture. Off unless the env var is set.
+        {
+            wchar_t dumpEnv[8] = {};
+            if (GetEnvironmentVariableW(L"FW_ACID_DUMP", dumpEnv, 8) > 0
+                && dumpEnv[0] != L'0') {
+                std::wstring csv = shotStem + L".csv";
+                renderer.DumpAcidCsv(csv.c_str());
+            }
+        }
     }
 
     ShotLog("[shot] done: %lld frames simulated in %.1f s wall\n",

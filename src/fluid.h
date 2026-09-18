@@ -378,6 +378,22 @@ struct LiquidAcidConfig {
     float dropletRingWidth = 0.08f; // rim width / radius        droplet_ring_width
     float dropletRingLift  = 0.10f; // interior lightening 0..1   droplet_ring_lift
     float dropletRingClump = 0.0f;  // raft attraction 0..1       droplet_ring_clump
+
+    // --- CONSERVATION OF MASS (brief S, 2026-09-18) ---------------------
+    // "matter cannot be created or destroyed": nothing may appear at a
+    // visible size in the open, and nothing may vanish from it. 0 = exactly
+    // today's behaviour, every branch below skipped.
+    //   conserve_mass   master, 0..1 (used as a switch today)
+    //   spawn_grow_s    seconds a NEW droplet takes to swell from nothing to
+    //                   its target radius (it is below the visible floor for
+    //                   the first seconds of that). 0 = today's 0.34 s.
+    //   dissolve_s      seconds a DYING droplet (old age / stranded) takes to
+    //                   shrink away. 0 = today's 0.34 s. Coalescence keeps
+    //                   its own 0.34 s: pouring into a neighbour is not a
+    //                   disappearance and it should still read as fast.
+    float conserveMass  = 0.0f;     // 0..1                        conserve_mass
+    float spawnGrowS    = 0.0f;     // s, 0 = today (0.34)         spawn_grow_s
+    float dissolveS     = 0.0f;     // s, 0 = today (0.34)         dissolve_s
     float dropletRingWobble= 1.0f;  // out-of-round 0..1        droplet_ring_wobble
 
     // --- BACKLIGHT PENUMBRA (oil_penumbra) --------------------------------
@@ -852,6 +868,13 @@ public:
     bool IsHeadless() const { return m_headless; }
     // width*height*4 floats, row-major RGBA, linear scRGB (1.0 = 80 nits).
     bool CaptureOffscreen(std::vector<float>& outRgba);
+
+    // DIAGNOSTIC ONLY (brief A, 2026-09-18): dump the acid sim's CPU state --
+    // every blob, every droplet and the whole 64x36 velocity readback -- as a
+    // CSV beside a --shot capture. Called only from the headless shot loop and
+    // only when FW_ACID_DUMP is set in the environment; nothing in the live
+    // path reaches it and it changes no sim state.
+    void DumpAcidCsv(const wchar_t* path) const;
     // Deterministic runs: seed every rand()-based behavior. 0 (default) keeps
     // the normal time-seeded startup. Must be set before Init/InitOffscreen.
     static void SetRandomSeed(unsigned seed);
@@ -1223,6 +1246,9 @@ private:
                          // life. Drives the ring's out-of-round shape, so a
                          // ring never changes its identity frame to frame.
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
+        float tauR;      // seconds for r to relax toward rt. 0 = the shared
+                         // 0.34 s default; set per droplet by the birth and
+                         // death sites when conserve_mass is on.
     };
     std::vector<AcidDrop> m_acidDrops;
     std::vector<int>   m_dropletCellStart;  // kDropGridW*kDropGridH + 1

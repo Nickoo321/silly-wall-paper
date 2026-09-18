@@ -2375,7 +2375,7 @@ cbuffer PostPassCB : register(b0) {
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
     float4 pp5;   // x stock      y fog        z bloom   w dofMaxPx(this res; 0 = alpha is not a CoC)
     float4 pp6;   // x fogReach(uv) y bloomPx(this res) z psfPx(this res) w -
-    float4 pp7;   // spare
+    float4 pp7;   // x dither (LSB of 10 bit)   y,z,w -
 };
 // ---- THE RIG -------------------------------------------------------------
 // One lamp and one lens on one body, stepped on the CPU (FluidRenderer::
@@ -2807,6 +2807,42 @@ R"hlsl(
         float3 l0   = ToLinear(e), l2 = ToLinear(e2);
         float  gain = clamp(dot(base, W) / max(dot(l0, W), 1e-4), 1.0, 16.0);
         d = max(d + (l2 - l0) * gain * sdrS, min(d, 0.0));
+    }
+    // ---- OUTPUT DITHER (item V0) -----------------------------------------
+    // The frame leaves here as FP16, but the panel quantises it to 10 bits in
+    // a perceptual domain, and on a big saturated flat -- which is most of
+    // this look -- the user can see the steps. So the noise goes in where the
+    // quantiser is: on the sRGB-encoded proxy, half an LSB of a 10-bit signal,
+    // converted back to linear and scaled by whatever HDR gain this pixel
+    // carries so a hot core is dithered by the same half step as a mid tone.
+    //
+    // INTERLEAVED-GRADIENT noise rather than a hash: its spectrum is close to
+    // blue, so the pattern sits above the eye's peak sensitivity instead of
+    // clumping the way white noise does, and it costs three instructions. A
+    // new phase every frame, and a different one per channel, because the
+    // channels band independently on a saturated colour.
+    //
+    // It FADES OUT into true black. A dither that lifted an off OLED pixel
+    // would be a far worse bug than the band it fixed.
+    [branch] if (pp7.x > 0.0005) {
+        float  sdrD = max(pp2.z, 1e-3);
+        float3 base = d / sdrD;
+        float3 e    = ToSRGB(base);
+        float2 jt   = frac(pp2.y * float2(37.0, 61.0)) * 61.0;
+        float3 n;
+        n.x = frac(52.9829189 * frac(dot(i.pos.xy + jt,          float2(0.06711056, 0.00583715))));
+        n.y = frac(52.9829189 * frac(dot(i.pos.xy + jt + 23.71,  float2(0.06711056, 0.00583715))));
+        n.z = frac(52.9829189 * frac(dot(i.pos.xy + jt + 51.37,  float2(0.06711056, 0.00583715))));
+        float  lq = dot(e, W);
+        // ...and the fade starts well ABOVE the first code, not at it. Banding
+        // is a mid-tone and flat-highlight problem; the deep shadow has
+        // nothing to dither and everything to lose, so below ~0.2 nits this
+        // term is exactly zero and the OLED's off pixels stay off.
+        float  amp = pp7.x * (1.0 / 1023.0) * smoothstep(0.010, 0.040, lq);
+        float3 e2 = max(e + (n - 0.5) * amp, 0.0);
+        float3 l0 = ToLinear(e), l2 = ToLinear(e2);
+        float  g  = clamp(dot(base, W) / max(dot(l0, W), 1e-4), 1.0, 16.0);
+        d = max(d + (l2 - l0) * g * sdrD, min(d, 0.0));
     }
     return float4(d, 1.0);
 }

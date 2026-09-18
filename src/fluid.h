@@ -874,6 +874,17 @@ struct PostConfig {
     // isoline can never come out as raw coverage AA -- the stair-stepped "O"
     // in the photo. 0 = off, and style=fluid never names it.
     float psfPx = 0.0f;             // point spread radius, px at 1440p  psf_px
+
+    // --- OUTPUT DITHER (item V0) ------------------------------------------
+    // The frame leaves here as FP16 scRGB, but the panel quantises it to 10
+    // bits in a perceptual domain, and on a big saturated flat -- which is
+    // most of this look -- 10 bits is not enough: the user can see the steps
+    // on the OLED. Half an LSB of ordered noise on the final output breaks
+    // them into a dither pattern the eye integrates away. It is applied in the
+    // ENCODED domain, because that is where the quantiser lives, and it fades
+    // out into true black, because a lifted black would be a far worse bug
+    // than a band. 1 = half an LSB; higher is for looking at it.
+    float dither = 0.0f;           //                                dither
 };
 
 struct MirrorConfig {

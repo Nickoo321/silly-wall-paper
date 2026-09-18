@@ -410,6 +410,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.focusTiltMoveS = getF(S, L"focus_tilt_move_s", po.focusTiltMoveS);
         po.dofMaxPx       = getF(S, L"dof_max_px", po.dofMaxPx);
         po.psfPx          = getF(S, L"psf_px", po.psfPx);
+        po.dither         = getF(S, L"dither", po.dither);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1572,6 +1573,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"focus_tilt_move_s", po.focusTiltMoveS, 2);
         putF(S, L"dof_max_px", po.dofMaxPx, 2);
         putF(S, L"psf_px", po.psfPx, 2);
+        putF(S, L"dither", po.dither, 2);
     }
     {
         const DropConfig& d = c.drops;

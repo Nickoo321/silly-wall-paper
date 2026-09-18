@@ -929,7 +929,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmScratches > 0.0005f || po.filmLeak > 0.0005f ||
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
-                         po.psfPx > 0.01f ||
+                         po.psfPx > 0.01f || po.dither > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
@@ -1047,7 +1047,9 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // applied whatever the focus: no optical system resolves a point to a
     // point, so the sharpest thing in the frame is still this wide.
     c[26] = fmaxf(po.psfPx, 0.0f) * scale;
-    // c[27..31] spare. light_x / light_y / light_drift used to live here; the
+    // OUTPUT DITHER: half an LSB of ordered noise against 10-bit banding.
+    c[28] = fminf(fmaxf(po.dither, 0.0f), 8.0f);
+    // c[27], c[29..31] spare. light_x / light_y / light_drift used to live here; the
     // lamp is part of the RIG now and arrives in its own block below.
 
     // ---- THE RIG, as ONE contiguous block ---------------------------------

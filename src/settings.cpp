@@ -420,6 +420,7 @@ static void BuildDefs() {
         { L"Optical axis x",                    0,     1,   0.02f, 2, &c.post.cameraAxisX,   nullptr, L"post", L"camera_axis_x", false, nullptr, 3, L"Where the optical axis meets the dish: the one point seen face on, and the centre the field curvature and the tilt are measured from" },
         { L"Optical axis y",                    0,     1,   0.02f, 2, &c.post.cameraAxisY,   nullptr, L"post", L"camera_axis_y", false, nullptr, 3, L"The other half of that point" },
         { L"Point spread (px at 1440p)",         0,     6,   0.1f,  2, &c.post.psfPx,        nullptr, L"post", L"psf_px", false, nullptr, 3, L"The floor under the defocus radius, applied whatever the focus: no lens resolves a point to a point, so the sharpest thing in the frame is still this wide. At 1 px and up an in-focus edge can never come out as stair-stepped coverage AA" },
+        { L"Output dither (LSB of 10 bit)",      0,     4,   0.25f, 2, &c.post.dither,       nullptr, L"post", L"dither", false, nullptr, 3, L"Half an LSB of ordered blue-ish noise on the finished frame, in the domain the panel quantises in. Breaks the 10-bit steps that show as bands on a big saturated flat. It fades out into true black, so an off pixel stays off. 1 = half an LSB" },
     };
     s_checks = {
         { L"Auto wanderer splats",              &c.wanderers,        L"behavior", L"wanderers", L"Behaviors", 0, L"Autonomous roaming emitters" },

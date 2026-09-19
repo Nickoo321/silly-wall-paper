@@ -300,6 +300,29 @@ struct LiquidAcidConfig {
     // entry carries a full set the old anchor path runs untouched.
     bool  sweepOilFullSet[kSweepMax] = {};
     float sweepOilFull[kSweepMax * 12] = {};
+    // --- ACCENT COLOUR BY SIZE (accent_mode, brief J) ---------------------
+    // The user, on a crop of the live look: "if the entire frame looked like
+    // the cropped one it would be better" -- ONE colour with small scattered
+    // accents of its complement, "like 80/20". The failure it replaces is the
+    // photo of "random unintentional green blobs": a blob's colour slot is
+    // drawn at seed time with no regard for its size, so the 4th shade (which
+    // the 80-20 palettes make the complement) lands on big masses as often as
+    // on small ones, and a complement mass is not an accent, it is a second
+    // colour.
+    //   0 = the shipped behaviour, untouched.
+    //   1 = BY SIZE. Shade 4 is the ACCENT and belongs to the SMALL elements
+    //       alone: a blob under accent_max_r (a fraction of disc_max) may take
+    //       it, anything larger is folded back into shades 1-3, so no big mass
+    //       can be the complement. The oil-on-ink droplets and the hollow
+    //       rings already draw shade 4 and keep it -- they are the smallest
+    //       things in the frame and are exactly the scattered dots the photo
+    //       is made of.
+    // accent_frac keeps it an ACCENT rather than a rule: only that share of
+    // the small blobs take it, chosen by a HASH of the blob's index, so it is
+    // stable frame to frame and switching the key on moves nobody.
+    int   accentMode = 0;           //                          accent_mode
+    float accentMaxR = 0.35f;       // fraction of disc_max      accent_max_r
+    float accentFrac = 0.60f;       // share of the small ones   accent_frac
     float inkGain     = 2.30f;      // luminance -> ramp position
     float inkBias     = 0.05f;
     float seamStrength= 0.70f;      // dark seams along |grad dye|
@@ -1422,6 +1445,14 @@ private:
         // is then taken untouched.
         float comb = 0.0f;
         float cdx = 0.0f, cdy = 0.0f;
+        // accent_mode 1: how far this blob is toward the ACCENT shade, and
+        // the latched side of the accent_max_r test that drives it. The mix
+        // ramps over ~2 s, so a blob that changes class (it respawns at a new
+        // radius) crossfades between the two shades instead of popping.
+        // -1 = "not evaluated yet": the first step lands on the target
+        // directly, so the population does not fade in at t = 0.
+        float accentMix   = -1.0f;
+        int   accentSmall = -1;
     };
     std::vector<AcidBlob> m_acidBlobs;
     bool   m_acidSeeded = false;

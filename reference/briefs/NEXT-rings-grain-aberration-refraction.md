@@ -504,3 +504,11 @@ settings panel path already applies values live, reuse it), caption rendering, a
 hotkey so the user can hold on one. Ask before the swap that starts the tour; the user may be
 gaming. This replaces the queued "review checklist document" as the walk-through vehicle; the
 document stays as the tour's script.
+
+AE-b (user, after seeing hue2 live: "oh my", "its beautiful"): "can't the global hue just rotate
+to cause combos, while the contrast colours wiggle around like 170-190 degrees opposite the
+primary?" hue_rotate_period already exists (whole oil palette rotates, ink stays black; 0 = off in
+acid-rise-12). film_hue2 is relative, so the pair rotates together. Add film_hue2_wobble (deg) +
+film_hue2_wobble_period (s): hue2 = film_hue2 + wobble * slow two-sine oscillation, jump on the rig
+readjust. acid-rise-12: film_hue2 180, wobble 10, period 300, hue_rotate_period slow (10-20 min).
+Executor B on branch hue2b.

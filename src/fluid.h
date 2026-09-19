@@ -575,6 +575,30 @@ struct LiquidAcidConfig {
     float dropletLensBand   = 3.0f;   // px at 1440p    droplet_lens_band
     float dropletSpec       = 0.0f;   //                     droplet_spec
 
+    // --- BUBBLE CRUST ON THE MASSES (brief AB, the lava-lamp photos) ------
+    // The user's refs are a real lava lamp: the big wax mass carries a dense
+    // crust of small bubbles inside it and on it, while the liquid AROUND it
+    // is nearly clean. Ours was the inverse -- droplets on the open film, the
+    // dye masses empty black. Their clarification: "it can be inside and
+    // outside", i.e. this is NOT a swap. Today's film population stays and a
+    // crust is ADDED on top of it, which is why the crust has a target of its
+    // own rather than stealing spawns from the film.
+    //   droplet_mass_bias      0 = today. How much crust there is, as a share
+    //                          of the film population.
+    //   droplet_crust_density  density multiplier inside a mass against the
+    //                          film. 1 = today (no crust at all).
+    //   droplet_crust_r        crust droplets are SMALL: r_max times this.
+    //   mass_rim               display pass: a thin bright refracted rim on
+    //                          the LAMP side of a mass edge, so the mass
+    //                          reads as a translucent body and not as a flat
+    //                          black cut-out.
+    // "Not as extreme" (the user): the shipped values sit well under the
+    // photos.
+    float dropletMassBias   = 0.0f;   //  0..1        droplet_mass_bias
+    float dropletCrustDens  = 1.0f;   //  1..4    droplet_crust_density
+    float dropletCrustR     = 1.0f;   //  0..1        droplet_crust_r
+    float massRim           = 0.0f;   //  0..1             mass_rim
+
     // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
     // The user, on the halation frame: "the bottom right blob isn't getting
     // more out of focus even as it approaches the edge." True, and by
@@ -1437,8 +1461,12 @@ private:
     // Blob field + gradient + the local oil's own velocity at one uv point.
     // The CPU twin of the shader's metaball loop, used to keep a trapped
     // droplet inside the oil and to make it ride that oil.
+    // outHx/outHy (optional): the same soft-max blend over the NEGATIVE blobs
+    // -- the velocity of the dark MASS at this point, which is what a crust
+    // bubble rides. Null for every caller that only wants the oil.
     void AcidFieldAt(float x, float y, float aspect, float& outField,
-                     float& outGx, float& outGy, float& outVx, float& outVy) const;
+                     float& outGx, float& outGy, float& outVx, float& outVy,
+                     float* outHx = nullptr, float* outHy = nullptr) const;
     void UpdateVelocityReadback();  // 64x36 velocity downsample -> CPU (1 frame late)
     void UploadAcidConstants();     // fills this frame's blob + param upload buffers
     void BindAcid();                // root SRV/CBV for the display draw
@@ -1664,6 +1692,9 @@ private:
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
         int   racer;     // 1 = a racing micro-bubble (droplet_racer_frac);
                          // hashed at birth from the position, fixed for life.
+        int   crust;     // 1 = a crust bubble ON a dye mass (brief AB): it
+                         // rides the mass instead of the water, it is small,
+                         // and it clumps without ever coalescing.
         float tauR;      // seconds for r to relax toward rt. 0 = the shared
                          // 0.34 s default; set per droplet by the birth and
                          // death sites when conserve_mass is on.

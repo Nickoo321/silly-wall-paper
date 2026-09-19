@@ -595,6 +595,7 @@ cbuffer AcidCB : register(b1) {
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
+    float4 laP29;        // x massRim    y rimW(uv)   z -           w -
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -1914,6 +1915,30 @@ R"hlsl(
         float3 bright = (sgnB > 0.0) ? oilC : inkC;
         col += lerp(bright, float3(1.0, 1.0, 1.0), 0.35) * (k * br * 0.60);
         col *= 1.0 - k * ec * 0.35;
+    }
+    // ---- MASS RIM (mass_rim, brief AB) -----------------------------------
+    // The user's lava-lamp photos: the wax mass is TRANSLUCENT and its edge is
+    // a refracting boundary with a bright rim on the lit side (refs 5 and 7),
+    // never a flat black cut-out. So a thin bright band just OUTSIDE the
+    // isoline -- on the mass side, sdf < 0 -- and only where that edge faces
+    // the rig's LAMP: the surface normal here is -grad(field), and its dot
+    // with the lamp direction is how much of the lamp the boundary catches.
+    // The far side of the same mass gets nothing, which is what stops this
+    // reading as an outline and makes it read as a lit body.
+    [branch] if (laP29.x > 0.0005) {
+        float  rw  = max(laP29.y, bmin * 1.5 * PX1440);
+        float  u2  = sdf / rw;                       // < 0 on the mass side
+        float  band = exp(-(u2 + 1.15) * (u2 + 1.15) * 1.6);
+        // which way this piece of edge faces, and how much lamp it catches
+        float2 nrm = -grad / max(gl, 1e-5);
+        float  lit = saturate(dot(nrm, lampD) * 0.5 + 0.5);
+        lit = lit * lit;
+        // Peak channel, never luminance: the film is a saturated magenta
+        // whose luminance is a third of its red.
+        float  src = max(oilC.r, max(oilC.g, oilC.b));
+        float3 tint = lerp(oilC / max(src, 1e-4), float3(1.0, 1.0, 1.0), 0.45);
+        col += tint * (saturate(laP29.x) * band * lit * 0.28
+                       * smoothstep(0.5, 1.5, gl) * isoOk * src);
     }
     // ---- DROPLET LENS SHADING (droplet_lens, item X) ---------------------
     // The user, holding the oil-and-water reference beside our live frame: "I

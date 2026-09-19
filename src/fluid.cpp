@@ -2375,9 +2375,9 @@ struct AcidParamsGPU {
     float p0[4], p1[4], p2[4], p3[4], p4[4], p5[4], p6[4], p7[4], p8[4], p9[4];
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
     float p18[4], p19[4], p20[4], p21[4], p22[4], p23[4], men[4];
-    float p24[4], p25[4], p26[4], p27[4], p28[4];
+    float p24[4], p25[4], p26[4], p27[4], p28[4], p29[4];
 };
-static_assert(sizeof(AcidParamsGPU) == 608, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 624, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -3238,11 +3238,13 @@ void FluidRenderer::StepAcidBlobs(float dt) {
 // far below what the damping relaxation smooths out anyway.
 void FluidRenderer::AcidFieldAt(float x, float y, float aspect, float& outField,
                                 float& outGx, float& outGy,
-                                float& outVx, float& outVy) const {
+                                float& outVx, float& outVy,
+                                float* outHx, float* outHy) const {
     const LiquidAcidConfig& a = m_cfg.acid;
     const float px = x * aspect, py = y;
     float f = 0.0f, gx = 0.0f, gy = 0.0f;
     float vw = 0.0f, vx = 0.0f, vy = 0.0f;
+    float hw2 = 0.0f, hx = 0.0f, hy = 0.0f;   // the MASS side (brief AB)
     for (size_t bi = 0; bi < m_acidBlobs.size(); bi++) {
         const AcidBlob& b = m_acidBlobs[bi];
         const float r = b.baseR * (1.0f + a.breathAmt * sinf(b.phase));
@@ -3261,11 +3263,16 @@ void FluidRenderer::AcidFieldAt(float x, float y, float aspect, float& outField,
         if (b.wgt > 0.0f) {
             const float w2 = w * w, w4 = w2 * w2;
             vw += w4; vx += b.vx * w4; vy += b.vy * w4;
+        } else if (outHx) {
+            const float w2 = w * w, w4 = w2 * w2;
+            hw2 += w4; hx += b.vx * w4; hy += b.vy * w4;
         }
     }
     outField = f; outGx = gx; outGy = gy;
     outVx = (vw > 1e-9f) ? vx / vw : 0.0f;
     outVy = (vw > 1e-9f) ? vy / vw : 0.0f;
+    if (outHx) *outHx = (hw2 > 1e-9f) ? hx / hw2 : 0.0f;
+    if (outHy) *outHy = (hw2 > 1e-9f) ? hy / hw2 : 0.0f;
 }
 
 // ---- BUBBLE WEATHER (U9) -------------------------------------------------
@@ -3322,6 +3329,20 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     int target = (int)lroundf((float)a.droplets
                               * (1.0f + wAmt * 0.45f * wDens));
     if (a.droplets > 0 && target < 1) target = 1;
+    // ---- BUBBLE CRUST (brief AB) -----------------------------------------
+    // The crust gets a target of its OWN, added on top. The user was explicit
+    // that this is not a swap -- "it can be inside and outside" -- so the film
+    // keeps every droplet it has today and the masses gain a population
+    // beside it. 0.45 is roughly the share of the frame a mass covers at the
+    // shipped coverage, so droplet_crust_density reads as a density against
+    // the film rather than as a raw count.
+    const float massBias  = fminf(fmaxf(a.dropletMassBias, 0.0f), 1.0f);
+    const float crustDens = fminf(fmaxf(a.dropletCrustDens, 1.0f), 4.0f);
+    const float crustRk   = fminf(fmaxf(a.dropletCrustR, 0.05f), 1.0f);
+    const int   targetCrust = (int)lroundf((float)target * massBias
+                                           * (crustDens - 1.0f) * 0.45f);
+    const int   targetFilm  = target;
+    target += targetCrust;
     if (target > kAcidMaxDrops) target = kAcidMaxDrops;
     if (target <= 0) {
         // CONSERVATION: turning the population off from the settings window
@@ -3432,7 +3453,12 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // Nucleation is a SURFACE effect: a droplet of water comes out of solution
     // where the film is THIN (near an edge, near another droplet's rim) and
     // where the flow is shearing, not uniformly across a slab of oil.
+    // kind 2 = a CRUST bubble (brief AB): kind 1 in every other respect, but
+    // it must land WELL INSIDE a dye mass rather than anywhere off the oil,
+    // it is small, and it is flagged so it rides the mass and never merges.
     auto nucleate = [&](int kind, AcidDrop& out) -> bool {
+        const bool crust = (kind == 2);
+        if (crust) kind = 1;
         for (int tr = 0; tr < 20; tr++) {
             const float x = rf(), y = rf();
             float f, gx, gy, ovx, ovy;
@@ -3440,7 +3466,15 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             const float gl = sqrtf(gx * gx + gy * gy) + 1e-6f;
             const float sdf = (f - thresh) / gl;
             float p;
-            if (kind == 0) {
+            if (crust) {
+                // Deep enough in that the bubble sits in the black body of
+                // the mass and not on its rim, where the confinement term
+                // would push it straight back out.
+                if (sdf >= -0.010f) continue;
+                // ...and denser where the mass is thickest, which is what
+                // makes the crust patchy instead of an even sprinkle.
+                p = 0.25f + 0.75f * (1.0f - expf(sdf / 0.060f));
+            } else if (kind == 0) {
                 if (sdf <= 0.004f) continue;               // inside the oil only
                 float vu, vv; sampleVel(x, y, vu, vv);
                 const float sp = sqrtf(vu * vu + vv * vv);
@@ -3454,6 +3488,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             out.x = x; out.y = y;
             out.r = 0.0f;                                  // born at nothing
             out.rt = drawR();
+            if (crust) { out.crust = 1; out.rt *= crustRk; }
             out.tauR = growTau;                            // see growTau above
             out.kind = kind;
             out.mergeTo = -1;
@@ -3606,6 +3641,22 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // water is denser than the wax, which is what makes a bubble creep
             // ACROSS the disc instead of riding it like a painted dot.
             ty += a.riseSpeed * a.dropletRise;
+        } else if (d.crust) {
+            // ---- BUBBLE CRUST: it rides the MASS ------------------------
+            // The user's note on the lava-lamp refs: it sits in the wax and
+            // travels with it, "it does not race across it". So a crust
+            // bubble takes the local dark mass's own velocity, the same
+            // soft-max blend over the negative blobs that a trapped droplet
+            // takes over the oil -- not the water's flow, which would drag
+            // it out of the body it belongs to within seconds.
+            float hvx = 0.0f, hvy = 0.0f;
+            float f5, gx5, gy5, o5, o6;
+            AcidFieldAt(d.x, d.y, aspect, f5, gx5, gy5, o5, o6, &hvx, &hvy);
+            tx = hvx; ty = hvy;
+            // a touch of the water underneath, so a crust on the open ink
+            // (no negative blob over it) still drifts rather than freezing
+            tx += vu * a.flowGain * 0.25f;
+            ty += vv * a.flowGain * 0.25f;
         } else {
             tx = vu * a.flowGain;
             ty = vv * a.flowGain;
@@ -3952,6 +4003,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                         if (d2 > reach * reach || d2 < 1e-12f) continue;
                         const float dd = sqrtf(d2), inv = 1.0f / dd;
                         const bool bothRing = (di.ring && dj.ring);
+                        const bool bothCrust = (di.crust && dj.crust);
                         if (bothRing && dd < sum * 1.06f) {
                             if (i < n) touchNew[i]++;
                             if (j < n) touchNew[j]++;
@@ -3978,6 +4030,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                             && di.rt > 0.0f && dj.rt > 0.0f
                             && (dd < sum * mergeF
                                 || (coalP > 0.0f && !di.ring && !dj.ring
+                                    && !di.crust && !dj.crust
                                     && dd < sum && rf() < coalP))) {
                             // COALESCE, area-conserving. The survivor is the
                             // larger one; the other pours into it (rt -> 0,
@@ -4039,10 +4092,32 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                                     : (a.dropletAttract + 3.0f * ringClump);
                                 acc = -pull * (1.0f - (dd - wall) / (2.0f * sum)) * 0.05f;
                             }
+                        } else if (bothCrust && dd < sum * 1.10f) {
+                            // CRUST (brief AB): a crust bubble never
+                            // coalesces, so if it is allowed to sit at exactly
+                            // touching its metaball field fuses with its
+                            // neighbour's and a pair comes out as one capsule
+                            // -- a dash, not two bubbles. The lava-lamp refs
+                            // show a dense foam of bubbles that stay round and
+                            // separate, so crust rests just OUTSIDE contact
+                            // and the two fields never merge.
+                            acc = (1.0f - dd / (sum * 1.10f)) * 0.45f;
                         } else if (dd < sum) {
                             // contact repulsion: two droplets that are not
                             // merging stay round instead of interpenetrating
                             acc = (1.0f - dd / sum) * 0.35f;
+                        } else if (bothCrust) {
+                            // CRUST does not pull on itself. Attraction plus
+                            // a fixed rest distance is a recipe for rigid
+                            // rafts: half a dozen bubbles locked at one
+                            // spacing, whose union field reads as a single
+                            // lumpy polygon rather than as bubbles (the same
+                            // failure the solid droplets had before
+                            // droplet_coalesce). A crust is distributed by
+                            // where it NUCLEATES -- biased by the mass's own
+                            // thickness, which is what makes it patchy -- and
+                            // then carried by the mass. So: separation only.
+                            continue;
                         } else {
                             // short-range attraction within ~3 radii
                             acc = -a.dropletAttract * (1.0f - (dd - sum) / (2.0f * sum)) * 0.05f;
@@ -4095,13 +4170,32 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // ---- 5. nucleation ---------------------------------------------------
     m_dropletSpawnAcc += fmaxf(a.dropletSpawn, 0.0f) * dt;
     if (m_dropletSpawnAcc > 60.0f) m_dropletSpawnAcc = 60.0f;
-    int live = 0;
-    for (size_t i = 0; i < m_acidDrops.size(); i++) if (m_acidDrops[i].rt > 0.0f) live++;
+    // The film and the crust are counted SEPARATELY and topped up against
+    // their own targets (brief AB): one population must never be able to
+    // starve the other, which is exactly what "keep today's film and ADD the
+    // crust" means. With droplet_mass_bias 0 the crust target is 0 and this
+    // is the original single-population loop.
+    int live = 0, liveCrust = 0;
+    for (size_t i = 0; i < m_acidDrops.size(); i++) {
+        if (m_acidDrops[i].rt <= 0.0f) continue;
+        live++;
+        if (m_acidDrops[i].crust) liveCrust++;
+    }
     while (m_dropletSpawnAcc >= 1.0f) {
         m_dropletSpawnAcc -= 1.0f;
-        if (live >= target || (int)m_acidDrops.size() >= kAcidMaxDrops) break;
+        if ((int)m_acidDrops.size() >= kAcidMaxDrops) break;
+        const bool crustShort = (liveCrust < targetCrust);
+        const bool filmShort  = ((live - liveCrust) < targetFilm);
+        if (!crustShort && !filmShort) break;
+        // When both are short, alternate by the accumulator's parity so
+        // neither waits on the other.
+        bool doCrust = crustShort && (!filmShort || ((live & 1) == 0));
         AcidDrop d;
-        if (nucleate((rf() < a.dropletInkFrac) ? 1 : 0, d)) { m_acidDrops.push_back(d); live++; }
+        const int k = doCrust ? 2 : ((rf() < a.dropletInkFrac) ? 1 : 0);
+        if (nucleate(k, d)) {
+            m_acidDrops.push_back(d); live++;
+            if (d.crust) liveCrust++;
+        }
     }
 
     // ---- 6. final bin, the one the shader reads --------------------------
@@ -4674,6 +4768,11 @@ void FluidRenderer::UploadAcidConstants() {
                      a.dyeDepthTilt };
     memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
+    // mass_rim (brief AB): strength, and its width as a fraction of the frame
+    // from px at 1440p -- the same convention as every other optical width.
+    float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
+                     3.0f / 1440.0f, 0.0f, 0.0f };
+    memcpy(p.p29, p29, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
     // ---- droplet particle buffers ---------------------------------------

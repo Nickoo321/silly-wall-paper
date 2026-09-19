@@ -1463,3 +1463,26 @@ has today and a crust is added beside it.
 **Regression (this session, Sonnet rote, exe `C:\Users\abg77\fw-wt\build2\FluidWallpaper.exe`,
 confirmed built from `7ee65e2`):** `we-look-live.ini` 60 s 2560x1440 seed 1234 `--hdr on` --
 **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches expected.
+
+## 2026-09-19 — gpu.lock stale-reclaim helper (Fable, tooling only)
+
+Added `tools/gpu-lock.ps1`, a dot-sourceable helper (`Wait-GpuLock -Owner ... [-TimeoutMinutes
+30]` / `Release-GpuLock`, plus a `-Acquire`/`-Release` CLI wrapper for non-PowerShell callers) to
+replace every render/build script's own ad hoc `Test-Path`/`Set-Content` wait loop on
+`build2\shots\gpu.lock`. Motivation: a force-killed holder skips its `finally`, orphaning the lock
+until a human deletes it. The lock now carries `pid=<holder>` and a waiter reclaims it once that
+pid is dead (or, for the no-pid legacy format, once the file is >45 min old), logging what it
+reclaimed and why to `build2\shots\gpu-lock.log`; acquisition uses `[IO.File]::Open(...,
+FileMode::CreateNew)` so two waiters racing a freshly-freed lock can't both win, and release only
+ever deletes a lock stamped with the caller's own PID. Verified without any GPU work: (1) a lock
+with a dead pid was reclaimed and logged immediately; (2) a lock held by a real (sleeping)
+process was NOT reclaimed and was only taken ~21s later, after that process exited; (3)
+`Release-GpuLock` refused to delete a lock stamped with a foreign pid and logged the refusal.
+Known gap: the CLI `-Acquire`/`-Release` pair only works correctly when invoked from the *same*
+process, since each `powershell -File ...` call is a fresh process with its own PID — a caller
+that acquires via CLI and releases via a second, separate CLI call will always get refused. Fine
+for the dot-sourced (same-process) path that `tools/shot.ps1`-style scripts and the scratchpad
+`build-wt-only.ps1` use; not yet fine for a genuinely separate-process external caller, which
+would need the lock's pid to be settable rather than always `$PID`. No existing script was
+switched over except the scratchpad `build-wt-only.ps1` (outside the repo); `tools/shot.ps1` and
+`tools/ink3d-shot.ps1` still have their own inline wait loops and are candidates for a follow-up.

@@ -478,3 +478,13 @@ features, not oil-first with a token leak. The oil colour field (AE) and the fil
 they read as one thing (leak hue follows film_hue2 by default, key leak_hue_follow). The only rule
 kept from the decision above: the leak's black lift stays capped (leak_black_lift) so OLED black
 holds. Order unchanged: AE, then AF/AG, then AH, unless the user picks otherwise.
+
+CORRECTION 2 (user): the oil colour (AE) and the film leak (AH) "can read as different things",
+they might just look similar. Do NOT tie the leak hue to the oil hue by default. The leak colour
+can clash with the palette (red + teal oil with a yellowish leak looks bad; a MONO, neutral
+reflection probably looks good; some tricolour combos may work). So AH gets leak_hue_mode =
+mono | film | fixed (default mono: a neutral, near-white leak that takes the film's colour only
+through the OLED's own blend), plus leak_hue for the fixed mode, chosen per preset. Same for the
+lid reflections in AF: lid ghosts stay mono by default (they copy the film, which is already the
+right colour); any tinted ghost is a key, off by default. The presets decide the combo; nothing
+forces it.

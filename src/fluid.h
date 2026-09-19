@@ -983,6 +983,33 @@ struct PostConfig {
     float halationPx     = 14.0f;  // radius, px at 1440p         halation_px
     float halationWarmth = 0.75f;  // 0 white .. 1 red-orange halation_warmth
 
+    // --- THE LID (task V2, brief T note 3 + V key ref) --------------------
+    // The user: NO visible instrument, NO petri-dish rim, NO grid or UI
+    // marks, NO dark corners -- the oil stays full-bleed edge to edge. What
+    // may be simulated is the transparent glass/plastic CAP over the dish,
+    // i.e. the picture seen THROUGH a cover: the internal reflections of the
+    // bright film in it, a broad sheen from the lamp, the lamp's own glint,
+    // the faint iridescence of an oil film on its surface, and the wobble a
+    // sheet of cheap plastic gives its own reflections. All FULL-FRAME and
+    // ADDITIVE -- never a mask, never a border, nothing that reads as a hole
+    // in the display. The reference is the LAPD optics sheet
+    // (endgoal-ref-13): concentric coloured ring ghosts, a warm veiling
+    // flare, a hot spot with a wide amber glow, iridescent colour sweeps.
+    //
+    // NOTHING SITS STILL (T note 4, OLED): every element's position comes
+    // from the RIG -- the lamp's drift, the lens axis, and the lid's own slow
+    // idle wander -- and every element is shoved at once at each of the rig's
+    // occasional readjustments. There is no fixed screen position anywhere in
+    // this block.
+    float lid          = 0.0f;   // 0..1 master; 0 = the block never runs  lid
+    float lidGhost     = 0.0f;   // 0..1 offset copies of the bright film
+    float lidGhostSpread = 1.0f; // 0..2 how far the ghost chain runs
+    float lidRings     = 0.0f;   // 0..1 concentric coloured ring ghosts
+    float lidSheen     = 0.0f;   // 0..1 broad soft specular off the cover
+    float lidSheenPx   = 420.0f; // px at 1440p: the sheen's width
+    float lidGlint     = 0.0f;   // 0..1 the lamp's own reflection + halo
+    float lidIris      = 0.0f;   // 0..1 oil-film iridescence on the cover
+    float lidRefractPx = 0.0f;   // px at 1440p: wobble of the REFLECTIONS
     // --- MOTION (item V3) -------------------------------------------------
     // The user's rule for this whole family: nothing may sit at a fixed
     // screen position on an OLED, ever. And the motion model they chose is
@@ -1375,6 +1402,11 @@ private:
         float tiltAmt   = 0.0f;             // focus depth gained per unit along it
         float focus     = 0.5f;             // focus depth
         float movePhase = 1.0f;             // 0..1 through the current readjustment
+        // The LID rests on the same body: a slow idle wander of its own, plus
+        // a shove at every readjustment, so its ghosts and sheen travel with
+        // the lamp and the focus instead of beside them.
+        float lidX = 0.0f, lidY = 0.0f;     // uv offset of the cover
+        float lidRot = 0.0f;                // rad; orientation of its sheen
         float shiftX = 0.0f, shiftY = 0.0f; // OLED pixel-shift orbit, px at 1440p
     };
     CameraRig m_rig;
@@ -1388,6 +1420,11 @@ private:
     float m_camHold = 0.0f;         // s left of the still hold
     float m_camMoveT = -1.0f;       // >= 0 while a readjustment is running
     float m_camMoveDur = 1.0f;
+    // Lid offset endpoints for the readjustment shove (eased on the same
+    // spring as the focus, so everything lands together).
+    float m_lidIdleX = 0.0f, m_lidIdleY = 0.0f, m_lidIdleR = 0.0f;
+    float m_lidPrevX = 0.0f, m_lidPrevY = 0.0f, m_lidPrevR = 0.0f;
+    float m_lidTargX = 0.0f, m_lidTargY = 0.0f, m_lidTargR = 0.0f;
     bool  m_camInit = false;
     uint32_t m_camRng = 0x9E3779B9u;
     // A readjustment moves the WHOLE rig, not just the focus: these are the

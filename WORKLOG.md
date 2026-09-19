@@ -1409,3 +1409,57 @@ commit on the `lid` branch) and the merge of `lid` onto `main`.
 **Regression (this session, Sonnet rote, exe `C:\Users\abg77\fw-wt\build2\FluidWallpaper.exe`,
 confirmed built from `01fa483`):** `we-look-live.ini` 60 s 2560x1440 seed 1234 `--hdr on` --
 **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches expected.
+
+## 2026-09-19 -- acid-rise-12 de-fuzz (Fable, b5c79bb)
+
+The user: acid-rise-12 was "too fuzzy/fine, hazy". Config-only tune in `acid-rise-12.ini`,
+no other rising config touched: `film_noise` 0, `film_grain_size` 2.5 px, `shimmer_px` 0.8 px,
+`fog` 0.22, `lid_sheen` 0.04.
+
+## 2026-09-19 -- AB: bubble crust on the masses; merge onto main (executor B, 7004632..7ee65e2)
+
+Brief AB: the user's lava-lamp reference photos (`reference/shots/photos/lavalamp-ref-1..7`)
+show the big wax masses carrying a dense crust of bubbles inside and on them, with the liquid
+around them nearly clean -- the inverse of what we had (droplets on the open film, masses empty
+black). The user's clarification settles the design as NOT a swap: the film keeps everything it
+has today and a crust is added beside it.
+
+- **Crust as a second population (`7004632`).** `[liquid_acid]` gains `droplet_mass_bias` (crust
+  share of the film population), `droplet_crust_density` (crust density inside a mass vs. the
+  film, 1 = none), `droplet_crust_r` (crust bubbles are small, `r_max` times this), and `mass_rim`
+  (the display term below). The emitter now counts film and crust separately and tops each
+  against its own spawn target, so neither can starve the other; with `droplet_mass_bias` 0 the
+  crust target is 0 and this is the original single-population loop, unchanged.
+- A crust bubble nucleates deep inside a mass (sdf < -0.010, in the black body rather than on the
+  rim where the confinement term would eject it) with probability rising with the mass's
+  thickness, which is what makes the crust patchy rather than an even sprinkle. It rides the mass:
+  `AcidFieldAt` gained an optional soft-max blend over the negative blobs so a crust bubble takes
+  the local dark mass's own velocity, the way a trapped droplet takes the oil's, instead of the
+  water's flow (which would drag it out of the body within seconds); a quarter of the water's flow
+  is kept so crust over open ink still drifts rather than freezing.
+- Crust never coalesces, and getting that to look like foam took two corrections after the first
+  render: excluded from the contact merge, it sat at exactly touching and two metaball fields
+  simply blended into one capsule (a dash, not two bubbles), so crust now rests just outside
+  contact (1.10x the sum of radii); that alone produced rigid rafts -- attraction plus a fixed
+  rest distance locks half a dozen bubbles at one spacing, reading as a single lumpy polygon, the
+  same failure the solid droplets had before `droplet_coalesce` -- so crust does not pull on
+  itself at all, only nucleation placement plus the mass's own carry.
+- `mass_rim` (display, `laP29`): a thin bright band just outside the isoline on the mass side
+  only, scaled by the dot of the surface normal (`-grad(field)`) with the rig's lamp direction
+  (`laP28.xy`, already carried for item X) -- the far side of the same mass gets nothing, which
+  stops it reading as an outline and makes it read as a lit translucent body (refs 5, 7). Peak
+  channel, never luminance.
+- Ship 0.6 / 2.5 / 0.6 / rim 0.35 in all four `acid-rise-*.ini` and the base rising preset --
+  "not as extreme" (the user): the reference photos are almost all crust, this lands at a third.
+  Verified at seed 1234, t=60 (droplets counted in frame): in-mass (visible) / on-film (visible)
+  / mass share -- off (today) 133 (75) / 1425 (794) / 8.5%; shipped 571 (265) / 1105 (610) /
+  34.1%; high 0.9/3.5 623 (272) / 1410 (765) / 30.6%. The film count moves non-monotonically with
+  the bias (1425 / 1105 / 1410), which is RNG-stream divergence and the weather phase, not the
+  crust starving it -- the high config carries more crust AND more film than the shipped one.
+  style=fluid parity md5 `10E36EBF1A74EDFE609065D757300054`, unchanged. A/B sheet
+  `build2/shots/cons/crust/SHEET-AB-crust-1440p.png`.
+- **Merge (`7ee65e2`, "Merge branch 'crust'").** `crust` merged onto `main`.
+
+**Regression (this session, Sonnet rote, exe `C:\Users\abg77\fw-wt\build2\FluidWallpaper.exe`,
+confirmed built from `7ee65e2`):** `we-look-live.ini` 60 s 2560x1440 seed 1234 `--hdr on` --
+**PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches expected.

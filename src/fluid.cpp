@@ -1715,7 +1715,22 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         // the count slider is also how you apply those live.
         int want = m_cfg.acid.blobCount;
         want = want < 1 ? 1 : (want > kAcidMaxBlobs ? kAcidMaxBlobs : want);
-        if (!m_acidSeeded || (int)m_acidBlobs.size() != want) SeedAcidBlobs();
+        if (!m_acidSeeded) {
+            SeedAcidBlobs();
+        } else if (m_cfg.acid.conserveMass > 0.5f) {
+            // Walk to the new count instead of replacing the field. Called
+            // every frame the count differs from the request: it is idempotent
+            // (it counts blobs that are not already retiring) and costs one
+            // pass over 96 blobs, so the surplus keeps shrinking and the
+            // shortfall keeps growing until the two agree.
+            if (m_acidWantBlobs != want) m_acidWantBlobs = want;
+            int live = 0;
+            for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
+                if (m_acidBlobs[bi].rTarget > 0.0f) live++;
+            if (live != want) AdjustAcidBlobCount(want);
+        } else if ((int)m_acidBlobs.size() != want) {
+            SeedAcidBlobs();
+        }
         UpdateVelocityReadback();
         StepAcidBlobs(dt);
         StepAcidDroplets(dt);
@@ -2584,8 +2599,80 @@ void FluidRenderer::SeedAcidBlobs() {
     // is exactly the stagger rise_respawn needs: the column is populated from
     // the first frame and never empties, instead of one batch marching up
     // together and leaving a bare screen behind it.
+    for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
+        m_acidBlobs[bi].rTarget = m_acidBlobs[bi].baseR;   // nothing pending
     m_acidRespawnRng = rng.next() | 1u;
+    m_acidWantBlobs = n;
     m_acidSeeded = true;
+}
+
+// ---------------------------------------------------------------------------
+// blob_count, smoothly (brief S residue). Moving the slider used to call
+// SeedAcidBlobs(), which replaces the whole population in one frame: every
+// mass on screen vanishes and a new field appears. Under conserve_mass the
+// population WALKS to the new count instead -- the surplus shrinks away over
+// dissolve_s (preferring blobs that are already off-frame, so most of it is
+// never seen at all), and a shortfall is grown in from under the bottom edge,
+// through the same door rise_respawn brings a blob back through.
+// ---------------------------------------------------------------------------
+void FluidRenderer::AdjustAcidBlobCount(int want) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    auto rf = [&]() {
+        m_acidRespawnRng ^= m_acidRespawnRng << 13;
+        m_acidRespawnRng ^= m_acidRespawnRng >> 17;
+        m_acidRespawnRng ^= m_acidRespawnRng << 5;
+        return (m_acidRespawnRng >> 8) * (1.0f / 16777216.0f);
+    };
+    const float TWO_PI = 6.2831853f;
+    int live = 0;
+    for (size_t i = 0; i < m_acidBlobs.size(); i++)
+        if (m_acidBlobs[i].rTarget > 0.0f) live++;
+
+    // ---- too many: retire the least visible first ----------------------
+    while (live > want) {
+        int best = -1; float bestScore = -1e9f;
+        for (size_t i = 0; i < m_acidBlobs.size(); i++) {
+            const AcidBlob& b = m_acidBlobs[i];
+            if (b.rTarget <= 0.0f) continue;
+            // off-frame beats on-frame, and small beats large: whoever is
+            // cheapest to lose without anyone noticing.
+            const float off = fmaxf(fmaxf(-b.y, b.y - 1.0f), 0.0f);
+            const float score = off * 10.0f - b.baseR;
+            if (score > bestScore) { bestScore = score; best = (int)i; }
+        }
+        if (best < 0) break;
+        m_acidBlobs[(size_t)best].rTarget = 0.0f;
+        live--;
+    }
+
+    // ---- too few: grow one in from under the bottom edge ----------------
+    while (live < want && (int)m_acidBlobs.size() < kAcidMaxBlobs) {
+        AcidBlob b{};
+        // kind by the authored mix, the same fractions SeedAcidBlobs uses
+        const float u = rf();
+        float lo, hi, bias;
+        if      (u < a.discFrac)                 { b.kind = 0; b.wgt = 1.0f; lo = a.discMin;   hi = a.discMax;   bias = a.bigBias;  b.colIdx = 0; }
+        else if (u < a.discFrac + a.webFrac)     { b.kind = 1; b.wgt = 1.0f; lo = a.webMin;    hi = a.webMax;    bias = a.bigBias;  b.colIdx = 1; }
+        else if (u < a.discFrac + a.webFrac + a.bubbleFrac)
+                                                 { b.kind = 2; b.wgt = 1.0f; lo = a.bubbleMin; hi = a.bubbleMax; bias = a.sizeBias; b.colIdx = 3; }
+        else                                     { b.kind = 3; b.wgt = -fmaxf(a.holeWeight, 0.05f);
+                                                   lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; b.colIdx = 0; }
+        b.rTarget = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+        // Born at a size nobody can resolve and swollen over spawn_grow_s on
+        // the way in, so even a blob grown into the middle of the frame (no
+        // rise, so no bottom edge to come through) never appears at a size.
+        b.baseR = b.rTarget * 0.02f;
+        b.x = rf();
+        b.y = (a.riseSpeed > 1e-6f && a.riseRespawn)
+            ? 1.0f + b.rTarget * a.supportScale * (1.0f + a.breathAmt) * 0.86f
+            : rf();
+        b.phase = rf() * TWO_PI;
+        b.breathRate = 0.08f + rf() * 0.24f;
+        b.s1 = rf() * TWO_PI;
+        b.s2 = rf() * TWO_PI;
+        m_acidBlobs.push_back(b);
+        live++;
+    }
 }
 
 // 64x36 velocity downsample -> CPU, one frame late (same trick as
@@ -2709,6 +2796,7 @@ void FluidRenderer::StepAcidBlobs(float dt) {
     // currents. Exactly 1 for every blob when the key is 0.
     const float par  = fminf(fmaxf(a.riseParallax, 0.0f), 1.0f);
     const float rRef = fmaxf(a.discMax, 1e-4f);
+    const bool  cons0 = (a.conserveMass > 0.5f);
 
     // ---- mouse_oil_mode: the pointer's own velocity, uv/s -----------------
     // Recorded by HandleInput, differentiated here (HandleInput has no dt) and
@@ -2943,7 +3031,22 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             if      (b.kind == 0) { lo = a.discMin; hi = a.discMax; bias = a.bigBias; }
             else if (b.kind == 1) { lo = a.webMin;  hi = a.webMax;  bias = a.bigBias; }
             else if (b.kind == 3) { lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; }
-            b.baseR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+            // CONSERVATION (brief S residue): a blob that leaves the top and
+            // comes back under the bottom is the SAME blob, so under
+            // conserve_mass it keeps its radius instead of drawing a new one.
+            // The fresh x and the fresh curl phases are what stop the column
+            // reading as a loop; re-rolling the size as well was mass
+            // appearing and disappearing off-frame, which is the one thing
+            // this key exists to forbid. The draws still happen either way,
+            // so the respawn stream is identical and nobody else moves.
+            const float newR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+            if (!cons) b.baseR = newR;
+            // ...but a blob that is on its way OUT (blob_count went down)
+            // must stay on its way out. Restoring its target here handed it
+            // back its life every time it wrapped, and Adjust then retired
+            // somebody else instead: the population churned and the total
+            // area bled away instead of settling.
+            if (b.rTarget > 0.0f) b.rTarget = b.baseR;
             b.x = rf();
             b.y = 1.0f + b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
             b.vx = 0.0f;
@@ -2965,6 +3068,26 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         }
 
         b.phase += b.breathRate * breathS * dt;
+
+        // ---- blob_count, smoothly (brief S residue) ---------------------
+        // baseR walks to rTarget so a blob can be grown in or shrunk away.
+        // Outside a blob_count change the two are equal and this is a no-op;
+        // with conserve_mass off nothing ever sets them apart at all.
+        if (b.rTarget != b.baseR) {
+            const float tauB = (b.rTarget > b.baseR)
+                             ? fmaxf(a.spawnGrowS, 1.0f) : fmaxf(a.dissolveS, 1.0f);
+            b.baseR += (b.rTarget - b.baseR) * (1.0f - expf(-dt / tauB));
+        }
+    }
+    // Retire whatever has shrunk past the point of contributing anything: the
+    // Wyvill kernel's reach is baseR * support_scale, so a blob under a fifth
+    // of a pixel of it cannot move an isoline.
+    if (cons0) {
+        const float gone = 0.2f / (fmaxf((float)m_height, 1.0f)
+                                   * fmaxf(a.supportScale, 0.5f));
+        for (size_t i = m_acidBlobs.size(); i-- > 0; )
+            if (m_acidBlobs[i].rTarget <= 0.0f && m_acidBlobs[i].baseR < gone)
+                m_acidBlobs.erase(m_acidBlobs.begin() + (ptrdiff_t)i);
     }
 }
 

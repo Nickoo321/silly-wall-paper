@@ -1254,6 +1254,10 @@ private:
     // --- Liquid Acid look ---
     void CreateAcidBuffers();       // blob SRV + param CBV upload rings (always)
     void SeedAcidBlobs();           // deterministic under the shot seed
+    // Walk the blob population toward `want` without a re-seed: the surplus
+    // is marked to shrink away, a shortfall is grown in from under the bottom
+    // edge. conserve_mass only; see the brief S residue.
+    void AdjustAcidBlobCount(int want);
     void StepAcidBlobs(float dt);   // CPU sim: fluid advection + curl + repulsion
     // Droplet particle sim: nucleation, advection by the oil, attraction,
     // coalescence, dissolution; then the uniform-grid bin the shader reads.
@@ -1456,9 +1460,17 @@ private:
         // is then taken untouched.
         float comb = 0.0f;
         float cdx = 0.0f, cdy = 0.0f;
+        // CONSERVATION (brief S residue): baseR relaxes toward rTarget so a
+        // blob can be grown in or shrunk away instead of appearing and
+        // vanishing when the blob_count slider moves. 0 = "retire me".
+        // Equal to baseR everywhere else, so nothing relaxes on its own.
+        float rTarget = 0.0f;
     };
     std::vector<AcidBlob> m_acidBlobs;
     bool   m_acidSeeded = false;
+    // blob_count, as last requested. Under conserve_mass the population walks
+    // toward it rather than being re-seeded in one frame.
+    int    m_acidWantBlobs = -1;
     // Private stream for rise_respawn draws. Seeded from the same seed as the
     // population, stepped only by respawns, so a --shot replays exactly and
     // the fluid's own rand() sequence is never touched.

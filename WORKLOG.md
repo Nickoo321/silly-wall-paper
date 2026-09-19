@@ -1180,3 +1180,54 @@ Rote docs pass, no code changes; the following is a same-day recap of the execut
 - **Queued next (`5bfe285`, plan only, no code).** Executor CAM: dither (shipped today), halation, lid, motion. Executor SIM: racers, weather. Brief Y (racing micro-bubbles, `1319ac6`) is the first of that queue to land.
 
 **Regression:** every commit above kept `style=fluid` byte-identical; today's own re-check (`we-look-live.ini`, 60 s, 2560x1440, seed 1234, `--hdr on`) -- **PASS**, md5 `10e36ebf1a74edfe609065d757300054` matches the expected `10E36EBF1A74EDFE609065D757300054`.
+
+## 2026-09-18 -- accent-by-size, halation V1, brief Z diagnosis, fullscreen pause fix (Sonnet rote docs pass, f384659..876c72a)
+
+Rote docs pass, no code changes; recap of four more of today's commits on `main` (after the CAM/SIM
+executor day above), plus this session's own md5 regression re-check.
+
+- **Accent colour by size (brief J, executor C, `f384659`/`c6efa53`).** `[liquid_acid] accent_mode`:
+  0 is today's behaviour, a blob's colour slot is drawn at seed time with no regard for size, so the
+  4th shade -- the complement, in the 80-20 palettes -- can land on a big mass as readily as a
+  bubble (the "random unintentional green blobs" the user disliked). Mode 1 restricts shade 4 to
+  blobs under `accent_max_r` (a fraction of `disc_max`), and only `accent_frac` of those, chosen by
+  a hash of the blob index (no `rand()` draw, so toggling the key never moves a blob's size or
+  position). Reads `baseR` rather than the breathing radius so a blob near the threshold cannot flip
+  shade twice a minute, with a hysteresis band and a 2 s colour crossfade so even a respawn is
+  invisible. Shipped: `accent_mode` 1, `accent_max_r` 0.12, `accent_frac` 0.6 in
+  `acid-rise-8020.ini` and both "(80-20 ...)" presets only -- the default 0.12 (down from a first
+  pass at 0.35) cuts in under the biggest bubbles so only the droplets and small bubbles take the
+  accent. `style=fluid` untouched.
+- **V1 halation (executor A, `e925d2a`/`04c49ea`).** CineStill-style halation: ordinary film stock
+  with the anti-halation backing removed lets light from a highlight cross the emulsion, bounce off
+  the film base and return a few pixels out, reddened -- tight (~14 px), taken only from genuine
+  brightness, landing in the dark AROUND a highlight rather than on it, unlike the existing wide
+  `bloom`. Two jittered rings of taps (8 + 12) around a centre pulled toward the rig's lamp, so the
+  glow's asymmetry turns as the lamp wanders. Finding worth keeping: the brightness gate must read
+  the PEAK CHANNEL, not luminance -- written against luminance first, the effect evaluated to
+  exactly zero on every frame, because this film is a saturated magenta (a 300-nit pink has R near
+  4.0 scRGB but Y near 1.0), so a luminance threshold calls the brightest thing in the frame dark.
+  Keys `halation` (0, ship 0.25), `halation_px` (14 @ 1440p), `halation_warmth` (0.75), shipped in
+  every `acid-rise-*` config and every "rising colours" preset; the "(NO lens effects)" twin keeps
+  them off.
+- **Brief Z: real lateral CA needs a post-pass resample (`efbec41`, diagnosis only, assigned to
+  executor A).** Doc-only commit (`reference/briefs/NEXT-rings-grain-aberration-refraction.md`), no
+  code yet. The shipped chromatic-aberration keys (`aberration`/`aberration_px`/`aberration_field`)
+  only ever gave a symmetric warm rim -- red-plus/blue-minus on every side of every droplet -- because
+  the display pass computes `dR`/`dB` as a first-order derivative along the LUMINANCE gradient, which
+  always points toward the brighter side; a real lateral split needs the sign to flip across the
+  edge, which a derivative at a single pixel cannot do, and the display pass has nothing stored to
+  resample anyway. `m_postTex` in the post pass does, so the fix is queued there: sample R/G/B at
+  `uv +/- n_r * s` (`n_r` from the rig's lens centre, not the frame centre; `s` a radial ramp scaled
+  by `aberration_px`/`aberration_field`), same key names, verified with a 4x crop showing red on the
+  outer edge of a corner droplet and blue/cyan on the inner edge. `style=fluid` keys stay 0, so md5
+  is unaffected either way.
+- **Fullscreen pause fix (`876c72a`).** The pause-while-gaming detector keyed off window style
+  (`WS_CAPTION` absent = fullscreen), which missed windowed-fullscreen titles that keep the caption
+  style while their client rect still covers the whole monitor -- Deadlock in that mode was never
+  pausing the sim. Now detects by comparing the foreground window's client rect to the monitor rect
+  and ignores window style entirely. `src/main.cpp`, 12 lines changed.
+
+**Regression (this session, Sonnet rote, worktree exe built from `876c72a`):** `we-look-live.ini`
+60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
+expected.

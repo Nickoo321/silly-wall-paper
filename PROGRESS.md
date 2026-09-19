@@ -49,8 +49,11 @@ Everything below is committed on `main`; nothing is running in the background.
 | Film scratches (faint, soft-edged, flickering segments) implemented, shipped OFF -- user: "no film has a line like that" | 85b3f74 |
 | Cellulose/film-overlay/light-in-the-water (briefs O, P, Q): macro cellulose texture in the black masses, film overlay artefacts (hairs/dust/scratches/light-leak/grain), wide weak bloom + volumetric fog as "light in the water" | 7049d02, 6009b1d, b62e447 |
 | V0: output dither, half an LSB against 10-bit banding | 19d5f4a |
+| Liquid Acid accent-by-size (brief J): `accent_mode`/`accent_max_r`/`accent_frac` keeps the complement shade off big masses (hash of blob index, hysteresis + 2s crossfade, no rand() draw); shipped mode 1 / max_r 0.12 / frac 0.6 in acid-rise-8020 and both 80-20 presets only | f384659, c6efa53 |
+| V1 halation: tight warm glow from film's missing anti-halation backing (`halation`/`halation_px`/`halation_warmth`); brightness gate must read the PEAK channel, not luminance -- a luminance test evaluated to zero on saturated magenta; shipped 0.25/14px/0.75 in every acid-rise-*/rising preset, off in the NO-lens twin | e925d2a, 04c49ea |
+| Fullscreen pause fix: detect games by client rect covering the monitor instead of window style -- windowed-fullscreen titles kept WS_CAPTION and were never paused | 876c72a |
 
-Every step kept `style=fluid` byte-identical (md5 checked before/after each change); today's re-check (2026-09-18, `we-look-live.ini`) PASS, `10e36ebf1a74edfe609065d757300054`.
+Every step kept `style=fluid` byte-identical (md5 checked before/after each change); today's re-check (2026-09-18, `we-look-live.ini`) PASS, `10e36ebf1a74edfe609065d757300054`; re-confirmed again by this session's own Sonnet rote md5 check against the worktree exe built from `876c72a`, same hash, PASS.
 
 ## The user's picks so far
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
@@ -80,6 +83,10 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
 7. **3D ink sim**: bound the per-frame sharpen pass, re-run M1, then M2 + timings. Next week.
 8. **Preview fidelity (optional)**: a panel-emulating PNG variant (SDR white mapped to PNG white,
    soft knee on the lifted cores) so previews stop under-reading brightness.
+9. **Brief Z, assigned executor A**: real lateral chromatic aberration needs a resample in the POST
+   pass, not the current display-pass derivative trick (which only gives a symmetric warm rim --
+   no cool side splits off because a luminance-gradient derivative can't flip sign across an edge).
+   Diagnosis in `reference/briefs/NEXT-rings-grain-aberration-refraction.md` (`efbec41`); no code yet.
 
 ## End state (user, 2026-09-17): automated cycling through everything
 

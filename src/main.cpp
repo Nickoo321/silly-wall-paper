@@ -540,6 +540,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletAttract = getF(S, L"droplet_attract", a.dropletAttract);
         a.dropletMerge   = getF(S, L"droplet_merge", a.dropletMerge);
         a.dropletRise    = getF(S, L"droplet_rise", a.dropletRise);
+        a.accentMode     = getI(S, L"accent_mode", a.accentMode);
+        a.accentMaxR     = getF(S, L"accent_max_r", a.accentMaxR);
+        a.accentFrac     = getF(S, L"accent_frac", a.accentFrac);
         a.oilEdgeMode    = getI(S, L"oil_edge_mode", a.oilEdgeMode);
         a.oilEdgeCurve   = getF(S, L"oil_edge_curve", a.oilEdgeCurve);
         a.oilPenumbra    = getF(S, L"oil_penumbra", a.oilPenumbra);
@@ -1693,6 +1696,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_attract", a.dropletAttract, 3);
         putF(S, L"droplet_merge", a.dropletMerge, 3);
         putF(S, L"droplet_rise", a.dropletRise, 3);
+        putI(S, L"accent_mode", a.accentMode);
+        putF(S, L"accent_max_r", a.accentMaxR, 3);
+        putF(S, L"accent_frac", a.accentFrac, 3);
         putI(S, L"oil_edge_mode", a.oilEdgeMode);
         putF(S, L"oil_edge_curve", a.oilEdgeCurve, 3);
         putF(S, L"oil_penumbra", a.oilPenumbra, 3);

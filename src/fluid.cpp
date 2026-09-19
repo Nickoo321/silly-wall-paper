@@ -2299,6 +2299,17 @@ static float DropHash(float hx, float hy, uint32_t salt) {
     h *= 3266489917u; h ^= h >> 16;
     return (h >> 8) * (1.0f / 16777216.0f);
 }
+// accent_mode 1: the per-blob draw that decides who carries the accent shade.
+// A HASH of the blob's index rather than a rand() call, for two reasons: it
+// takes nothing from the seeding stream, so turning the key on leaves every
+// blob's size and position exactly where it was; and it is re-derivable every
+// frame, so the membership can never drift.
+static float AcidAccentHash(uint32_t i, uint32_t salt) {
+    uint32_t h = (i * 2654435761u) ^ salt;
+    h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+    h *= 3266489917u; h ^= h >> 16;
+    return (h >> 8) * (1.0f / 16777216.0f);
+}
 // Must match StructuredBuffer<uint2> DropCells: (first index, count).
 struct DropCellGPU { uint32_t first, count; };
 
@@ -2965,6 +2976,31 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         }
 
         b.phase += b.breathRate * breathS * dt;
+
+        // ---- accent_mode 1: who may carry the complement ------------------
+        // The test is on baseR, NOT on the breathing radius: a blob sitting
+        // near the line would otherwise flip shade twice a minute as it
+        // breathes across it. A hysteresis band on top of that, and the
+        // colour itself never switches -- accentMix walks to its target over
+        // 2 s, so the only thing that can change a blob's class (a respawn
+        // drawing a new radius, or the user moving the slider) crossfades.
+        // A blob's baseR only changes on a respawn, which happens below the
+        // bottom edge, so in practice the walk is finished before it is seen.
+        if (a.accentMode == 1) {
+            const float amr = fmaxf(a.accentMaxR, 0.0f) * fmaxf(a.discMax, 1e-4f);
+            if (b.accentSmall < 0)               b.accentSmall = (b.baseR < amr) ? 1 : 0;
+            else if (b.baseR < amr * 0.96f)      b.accentSmall = 1;
+            else if (b.baseR > amr * 1.04f)      b.accentSmall = 0;
+            const float frac = fminf(fmaxf(a.accentFrac, 0.0f), 1.0f);
+            const float tgt = (b.accentSmall > 0 &&
+                               AcidAccentHash((uint32_t)i, 0x51ED2701u) < frac) ? 1.0f : 0.0f;
+            if (b.accentMix < -0.5f) b.accentMix = tgt;      // first frame: no fade-in
+            else {
+                const float step = dt * 0.5f;                // full swing in 2 s
+                b.accentMix = (b.accentMix < tgt) ? fminf(b.accentMix + step, tgt)
+                                                  : fmaxf(b.accentMix - step, tgt);
+            }
+        }
     }
 }
 
@@ -4093,10 +4129,23 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].a[1] = b.y;
         dst[i].a[2] = b.baseR * (1.0f + a.breathAmt * sinf(b.phase));
         dst[i].a[3] = b.wgt;
-        const int ci = (b.colIdx < 0 || b.colIdx > 3) ? 0 : b.colIdx;
-        dst[i].b[0] = effOil[ci * 3 + 0];
-        dst[i].b[1] = effOil[ci * 3 + 1];
-        dst[i].b[2] = effOil[ci * 3 + 2];
+        int ci = (b.colIdx < 0 || b.colIdx > 3) ? 0 : b.colIdx;
+        if (a.accentMode == 1) {
+            // Shade 4 is the ACCENT and belongs to the accent set alone. A
+            // blob that drew it at seed time and is not in that set is folded
+            // back into the base three, which is the half of this that
+            // matters: it is what makes a big mass in the complement
+            // impossible rather than merely unlikely.
+            if (ci == 3) ci = (int)(AcidAccentHash((uint32_t)i, 0x9E3779B1u) * 3.0f) % 3;
+            const float mx = fminf(fmaxf(b.accentMix, 0.0f), 1.0f);
+            for (int ch = 0; ch < 3; ch++)
+                dst[i].b[ch] = effOil[ci * 3 + ch]
+                             + (effOil[9 + ch] - effOil[ci * 3 + ch]) * mx;
+        } else {
+            dst[i].b[0] = effOil[ci * 3 + 0];
+            dst[i].b[1] = effOil[ci * 3 + 1];
+            dst[i].b[2] = effOil[ci * 3 + 2];
+        }
         // .w = per-blob anisotropy for rise_stretch (0 = round, the shipped
         // look). A rising drop in a lamp is a teardrop while it is moving and
         // relaxes round as it slows, and a small one is dragged out far more

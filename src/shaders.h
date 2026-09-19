@@ -596,6 +596,14 @@ cbuffer AcidCB : register(b1) {
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
     float4 laP29;        // x massRim    y rimW(uv)   z -           w -
+    // --- multicolour oil (brief AE) ---------------------------------------
+    float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
+    float4 laP31;        // x crustHueMix  y -  z -  w -
+    // The 20x12 mix field, four cells per float4. Small on purpose: the
+    // patches the reference shows are a quarter to a half of the frame, so
+    // this carries them with room to spare and costs one cbuffer fetch and a
+    // bilinear blend per pixel -- no texture, no descriptor.
+    float4 laMix[60];
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -1038,6 +1046,13 @@ R"hlsl(
     // in `grad` on purpose: the blob field varies over ~0.1 p-units and a
     // droplet over ~0.01, so the droplet term dominates the edge anyway.
     float2 gradB = grad;      // blobs only -- the surface the LENS belongs to
+    // ...and the blobs-only FIELD with it. A crust droplet (brief AB) sits in
+    // a dye mass but PUNCHES the field above the threshold at its own pixels,
+    // so its core reads as oil and sdf alone cannot tell it from the open
+    // film. The blob field before any droplet is added can: below the
+    // threshold here means "this is inside a mass", droplet or not, which is
+    // what crust_hue_mix has to key off.
+    float fieldB = field;
     // ---- per-pixel DEPTH, for the circle of confusion (items N + R) ------
     // A weighted mean of the depths of whatever covers this pixel, primed
     // with the MASSES' own plane (0.5) at a low weight: open film reads as the
@@ -1643,8 +1658,64 @@ R"hlsl(
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
-    // ---- OIL: flat fill, thin dark rim just inside the isoline ----------
+    // ---- MULTICOLOUR OIL (brief AE) --------------------------------------
+    // A second dye hue living IN the film, not over it. The reference the
+    // user kept is a magenta film with soft cyan patches that read like a
+    // light leak -- but a leak is additive and would lift the black corners,
+    // and in that reference the cyan sits UNDER the masses. Only a dye in the
+    // film does both, so this shifts the film's own colour and everything
+    // downstream (the thin-film edge, the penumbra, the droplets' fill)
+    // inherits it for free. The masses stay black over it because they are
+    // drawn from the ink ramp, which this never touches.
+    //
+    // The hue rotation is AcidHueShift, which holds saturation and value, so
+    // a patch is exactly as vivid as the palette it came from -- the W3C
+    // matrix would have landed the cyan on a pastel.
     float3 oilC = oilBase;
+    [branch] if (laP30.x > 0.0005 || laP30.z > 0.0005) {
+        // bilinear fetch of the 20x12 field
+        const float MW = 20.0, MH = 12.0;
+        float2 mf = float2(uv.x * MW - 0.5, uv.y * MH - 0.5);
+        float2 mi = floor(mf), mt = mf - mi;
+        mt = mt * mt * (3.0 - 2.0 * mt);          // smooth, so cells never show
+        float m00, m10, m01, m11;
+        {
+            int x0 = (int)clamp(mi.x, 0.0, MW - 1.0), x1 = (int)clamp(mi.x + 1.0, 0.0, MW - 1.0);
+            int y0 = (int)clamp(mi.y, 0.0, MH - 1.0), y1 = (int)clamp(mi.y + 1.0, 0.0, MH - 1.0);
+            int i00 = y0 * 20 + x0, i10 = y0 * 20 + x1;
+            int i01 = y1 * 20 + x0, i11 = y1 * 20 + x1;
+            m00 = laMix[i00 >> 2][i00 & 3];  m10 = laMix[i10 >> 2][i10 & 3];
+            m01 = laMix[i01 >> 2][i01 & 3];  m11 = laMix[i11 >> 2][i11 & 3];
+        }
+        float mixV = lerp(lerp(m00, m10, mt.x), lerp(m01, m11, mt.x), mt.y);
+        // A soft threshold, not the raw field: the reference's patches have
+        // an edge to them, and a linear ramp over the whole field is a tint.
+        // The band is deliberately narrow and sits ABOVE the field's own
+        // mean: in the reference the second colour is a MINORITY -- patches
+        // in a film, not half the frame -- and a wide band spends most of the
+        // picture in the intermediate hues, which reads as a rainbow gradient
+        // rather than as two dyes meeting. 0.50..0.74 puts roughly a third of
+        // the frame in the patch and keeps the magenta-to-cyan run short.
+        float k2 = smoothstep(0.50, 0.74, mixV) * saturate(laP30.x);
+        // The droplets INSIDE a mass take their own share of it (the ref's
+        // cyan-lit specks in the black). 1 = the same as the film.
+        if (fieldB < thresh) k2 *= saturate(laP31.x);
+        // ROTATE the hue by the patch's share of it -- do NOT cross-fade to
+        // the rotated colour. lerp(magenta, cyan, 0.5) in RGB is GREY, and
+        // that is exactly what the first render produced: pale lavender fog
+        // instead of the reference's cyan. A dye shifts a hue; it does not
+        // blend a colour with its own opposite. Rotating also keeps
+        // saturation and value flat across the whole patch, so the film is as
+        // vivid in the second colour as it is in the first.
+        oilC = AcidHueShift(oilC, laP30.y * k2);
+        // ...and an optional THIRD hue off the other end of the SAME field,
+        // so a second colour costs no second field and no second fetch.
+        [branch] if (laP30.z > 0.0005) {
+            float k3 = (1.0 - smoothstep(0.18, 0.46, mixV)) * saturate(laP30.z);
+            if (fieldB < thresh) k3 *= saturate(laP31.x);
+            oilC = AcidHueShift(oilC, laP30.w * k3);
+        }
+    }
     // rise_bottom_light: a lava lamp is lit and heated from BELOW, so the wax
     // near the base is hotter and brighter and cools on the way up. One
     // vertical ramp on the oil (not on the ink: the glass is not lit, the wax
@@ -1723,6 +1794,9 @@ R"hlsl(
         oilC   = lerp(oilC, glassC, k);
         filmOp = lerp(1.0, saturate(1.0 - Tav), k);
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- surface relief: specular (oil_specular) + thin-film iridescence --
     // Kept deliberately weak: the references show almost no specular, because
     // the rig is BACKLIT. What little there is comes from the lens curvature

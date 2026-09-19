@@ -456,3 +456,18 @@ swells when a large mass or a coalescence passes near an edge, a streak that fol
 dust that appears for a few frames then goes. Slow drift plus occasional all-at-once readjustment
 (OLED rule). Keys: leak amount / hue / edge, streak, dust density, all default subtle, gradable.
 style=fluid untouched. Waiting on one more user message before scoping.
+
+DECISION (AE + AH, 2026-09-19): the light-leak LOOK comes from the OIL'S COLOUR, not from a film
+overlay. Ref oil-colour-combo-ref-1.jpg (an earlier colour-combo result the user rated positive:
+magenta film with soft cyan patches that read like a light leak, black masses over it, cyan-lit
+droplets inside the black). Why: in the film ref the leak is additive and lifts the black corners
+to orange; on the OLED the black must stay black, and the cyan patches in the keeper sit UNDER the
+masses, which only a dye in the film does. So:
+  AE = a second (and third) dye hue living in the thin film as a slow field advected by the sim
+       velocity (t3), soft-edged, patch-scale 1/4 to 1/2 screen, keys film_hue2 / film_hue2_amt /
+       film_hue2_scale / film_hue2_drift, drifting slowly with occasional readjustment. The masses
+       stay black over it (AG handles a coloured dye separately). Droplets inside the masses lit in
+       the second hue = the crust population taking film_hue2 (crust_hue_mix).
+  AH = kept small: a rare additive edge leak plus dust as EVENTS tied to the sim, default amount
+       low enough that the oil colour does the work. Never lifts black more than leak_black_lift.
+Order: AE first (one Opus executor), then AF/AG, AH last. style=fluid untouched, parity md5 holds.

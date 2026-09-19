@@ -4425,7 +4425,10 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
     float p15[4] = { fmaxf(a.oilTransparency, 0.0f), fmaxf(a.oilAbsorb, 0.0f),
                      fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
-    float p16[4] = { fmaxf(a.oilInkBlur, 0.0f), 0.0f, 0.0f, 0.0f };
+    // .y = dye_depth_w: how much the dye layer weighs against the droplets
+    // in the per-pixel depth blend (item AA; 0.25 = the old constant prior).
+    float p16[4] = { fmaxf(a.oilInkBlur, 0.0f),
+                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f), 0.0f, 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
     float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
@@ -4515,7 +4518,13 @@ void FluidRenderer::UploadAcidConstants() {
                      fminf(fmaxf(a.dropletLensCentre, 0.0f), 1.0f),
                      fmaxf(a.dropletLensBand, 0.25f) / 1440.0f,
                      fminf(fmaxf(a.dropletSpec, 0.0f), 1.0f) };
-    float p28[4] = { m_rig.lampX, m_rig.lampY, 0.0f, 0.0f };
+    // .zw = the DYE LAYER's own depth and its slope (item AA). The slope runs
+    // along the direction from the lens centre to the lamp, which drifts, so
+    // the dye slab is never parallel to the focus surface and the line where
+    // they cross travels with the rig instead of sitting on one row of pixels.
+    float p28[4] = { m_rig.lampX, m_rig.lampY,
+                     fminf(fmaxf(a.dyeDepth, 0.0f), 1.0f),
+                     a.dyeDepthTilt };
     memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));

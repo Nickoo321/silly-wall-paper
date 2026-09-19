@@ -579,7 +579,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
-    float4 laP16;        // x oilInkBlur y - z - w -
+    float4 laP16;        // x oilInkBlur y dyeDepthW z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
@@ -594,7 +594,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
-    float4 laP28;        // x lampX(uv) y lampY(uv)  z -  w -
+    float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -1044,11 +1044,30 @@ R"hlsl(
     // the ground between them is a smooth blend rather than a stencil -- which
     // matters, because a hard depth edge would print a hard blur edge in the
     // post pass and look like a cut-out instead of a lens.
-    float depSum = 0.5 * 0.25, depW = 0.25;
     // Where the optical axis meets the dish, in p-space. Everything about the
     // perspective view -- foreshortening, field curvature, the tilt gradient
     // -- is measured from here.
     const float2 axP = float2(laP24.x * aspect, laP24.y);
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- THE DYE'S OWN DEPTH (item AA) -----------------------------------
+    // This prior used to be the constant 0.5 -- which is exactly camera_focus,
+    // so every pixel with no droplet in it, i.e. every big dye mass, sat on
+    // the plane of focus BY DEFINITION and could only blur through the shape
+    // of the focus surface. The user saw it straight away: "the bottom right
+    // blob isn't getting more out of focus even as it approaches the edge."
+    //
+    // The dye is a layer at its own height instead. Its slope runs along the
+    // direction from the lens centre to the RIG's lamp, so the slab is not
+    // parallel to the focus surface: the two cross on a LINE rather than
+    // agreeing over a region, and that line travels as the lamp drifts. With
+    // dye_depth 0.5 and dye_depth_tilt 0 this is the old constant, to the bit.
+    float2 lampP = float2(laP28.x * aspect, laP28.y) - axP;
+    float2 lampD = lampP / max(length(lampP), 1e-5);
+    float  dyeW  = laP16.y;
+    float  dyeZ  = laP28.z + laP28.w * dot(pp - axP, lampD);
+    float depSum = dyeZ * dyeW, depW = dyeW;
     if (laP18.x > 0.5) {
         const int gw = (int)laP18.y, gh = (int)laP18.z;
         const int cx = clamp((int)floor(uv.x * gw), 0, gw - 1);

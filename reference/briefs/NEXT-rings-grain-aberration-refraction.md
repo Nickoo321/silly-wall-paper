@@ -419,3 +419,30 @@ today):
 - Everything moves with the rig as usual; style=fluid untouched (md5 must hold).
 - Verify: one 1440p A/B at seed 1234 t=60 with a crop of a mass, plus a droplet count
   in-mass vs on-film.
+
+## AC-AG. User review list (2026-09-19 13:10), to refine one at a time after the rote items
+
+AC. **Acid/oil presets do not switch the look.** User: "the presets, acid oil don't do oil, just more
+fluid sim." Diagnose: do the tray presets (moods folder, installed by panel-check -InstallPresets)
+carry [look] style=liquid_acid, and does the tray preset load apply [look] at all, or only the colour
+sections? If the loader keeps the running style, the fix is to apply [look] on preset load (with a
+renderer rebuild if the style changes). Verify headless by loading a preset through the same code path.
+
+AD. **Menus are confusing.** Deferred by the user ("sort that out later"). Collect the complaints
+during the review before touching settings.cpp.
+
+AE. **Multicolour oil.** User will re-send the references (candidates already in
+reference/shots/photos: liquid-acid-ref-1..7, oilwater-ref-1..3, we-pour-1..7). Wait for the photos.
+
+AF. **Not enough internal reflections.** The lid at subtle is invisible ("I wouldn't say I notice
+the lid"), and the sheen was the only term that showed (now 0.04). Raise the reflection terms, not
+the veil: lid_ghost, lid_rings, lid_glint, lid_iris up (try the medium preset's 0.50 / 0.40 / 0.32 /
+0.35 with lid_sheen kept at 0.04), and consider a ghost of the DROPLETS' rims (the lid reflecting the
+oil itself, offset copies of the bright rims), which the LAPD sheet shows and the current ghosts
+(copies of the bright film only) do not.
+
+AG. **Dye that is not just black.** The dark masses are always near-black. Add a dye colour: the
+negative blobs take a deep translucent colour (a 5th palette shade or a hue offset from the film,
+key dye_hue / dye_sat / dye_lum, defaults = today's black), lit through by the lamp like the
+lava-lamp wax (refs lavalamp-ref-4/5: amber wax over orange), with the crust and mass_rim reading
+against it. Palette per preset, gradable by sliders. style=fluid untouched.

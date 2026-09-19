@@ -1486,3 +1486,56 @@ for the dot-sourced (same-process) path that `tools/shot.ps1`-style scripts and 
 would need the lock's pid to be settable rather than always `$PID`. No existing script was
 switched over except the scratchpad `build-wt-only.ps1` (outside the repo); `tools/shot.ps1` and
 `tools/ink3d-shot.ps1` still have their own inline wait loops and are candidates for a follow-up.
+
+## 2026-09-19 -- AE: multicolour oil, a second dye hue in the film; merge onto main (Fable, 6c71d32..90f97b9)
+
+Brief AE (ref `oil-colour-combo-ref-1.jpg`, the colour combo the user rated positive): a magenta
+film carrying soft cyan patches that read like a light leak, black masses over both, and the
+droplets inside the black lit in the second colour. The AE+AH decision block says why this is a
+DYE and not a film-stock overlay: an additive leak lifts the black corners and this panel's black
+has to stay black; and in the keeper the cyan sits UNDER the masses, which only a dye in the film
+can do.
+
+- **The field.** One scalar per cell, 0..1, on a 20x12 grid, stepped every frame: advected
+  semi-Lagrangian off the same 64x36 velocity readback the blobs ride (plus the oil's own rise),
+  so a patch stretches and folds WITH the flow instead of sliding over it; slow two-octave value
+  noise injected at the patch scale; decay toward a base, without which advection plus injection
+  walks the whole field to one value over minutes and the second hue stops being patches and
+  becomes a flat tint. The noise phase jumps on the rig's readjustment, eased over ~1.6 s, so the
+  patches re-lay at the moment the lamp, the lid and the focus move.
+- **The cbuffer-slack field.** Rides the acid cbuffer's slack, four cells per float4: no new
+  texture, no new descriptor, nothing added to a root signature already at its 64-DWORD limit. Per
+  pixel it costs one fetch and a smoothed bilinear blend. 20x12 is not a compromise -- the
+  reference's patches are a quarter to a half of the frame across.
+- **The hue-rotation-not-blend fix.** A real bug on the way here, not a style choice: the first
+  render had correct structure, correct patch scale and a byte-exact parity md5, and the patches
+  came out pale lavender-white -- `lerp(magenta, cyan, 0.5)` in RGB is GREY, and at
+  `film_hue2_amt` 0.5 the patch cores sat exactly on it. Fixed by ROTATING the hue with
+  `AcidHueShift` instead of cross-fading toward the rotated colour; rotation also holds saturation
+  and value, so the film is as vivid in the second colour as in the first. That changes what the
+  amount MEANS: how far AROUND the wheel a patch travels, not a cross-fade fraction -- so shipped
+  amount is 1.0 (half of -140 deg is blue, not half-cyan), not the 0.5 the brief assumed for a
+  blend. `crust_hue_mix` keys off the BLOBS-ONLY field, not sdf: a crust bubble (brief AB) sits in
+  a mass but punches the field above threshold at its own pixels, and sdf alone can't tell it from
+  the open film.
+- **Keys** (`[liquid_acid]`, sliders with help text, all defaulting to 0 amount): `film_hue2`,
+  `film_hue2_amt`, `film_hue2_scale`, `film_hue2_drift`, `film_hue2_decay`, `film_hue3`,
+  `film_hue3_amt`, `crust_hue_mix`. Shipped in `acid-rise-12.ini` ONLY: -140 / 1.0 / 0.35 / 1.0 /
+  0.35 / 0 / 0 / 1.0 -- that preset sweeps eight hues, so `film_hue2` is a rotation off whatever
+  the film currently is and holds the relationship at every step of the sweep.
+- **The literal split.** Adding the block pushed a `kPostSrc` literal past MSVC's 16380-byte cap;
+  split at the nearest top-level banner to its midpoint. Largest literal is now 14081.
+- Verified: style=fluid parity md5 `10E36EBF1A74EDFE609065D757300054` on `we-look-live.ini`, 60 s,
+  2560x1440, seed 1234, `--hdr on` -- held across every build here. Shot and crop sheet (film
+  patch, mass edge over a patch, crust inside a mass) at `build2/shots/live/hue2-on.png` and
+  `hue2-crops.png`; the patches read like the reference.
+- **Merge (`90f97b9`, "Merge branch 'hue2'").** `hue2` merged onto `main`.
+- **Panel keeper (`10f8bc4`, 13:43).** hue2 live on the OLED (acid-rise-12); user verdict "its
+  beautiful". Keeper `reference/shots/panel/2026-09-19-hue2-cyan-in-magenta-beautiful.png`.
+
+## 2026-09-19 -- Shimmer A/B, verdict deferred to the live feature tour (brief AI)
+
+Shipped `shimmer`/`shimmer_px` 0.35 @ 0.8 px vs off: whole-frame MAD 0.11, invisible in a still;
+1 @ 6 px MAD 1.84 with rim fringing -- verdict deferred to the live feature tour (brief AI); sheet
+`build2/shots/live/shimmer-ab-sheet.png`; first attempt used the stale `build2/FluidWallpaper.exe`
+and was redone.

@@ -522,3 +522,10 @@ boundary colour (a key, e.g. boundary_reflect_r in px at 1440p, default = today'
 nothing changes until a preset raises it), so droplets farther from the seam still catch it,
 falling off smoothly. Judge live on the panel, not in stills. Do NOT start until the user asks;
 usage is at the weekly cap (2026-09-19). Keepers: reference/shots/panel/2026-09-19-hue2b-boundary-*.
+AJ, user markup: reference/shots/photos/aj-reflection-radius-markup.jpg (phone photo of the panel,
+blue film over a magenta/orange seam at the bottom). Today only the droplets within roughly one
+droplet-diameter of the seam carry magenta in their rims; the user drew two red lines, one just
+above the seam and one about a third of the screen height up, and wants the seam's colour to
+reach droplets up to the FAR line, fading with distance. So the sample radius is a fraction of
+screen height (order 0.3 at full strength), not a few pixels; falloff smooth so the near ones stay
+strongest.

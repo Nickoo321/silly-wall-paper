@@ -379,3 +379,43 @@ Do (executor A, camera rig, after Z and the lid):
   executor's own crop shows the corner mass edge still too sharp at the shipped keys.
 - style=fluid untouched (post pass not entered, md5 must hold).
 - Verify: corner crop of a mass edge, shipped keys vs new, seed 1234, t=60.
+
+## AB. Bubble crust ON the masses (2026-09-18, user's lava-lamp photos)
+
+Refs: reference/shots/photos/lavalamp-ref-1..7.jpg (a real lava lamp, warm-lit from below).
+User: "Can we get more of this going on. Real life model. Not as extreme, but along those lines."
+
+What the photos show, and what we do not:
+- The BIG wax mass carries a dense crust of small bubbles, inside it and on its surface; the
+  open liquid around it is nearly clean. Ours is the inverse: droplets live on the open film
+  and the dye masses are empty black.
+- Every bubble is a tiny lens: bright lamp rim on the lamp side, darker core, a refracted
+  copy of the glow behind it; sizes span two decades and the tiny ones cluster into patches
+  and chains (refs 1-3), the big ones sit alone (refs 4-5, 7).
+- The mass is TRANSLUCENT: the lamp glows through it darker and warmer, its edge is a
+  refracting boundary with a bright rim (ref 5 top edge, ref 7), never a flat black cut-out.
+  We already have oil_transparency (held chroma) and the droplet lens shading (brief X): the
+  missing part is WHERE the droplets are and the crust density.
+
+User clarification: "it can be inside and outside" -- this is NOT a swap. Keep today's film
+population and ADD the crust on the masses; the bias only shifts the balance, it never empties
+the film.
+
+Do (SIM executor, brief S/Y/U9 lineage, [liquid_acid] keys, all with sliders, all default =
+today):
+- `droplet_mass_bias` (0..1, ship ~0.6): the droplet population prefers the dye masses. On
+  spawn, sample the dye field: with probability bias the droplet is placed where dye > 0.5
+  (the mass) and it is ADVECTED WITH the mass (it rides the blob, it does not race across it);
+  off-mass droplets keep today's behaviour. Under conserve_mass, respawn follows the same rule.
+- `droplet_crust_density` (1..4, ship ~2.5): density multiplier inside masses relative to the
+  film, so a mass reads as crusted while the film thins out ("not as extreme": ship well under
+  the photos).
+- `droplet_crust_r` (ship ~0.6): crust droplets are small (r_max scaled by this) and clump
+  (reuse the coalescence attract with a higher merge threshold so they touch but do not merge).
+- Rendering: crust droplets over a mass use the lens shading with the LAMP side bright (rig
+  lamp direction, rg0) and the refracted glow of the mass behind (today's "pink dots in the
+  black mass" but with a rim, not a flat dot); the mass edge gets a thin bright refracted rim
+  from the lamp side (key `mass_rim`, ship subtle). Peak-channel thresholds.
+- Everything moves with the rig as usual; style=fluid untouched (md5 must hold).
+- Verify: one 1440p A/B at seed 1234 t=60 with a crop of a mass, plus a droplet count
+  in-mass vs on-film.

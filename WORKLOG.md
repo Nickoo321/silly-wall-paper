@@ -1539,3 +1539,66 @@ Shipped `shimmer`/`shimmer_px` 0.35 @ 0.8 px vs off: whole-frame MAD 0.11, invis
 1 @ 6 px MAD 1.84 with rim fringing -- verdict deferred to the live feature tour (brief AI); sheet
 `build2/shots/live/shimmer-ab-sheet.png`; first attempt used the stale `build2/FluidWallpaper.exe`
 and was redone.
+
+## 2026-09-19 -- AE-b: the hue pair rotates for combos, the contrast hue wobbles; merge onto main (Fable, f840685..09fc257)
+
+Brief AE-b (user, right after the hue2 panel keeper: "oh my", "its beautiful" -- "can't the global
+hue just rotate to cause combos, while the contrast colour wiggles around like 170-190 degrees
+opposite the primary?"), brief written to
+`reference/briefs/NEXT-rings-grain-aberration-refraction.md`.
+
+- **Preset parity (`f840685`).** `film_hue2`/`_amt`/`_scale`/`_drift`/`_decay`, `film_hue3`/`_amt`,
+  `crust_hue_mix` had shipped in `acid-rise-12.ini` only (brief AE); added at their defaults (all
+  0 amount) to the other 33 acid configs/presets (`reference/configs/acid-rise-{2hue,8020,rotate}.ini`,
+  `reference/presets/Liquid Acid*.ini`) so every acid look carries the same keys, none turned on.
+- **CONFIRMED, no change needed: `film_hue2` is already relative.** `hue_rotate_period` (existing
+  key) rotates the whole oil family on the CPU (`effOil`/`UploadAcidConstants`) into
+  `laOil`/`oilBase`; the shader shifts `oilC` by `film_hue2` afterwards, so the primary and its
+  contrast rotate as a PAIR and the combo drifts round the wheel. Neither the rotation nor the
+  hue2 shift touches the ink ramp, so the masses stay black through every hue; crust droplets are
+  drawn from the oil colour, so they rotate with the pair.
+- **`film_hue2_wobble` (deg, default 0) / `film_hue2_wobble_period` (s, default 300) (`fed09f9`).**
+  The contrast hue is no longer nailed to one angle: two sines whose periods are in the golden
+  ratio (never repeats exactly) plus the rig's readjustment phase, so it re-aims the same moment
+  the lamp/lid/focus/hue2-patches do. Sliders with help text in `src/settings.cpp`, same
+  `[liquid_acid]` section/key names.
+- **acid-rise-12.ini: `film_hue2` 180 / `film_hue2_wobble` 10 / `film_hue2_wobble_period` 300 /
+  `hue_rotate_period` 3600.** The pair lives in 170..190 as asked. `hue_rotate_period` is 3600,
+  NOT the 10-20 min the brief suggested: `hue_sweep_period` 630 is already a global hue motion
+  (eight curated families cross-faded in HSV, ~0.57 deg/s); a 900 s rotation adds another
+  0.40 deg/s on top and the two together ran the frame through most of the wheel inside three
+  minutes on the 60/240/420 strip -- it read as a rainbow, not a combo. At 3600 s the rotation
+  adds about 17%: the eight sweep families never land on the same combo twice, nothing looks
+  sped up. The sweep was NOT disabled in its favour: `sweep_ink_1..8` are all mono grey, while the
+  base `ink_stop_*` fallback carries a teal and an orange, so turning the sweep off would have
+  coloured the "black" masses and broken the one thing AE guarantees.
+- **Patch band narrowed to `smoothstep(0.56, 0.68)`.** `k2` sweeps the hue continuously from 0 to
+  `film_hue2`, so a 180 deg contrast passes through every intermediate hue on the way; at the old
+  band (0.50..0.74) that put a full rainbow across a quarter of the frame. It didn't show at the
+  old -140 (shorter arc); going to 180 as asked exposed it. Narrowed, the rainbow is the thin rim
+  the reference actually shows at a patch edge.
+- **hole_max trial reverted.** A `hole_max` 0.130 -> 0.150 step (bigger rare masses, same
+  count/share) was tried and measured -- big masses 27.6% of frame before, 25.7% after, i.e. it
+  went slightly DOWN -- but the sim is chaotic over 60 s and a single frame can't resolve a change
+  that small. The user's latest word was "it's fine", so the mass keys stayed at baseline; a real
+  answer needs a multi-frame area average, not a one-shot judgement call.
+- Verified: style=fluid parity md5 `10E36EBF1A74EDFE609065D757300054` on `we-look-live.ini`, 60 s,
+  2560x1440, seed 1234, `--hdr on` -- held on every build here. Strip
+  `build2/shots/live/hue2b-strip.png` (t = 60/240/420, 640x360): magenta+green, blue+orange,
+  green+magenta -- a clean complementary pair each time, thin rim, combo changed. The strip was
+  rendered with the `hole_max` 0.150 trial still in the ini (mass size only, not the colour result
+  it's evidence for); the shipped value is baseline 0.130.
+- **Merge (`09fc257`, "Merge branch 'hue2b'").** `hue2b` merged onto `main`.
+
+## 2026-09-19 -- Preset parity: film_hue2_wobble/_wobble_period at defaults into the other 33 acid files (Fable rote)
+
+`09fc257` shipped `film_hue2_wobble`/`film_hue2_wobble_period` tuned (10/300) in `acid-rise-12.ini`
+only. Added both keys at their DEFAULTS (0 / 300, confirmed against `src/fluid.h`) to the same 33
+files that got the base hue2 keys in `f840685` (`reference/configs/acid-rise-{2hue,8020,rotate}.ini`,
+`reference/presets/Liquid Acid*.ini`), right after `film_hue2_decay`, none of them turned on. No
+comment lines were added: the actual `acid-rise-12.ini` diff (`fed09f9`) shipped the wobble keys
+bare, with no new comment block of its own, so none was invented here for the other 33. Each file
+gained exactly two lines, zero deletions; each file's own line endings (CRLF or LF -- the 33 files
+are a mix) and no-BOM were preserved, verified with `git diff --check` plus a byte-level scan.
+`src/settings.cpp` already carries both sliders with help text under the same `[liquid_acid]`
+section/key names -- confirmed, no change needed there.

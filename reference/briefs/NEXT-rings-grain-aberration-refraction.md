@@ -397,6 +397,10 @@ What the photos show, and what we do not:
   We already have oil_transparency (held chroma) and the droplet lens shading (brief X): the
   missing part is WHERE the droplets are and the crust density.
 
+User clarification: "it can be inside and outside" -- this is NOT a swap. Keep today's film
+population and ADD the crust on the masses; the bias only shifts the balance, it never empties
+the film.
+
 Do (SIM executor, brief S/Y/U9 lineage, [liquid_acid] keys, all with sliders, all default =
 today):
 - `droplet_mass_bias` (0..1, ship ~0.6): the droplet population prefers the dye masses. On

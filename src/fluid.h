@@ -395,6 +395,24 @@ struct LiquidAcidConfig {
     //                         radius and the wobble scales with it.
     //   droplet_ring_big_frac share of NEW rings that are big. Keep it small:
     //                         a couple visible at any moment is the point.
+    // --- RACING MICRO-BUBBLES (brief Y, user 2026-09-18 19:50) -----------
+    // "I just saw racing small bubbles -- add more of those, like in water the
+    // uber small bubbles that go up: still slowish but considerably faster
+    // than the others." A class of its own, not a tail of depth_rise: a share
+    // of the SMALLEST trapped droplets climb droplet_racer_speed times as fast
+    // as an ordinary one and wobble sideways on the way up, the way a real
+    // micro-bubble spirals. They are born off-frame below the bottom edge
+    // (conserve_mass) and wrap, so one is never seen to appear mid-climb.
+    //   droplet_racer_frac    0 = today. Share of qualifying droplets.
+    //   droplet_racer_speed   x an ordinary droplet's NET climb.
+    //   droplet_racer_wobble  lateral zigzag, as a fraction of that climb.
+    //   droplet_racer_r_max   only droplets at or below this radius qualify.
+    //                         0 = twice droplet_r_min.
+    float dropletRacerFrac  = 0.0f;  // 0..1            droplet_racer_frac
+    float dropletRacerSpeed = 2.5f;  // x                 droplet_racer_speed
+    float dropletRacerWobble= 0.5f;  // 0..2             droplet_racer_wobble
+    float dropletRacerRMax  = 0.0f;  // uv-y, 0 = 2*r_min droplet_racer_r_max
+
     float dropletRingRMul   = 1.0f;  // 1..6              droplet_ring_r_mul
     float dropletRingBigFrac= 0.0f;  // 0..1           droplet_ring_big_frac
 
@@ -1468,6 +1486,8 @@ private:
                          // never moves the population. Drives the circle of
                          // confusion and the depth_rise speed bonus.
         int   touch;     // ring neighbours in CONTACT last frame (raft size cap)
+        int   racer;     // 1 = a racing micro-bubble (droplet_racer_frac);
+                         // hashed at birth from the position, fixed for life.
         float tauR;      // seconds for r to relax toward rt. 0 = the shared
                          // 0.34 s default; set per droplet by the birth and
                          // death sites when conserve_mass is on.

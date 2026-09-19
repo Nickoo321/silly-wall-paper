@@ -2666,7 +2666,8 @@ void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
     for (size_t i = 0; i < m_acidDrops.size(); i++) {
         const AcidDrop& d = m_acidDrops[i];
         fprintf(f, "drop,%d,%.6f,%.6f,%.6f,%.4f,%.6f,%.6f,%d\n",
-                (int)i, d.x, d.y, d.r, d.gate, d.vx, d.vy, d.kind * 10 + d.ring);
+                (int)i, d.x, d.y, d.r, d.gate, d.vx, d.vy,
+                d.kind * 100 + d.ring * 10 + d.racer);
     }
     for (int y = 0; y < kVelH; y++)
         for (int x = 0; x < kVelW; x++)
@@ -3071,6 +3072,18 @@ void FluidRenderer::StepAcidDroplets(float dt) {
     // ring breaks that on purpose and buys the invariant back by being
     // registered in every cell its support covers (see buildGrid's `spread`).
     const float ringMul  = fminf(fmaxf(a.dropletRingRMul, 1.0f), 6.0f);
+    // ---- RACING MICRO-BUBBLES (brief Y) ----------------------------------
+    // An ordinary trapped droplet rides the oil and lags it by droplet_rise,
+    // so its NET climb is riseSpeed * (1 - droplet_rise). A racer's bonus is
+    // expressed against exactly that, which is what makes droplet_racer_speed
+    // read as "x an ordinary droplet" rather than as an opaque uv/s.
+    const float racerFrac  = fminf(fmaxf(a.dropletRacerFrac, 0.0f), 1.0f);
+    const float racerBase  = a.riseSpeed * fmaxf(1.0f - a.dropletRise, 0.1f);
+    const float racerMul   = fminf(fmaxf(a.dropletRacerSpeed, 1.0f), 8.0f);
+    const float racerWob   = racerBase * fminf(fmaxf(a.dropletRacerWobble, 0.0f), 2.0f);
+    const float racerRMax  = (a.dropletRacerRMax > 1e-6f) ? a.dropletRacerRMax
+                                                          : rMin * 2.0f;
+    const float tNow = m_time;
     const float thresh = a.threshold;
     // ONE relaxation time for birth, coalescence and dissolution: nothing in
     // this sim changes size or membership discontinuously.
@@ -3205,6 +3218,43 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                     if (sdf < out.rt * 0.30f) continue;
                 }
             }
+            // ---- RACING MICRO-BUBBLE ------------------------------------
+            // The flag comes from the position hash, like ring/seed/depth, so
+            // switching droplet_racer_frac on does not move a single droplet.
+            // Only the SMALLEST trapped droplets qualify, and never a ring: a
+            // racer is a micro-bubble, not a lens.
+            if (racerFrac > 1e-6f && kind == 0 && !out.ring
+                && out.rt <= racerRMax
+                && hash01(x, y, 0x7F4A7C15u) < racerFrac) {
+                out.racer = 1;
+                // "never appearing in view": a racer crosses the frame in
+                // well under a droplet_life, so if it were nucleated mid-frame
+                // like everything else the user would watch it swell into
+                // existence and then sprint. Under conserve_mass it is born
+                // OFF-FRAME, just below the bottom edge, and climbs in -- the
+                // same door its wrapped siblings come back through.
+                if (cons) {
+                    const float ny = 1.02f + 0.06f * hash01(x, y, 0x9E3779B1u);
+                    // Sweep ACROSS the bottom band for a spot that is inside
+                    // the oil rather than giving up on the drawn x: only part
+                    // of that band is under a mass at any moment, and failing
+                    // back into the outer try loop cost most racers their
+                    // birth (measured: 4 alive on average instead of dozens).
+                    // The sweep is a fixed pattern, not a draw, so the sim's
+                    // random stream is still untouched.
+                    float nx = x; bool ok = false;
+                    for (int k2 = 0; k2 < 12 && !ok; k2++) {
+                        nx = x + (float)k2 * (1.0f / 12.0f);
+                        if (nx >= 1.0f) nx -= 1.0f;
+                        float f4, gx4, gy4, o3, o4;
+                        AcidFieldAt(nx, ny, aspect, f4, gx4, gy4, o3, o4);
+                        const float gl4 = sqrtf(gx4 * gx4 + gy4 * gy4) + 1e-6f;
+                        ok = ((f4 - thresh) / gl4 > 0.004f);
+                    }
+                    if (!ok) continue;                 // no oil under the edge
+                    out.x = nx; out.y = ny;
+                }
+            }
             return true;
         }
         return false;
@@ -3281,6 +3331,28 @@ void FluidRenderer::StepAcidDroplets(float dt) {
         // untouched and the rise looks exactly as fast as it did.
         if (a.depthRise > 1e-5f && a.riseSpeed > 1e-6f)
             ty -= a.riseSpeed * a.depthRise * (d.depth - 0.5f);
+        // ---- racing micro-bubbles -----------------------------------------
+        // "still slowish but considerably faster than the others". A flat
+        // bonus on the climb (so the ratio to an ordinary droplet is exactly
+        // droplet_racer_speed) plus a lateral zigzag on two incommensurate
+        // slow sines keyed to the droplet's OWN seed and depth -- no two
+        // racers wobble in step, and each one's path is a lazy spiral rather
+        // than a straight line, which is what a micro-bubble in water does.
+        // depth_rise above is untouched: a racer still belongs to its layer.
+        if (d.racer && racerMul > 1.0f) {
+            // Its OWN climb, scaled. A flat bonus in uv/s does not read as
+            // "x the others": rise_parallax already spreads the population's
+            // climb over 4x by size, and a flat term measured 4.4x on the
+            // median instead of the 2.5 the key asked for. Multiplying the
+            // upward part of the target leaves a racer in slow far oil slower
+            // than one in fast near oil, exactly as its neighbours are.
+            ty -= fmaxf(-ty, 0.0f) * (racerMul - 1.0f);
+            if (racerWob > 1e-9f) {
+                const float TAU = 6.2831853f;
+                tx += racerWob * (0.9f * sinf(0.90f * tNow + d.seed * TAU)
+                                + 0.5f * sinf(1.43f * tNow + d.depth * TAU));
+            }
+        }
         // slow Brownian jitter -- damped by oil_viscosity: a droplet suspended
         // in a thick liquid does not twitch.
         tx += (rf() * 2.0f - 1.0f) * a.dropletJitter * dvJit;

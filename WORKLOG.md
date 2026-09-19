@@ -1352,3 +1352,60 @@ Rote docs pass, no code changes; recap of executor A's item AA fix (previously d
 commits past `dbc55e0`, `git diff --stat dbc55e0 dc2febd -- src` empty):** `we-look-live.ini`
 60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
 expected.
+
+## 2026-09-18 -- V3 motion: the rig drifts always, re-aims all at once (Sonnet rote docs pass, 53217e9..d364e9e)
+
+Rote docs pass, no code changes; recap of executor A's V3 motion keys and the merge that landed
+them on `camera-dof` ahead of the transparent lid.
+
+- **V3 motion, the rig drifts always and re-aims all at once (`53217e9`).** Five `[liquid_acid]`
+  keys following the user's rule that nothing sits at a fixed OLED position and that motion is
+  either a slight constant drift or an occasional all-at-once readjustment, never one effect
+  moving alone: `shimmer`/`shimmer_px` (fine refractive wobble above the lamp, advected by the
+  sim's own low-res velocity texture `t3` bound to the post pass, with the velocity term clamped
+  so a burst shoves the heat with it instead of turning into flicker), `vignette_wander` (the
+  vignette centre follows the lens via `poP1.xy` instead of sitting at a constant 0.5,0.5),
+  `pixel_shift_px` (the whole finished frame orbits on two incommensurate ~7 and ~11 minute
+  periods, applied to the coordinate the frame is READ from so defocus/aberration/halation/haze
+  travel with the picture while grain and dither stay in screen space), and `rig_readjust` (how
+  far the lamp and lens centre re-aim, riding the same damped spring as the tilt and focus, so
+  the rig arrives together). `--shot` now prints a `[rig]` line (lamp, lens, tilt, focus, orbit);
+  a rig table across t=30..120 on `acid-rise-12` showed the lamp/lens/orbit moving at every
+  sample while the tilt/focus moved exactly once, with the two readjustments' worth of movement
+  confirming the whole body moves together, not one effect alone. Ship: shimmer 0.35 /
+  shimmer_px 1.2 / vignette_wander 0.6 / pixel_shift_px 3 / rig_readjust 0.5 in every rising
+  config and preset; the "(NO lens effects)" twin keeps all five off. Lives in `rg3` of the rig
+  block, leaving `rg4` free for the transparent lid on its own branch.
+- **Merge (`d364e9e`).** `camera-dof` (V3 motion) merged; `poP1` repacked as vignette centre xy,
+  grain fps in `.z`, vignette weight in `.w`.
+
+## 2026-09-19 -- V2: the transparent lid lands; merge onto main (Sonnet rote docs pass, 8afca1d..01fa483)
+
+Rote docs pass, no code changes; recap of executor B's transparent-lid keys (landed as a merge
+commit on the `lid` branch) and the merge of `lid` onto `main`.
+
+- **V2: the transparent lid (`8afca1d`, merge of `1269e93` + `d364e9e`).** Nine `[post]` keys,
+  all default 0, simulating the transparent cover over the dish rather than any visible
+  instrument or rim (negative constraint, brief T note 3 -- no mask, no border, full-bleed edge
+  to edge): `lid`, `lid_ghost`, `lid_ghost_spread`, `lid_rings`, `lid_sheen`, `lid_sheen_px`,
+  `lid_glint`, `lid_iris`, `lid_refract_px`. Ghosts, rings, sheen, iris and glint are all
+  positioned from the rig -- the drifting lamp, the lens centre, and a lid wander of its own on
+  four incommensurate 3-12 minute periods -- and are shoved to a new resting offset on the same
+  damped focus spring at every readjustment, so nothing sits at a fixed screen position and
+  nothing moves alone. All twelve numbers (position, rotation, five amplitudes, refract px,
+  sheen px, ghost spread) are packed losslessly into the single `rg4` rig slot, since the
+  graphics root signature was already at its 64-DWORD cap. Ship: subtle 0.45 / 0.24 / 1.0 / 0.25
+  / 0.16 / 400 / 0.15 / 0.22 / 2.5 in all four `acid-rise-*.ini` and the base rising preset;
+  presets "(lid subtle)" / "(lid medium)" / "(lid strong)"; every key explicitly 0 in the "(NO
+  lens effects)" twin. The sheen is the term that lifts the OLED black -- a big dye mass's mean
+  went 22 -> 34 of 255 at the subtle setting -- and `lid_sheen` is the single knob to reach for if
+  the black needs to come back down (lowering the ghosts barely moved it).
+- **Merge (`01fa483`, "Merge branch 'lid'").** `lid` merged onto `main`; needed a `kPostSrc`
+  literal split, since MSVC caps a single string literal at 16380 bytes and the combined
+  V3-motion + lid post-pass source landed at 16762. Verified at commit time: style=fluid parity
+  md5 `10E36EBF1A74EDFE609065D757300054` on `we-look-live.ini`, seed 1234, 60 s, 2560x1440,
+  `--hdr on` -- unaffected, so the post pass is still never entered for the fluid look.
+
+**Regression (this session, Sonnet rote, exe `C:\Users\abg77\fw-wt\build2\FluidWallpaper.exe`,
+confirmed built from `01fa483`):** `we-look-live.ini` 60 s 2560x1440 seed 1234 `--hdr on` --
+**PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches expected.

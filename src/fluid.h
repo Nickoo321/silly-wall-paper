@@ -632,6 +632,17 @@ struct LiquidAcidConfig {
     float filmHue3      = 0.0f;   // degrees            film_hue3
     float filmHue3Amt   = 0.0f;   // 0..1           film_hue3_amt
     float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
+    //   film_hue2_wobble        the contrast hue is not NAILED to an angle:
+    //                           it wanders a few degrees either side of it,
+    //                           so a 180 deg pair lives in 170..190 and the
+    //                           combo keeps changing even when the global
+    //                           rotation is off. Two incommensurate sines, so
+    //                           it never repeats exactly, plus the rig's
+    //                           readjustment phase, so it re-aims all at once
+    //                           with the lamp and the focus.
+    //   film_hue2_wobble_period seconds of the slower of those two sines
+    float filmHue2Wobble  = 0.0f;   // degrees      film_hue2_wobble
+    float filmHue2WobbleP = 300.0f; // s     film_hue2_wobble_period
 
     // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
     // The user, on the halation frame: "the bottom right blob isn't getting

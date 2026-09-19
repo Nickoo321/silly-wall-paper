@@ -580,6 +580,10 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         // --- conservation of mass (brief S) ---
         a.weather            = getF(S, L"weather",          a.weather);
         a.weatherPeriodS     = getF(S, L"weather_period_s", a.weatherPeriodS);
+        a.dropletMassBias    = getF(S, L"droplet_mass_bias",     a.dropletMassBias);
+        a.dropletCrustDens   = getF(S, L"droplet_crust_density", a.dropletCrustDens);
+        a.dropletCrustR      = getF(S, L"droplet_crust_r",       a.dropletCrustR);
+        a.massRim            = getF(S, L"mass_rim",              a.massRim);
         a.dropletRacerFrac   = getF(S, L"droplet_racer_frac",   a.dropletRacerFrac);
         a.dropletRacerSpeed  = getF(S, L"droplet_racer_speed",  a.dropletRacerSpeed);
         a.dropletRacerWobble = getF(S, L"droplet_racer_wobble", a.dropletRacerWobble);
@@ -1761,6 +1765,10 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
         putF(S, L"weather", a.weather, 3);
         putF(S, L"weather_period_s", a.weatherPeriodS, 1);
+        putF(S, L"droplet_mass_bias", a.dropletMassBias, 3);
+        putF(S, L"droplet_crust_density", a.dropletCrustDens, 3);
+        putF(S, L"droplet_crust_r", a.dropletCrustR, 3);
+        putF(S, L"mass_rim", a.massRim, 3);
         putF(S, L"droplet_racer_frac", a.dropletRacerFrac, 3);
         putF(S, L"droplet_racer_speed", a.dropletRacerSpeed, 3);
         putF(S, L"droplet_racer_wobble", a.dropletRacerWobble, 3);

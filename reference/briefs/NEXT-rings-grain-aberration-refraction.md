@@ -446,3 +446,13 @@ negative blobs take a deep translucent colour (a 5th palette shade or a hue offs
 key dye_hue / dye_sat / dye_lum, defaults = today's black), lit through by the lamp like the
 lava-lamp wax (refs lavalamp-ref-4/5: amber wax over orange), with the crust and mass_rim reading
 against it. Palette per preset, gradable by sliders. style=fluid untouched.
+
+AH. **Film light leaks / stock artefacts, driven by the oil.** Ref film-lightleak-ref-1.jpg
+(35 mm scan: warm orange/red leak bleeding in from one edge, a vertical soft streak, cyan/green
+fringe on the opposite edge, fine white dust specks and hairs). The user: "this effect doesn't seem
+like it's in the sim yet. maybe the oil movement should have it happen so it's not just sitting
+there." Read as: NOT a static overlay. Tie the leak to the sim so it is an event, e.g. a leak that
+swells when a large mass or a coalescence passes near an edge, a streak that follows a racer,
+dust that appears for a few frames then goes. Slow drift plus occasional all-at-once readjustment
+(OLED rule). Keys: leak amount / hue / edge, streak, dust density, all default subtle, gradable.
+style=fluid untouched. Waiting on one more user message before scoping.

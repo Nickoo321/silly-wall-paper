@@ -1231,3 +1231,61 @@ executor day above), plus this session's own md5 regression re-check.
 **Regression (this session, Sonnet rote, worktree exe built from `876c72a`):** `we-look-live.ini`
 60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
 expected.
+
+## 2026-09-18 -- bubble weather, blob-count residue, brief AA depth (Sonnet rote docs pass, b243780..99f933c)
+
+Rote docs pass, no code changes; recap of executor B's two commits on the `conservation` branch
+(U9 bubble weather, brief S residue), the merge that landed them on `main`, and a diagnosis-only
+brief AA commit, plus this session's own md5 regression re-check.
+
+- **U9: bubble weather (`0a87ca2`).** The droplet population has exactly one steady state and
+  settles into it -- after a couple of minutes the frame's density and its ring/solid mix never
+  change again. `[liquid_acid] weather` (0 = today) and `weather_period_s` give it seasons instead:
+  a spell of rings and big hollow bubbles, then of solids, a sparse spell, a crowded one. One smooth
+  signal per channel walks between per-phase targets hashed from the phase index, holding each
+  target for a hashed 25-75% of its length before easing across the rest, so similar consecutive
+  targets read as one long season and the phase grid never shows; it is a pure function of
+  wallpaper time, so nothing needs to be carried across a pause, a resume, or a `--shot` replay.
+  The density channel scales the droplet target by +/-0.45*weather, gated on `conserve_mass` --
+  without that gate a moving target reseeds the whole population every frame instead of growing and
+  shrinking it; with it, the existing dissolve/grow machinery does the work. The ring channel scales
+  `droplet_ring_frac` by +/-0.90*weather and `droplet_ring_big_frac` by +/-1.30*weather -- the share
+  alone barely read (a ring must clear a band floor 3.5x the solid one to resolve), so the BIG hollow
+  bubbles are what a spell of rings actually looks like. Shipped weather 0.5 / weather_period_s 300
+  in all 24 rising configs and presets, NO-lens twin included. Verified (25 captures 15 s apart over
+  6 min at 960x540 seed 1234, weather_period_s cut to 60 so seven phases fit in one render): visible
+  droplets 705..859 (19% swing) wandering smoothly, largest step between two samples 11% of the
+  mean; visible rings 1..10; big hollow bubbles 0..3.
+- **Brief S residue (`7fb7058`).** Two sites the conservation pass left behind, both under
+  `conserve_mass` and both exactly today's behaviour with the key off. (1) `blob_count`: moving the
+  slider called `SeedAcidBlobs()`, replacing the whole population in one frame. Now the population
+  WALKS -- `AcidBlob` gains `rTarget`, `baseR` relaxes toward it (spawn_grow_s up, dissolve_s down),
+  and `AdjustAcidBlobCount` marks the surplus to shrink away (preferring off-frame blobs, then the
+  smallest) and grows a shortfall in from under the bottom edge through the same door `rise_respawn`
+  uses; a blob is erased only once it is under a fifth of a pixel of Wyvill reach. (2) The rise
+  respawn used to redraw `baseR`, so a blob left the top at one size and came back under the bottom
+  at another -- mass appearing/vanishing off-frame, the one thing this key forbids. It now keeps its
+  radius; fresh x and curl phases are what stop the column reading as a loop. The real bug: a blob on
+  its way out kept its way out, but restoring its target on a respawn handed a *different*, already-
+  retiring blob its life back, so Adjust retired somebody else instead and the population churned --
+  total blob area bled from 2.71 to 0.90 and kept falling instead of settling. Verified: `blob_count`
+  96 -> 56 applied live at t=60 via `--shot-preset`, 80 captures 0.5 s apart at 960x540 seed 1234.
+  Dark-pixel change at the swap frame vs. that run's own ordinary frame-to-frame motion: conserve_mass
+  0 hit 138216 (median 59396, p99 111420, a 2.3x jump); conserve_mass 1 hit 36911 (median 27614,
+  p99 36417, right at the p99 -- no jump). Total blob area walks 2.713 -> 0.889 over ~20 s and then
+  holds. Sim-state parity at conserve_mass 0 after 60 s of `acid-rise-12`: md5
+  `5A2C5901A43ADB7C6DD2CA5A8BCCBCDE`, unchanged.
+- **Merge (`99f933c`).** `conservation` (bubble weather + S residue) merged onto `main`; both sides
+  touched `fluid.cpp`/`fluid.h` in the same neighbourhood (the accent-by-size block from earlier
+  today and the new `rTarget` block), so the merge kept both blocks rather than letting either side
+  clobber the other.
+- **Brief AA (`b243780`, doc-only).** Dye masses currently sit at the focus depth by construction --
+  the depth accumulator's prior is 0.5, which is exactly `camera_focus`, so nothing has ever pushed a
+  mass off the focal plane on its own. A slider test at curvature 0.9 / cap 14 softened the corner
+  droplets but barely moved the mass edge, confirming the depth prior -- not the curvature -- is the
+  lever that matters. Fix queued for later: a rig-driven `dye_depth` key assigned at the point the
+  depth accumulator is seeded, rather than tuning curvature/cap further. No code yet.
+
+**Regression (this session, Sonnet rote, worktree exe built from `99f933c`):** `we-look-live.ini`
+60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
+expected.

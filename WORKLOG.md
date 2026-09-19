@@ -1320,3 +1320,35 @@ this session's own md5 regression re-check.
 **Regression (this session, Sonnet rote, worktree exe built from `b4173dd`):** `we-look-live.ini`
 60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
 expected.
+
+## 2026-09-18 -- item AA dye depth lands; film grain frame rate (Sonnet rote docs pass, 5c8deee..dbc55e0)
+
+Rote docs pass, no code changes; recap of executor A's item AA fix (previously diagnosed only in
+`b243780`), the merge that landed it on `main`, and executor Fable's film-grain frame-rate key.
+
+- **AA: the dye masses get a depth of their own (`5c8deee`).** The display pass's per-pixel depth
+  accumulator was primed with the constant 0.5 -- exactly `camera_focus` -- so every pixel with no
+  droplet in it, i.e. every big dye mass, sat ON the focus plane by definition; only the focus
+  surface's own curvature and tilt could ever defocus one, never the mass's own position, matching
+  the `b243780` diagnosis. Three new `[liquid_acid]` keys give the dye a layer of its own:
+  `dye_depth` (0.5 default and shipped, the old constant to the bit), `dye_depth_tilt` (0
+  default, 0.28 shipped) -- a slope along the direction from the lens centre to the lamp, chosen so
+  the dye slab is NOT parallel to the focus surface and the two cross on a travelling line rather
+  than agreeing over a whole region -- and `dye_depth_w` (0.25), the weight the dye carries where
+  droplets overlap it. `dof_max_px` goes 5 -> 9 in the rising configs alongside it, since the
+  corners were already at the old clamp and had nowhere to show the extra depth. Measured on the
+  corner mass edge: peak gradient after denoise 16.3 -> 13.5 (lower = softer) -- edge-energy metrics
+  were dropped in favour of peak-gradient because grain was dominating them. One still is one rig
+  pose; the number moves with wherever the rig happened to be pointed when the still was taken.
+- **Merge (`56c98c5`).** `camera-dof` merged onto `main`, bringing item AA's fix together with
+  brief Z and the bubble weather / brief S residue work already recapped above.
+- **Film grain frame rate (`dbc55e0`).** At 240 Hz the old hardcoded 144 Hz grain/film-noise
+  pattern changed every 1.67 refreshes, an uneven fizz. The new `film_grain_fps` key (default 24;
+  both 24 and 30 divide 240 exactly) paces the pattern to a whole number of refreshes per change, as
+  on real film stock -- slider range 1..240. `poP1.y` carries it in the display pass, `pp6.w` in
+  the post pass. `style=fluid`: grain 0, branches not entered, md5 unaffected.
+
+**Regression (this session, Sonnet rote, worktree exe built from `dc2febd` -- two brief-only
+commits past `dbc55e0`, `git diff --stat dbc55e0 dc2febd -- src` empty):** `we-look-live.ini`
+60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
+expected.

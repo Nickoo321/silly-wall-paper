@@ -415,6 +415,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.halation       = getF(S, L"halation", po.halation);
         po.halationPx     = getF(S, L"halation_px", po.halationPx);
         po.halationWarmth = getF(S, L"halation_warmth", po.halationWarmth);
+        po.shimmer        = getF(S, L"shimmer", po.shimmer);
+        po.shimmerPx      = getF(S, L"shimmer_px", po.shimmerPx);
+        po.vignetteWander = getF(S, L"vignette_wander", po.vignetteWander);
+        po.pixelShiftPx   = getF(S, L"pixel_shift_px", po.pixelShiftPx);
+        po.rigReadjust    = getF(S, L"rig_readjust", po.rigReadjust);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1597,6 +1602,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"halation", po.halation, 3);
         putF(S, L"halation_px", po.halationPx, 1);
         putF(S, L"halation_warmth", po.halationWarmth, 2);
+        putF(S, L"shimmer", po.shimmer, 3);
+        putF(S, L"shimmer_px", po.shimmerPx, 2);
+        putF(S, L"vignette_wander", po.vignetteWander, 2);
+        putF(S, L"pixel_shift_px", po.pixelShiftPx, 2);
+        putF(S, L"rig_readjust", po.rigReadjust, 2);
     }
     {
         const DropConfig& d = c.drops;
@@ -2353,6 +2363,16 @@ static int RunShotMode() {
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));
+        // Where the camera rig is at this instant. Every [post] effect hangs
+        // off these, and all of them are supposed to be moving, so a series of
+        // shots at different t is the only honest test of the motion.
+        {
+            float rg[8];
+            renderer.RigState(rg);
+            ShotLog("[rig] lamp %.4f,%.4f  lens %.4f,%.4f  tilt %+.1fdeg  "
+                    "focus %.4f  shift %+.3f,%+.3f px\n",
+                    rg[0], rg[1], rg[2], rg[3], rg[4], rg[5], rg[6], rg[7]);
+        }
         // DIAGNOSTIC ONLY (brief A): FW_ACID_DUMP=1 writes a CSV of the acid
         // sim's CPU state beside each capture. Off unless the env var is set.
         {

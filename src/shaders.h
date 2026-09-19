@@ -462,7 +462,7 @@ cbuffer MirrorCB : register(b3) {
     // and needs exactly the same two numbers (time, aspect) that mrP0 already
     // carries. Both amounts are 0 by default and the code is branched out.
     float4 poP0;   // x film_grain y grain_size z grain_speed w grain_color
-    float4 poP1;   // x -          y grainFps   z -            w vignette
+    float4 poP1;   // x vignCx(uv) y vignCy(uv) z grainFps    w vignette
 };
 
 // |d| with the corner rounded off over a band of half-width s: equals abs(d)
@@ -2240,7 +2240,11 @@ R"hlsl(
     // never a circle with an edge. This one stays here -- it is a shading of
     // the picture, not a displacement of it, so it needs nothing resampled.
     [branch] if (poP1.w > 0.0005) {
-        float2 d = i.pos.xy * texelSize - 0.5;
+        // ...and its centre WANDERS with the rig's lens (item V3), so the
+        // darkest corner turns over minutes instead of sitting in one corner
+        // of the panel for hours. vignette_wander 0 puts it back at the
+        // middle, which is the constant this line used to subtract.
+        float2 d = i.pos.xy * texelSize - float2(poP1.x, poP1.y);
         float  r2 = dot(d, d) * 2.0;
         C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
     }
@@ -2258,7 +2262,7 @@ R"hlsl(
         // grain changes once per FRAME of the stock, not once per refresh);
         // lower speeds hold a pattern longer, the slow chatter of a big-grain
         // stock.
-        float  tq  = floor(mrP0.w * max(poP1.y, 1.0) * max(poP0.z, 0.0));
+        float  tq  = floor(mrP0.w * max(poP1.z, 1.0) * max(poP0.z, 0.0));
         float2 tj  = frac(tq * float2(0.1031, 0.0973)) * 733.0;
         float  n0  = PostHash21(gc + tj);
         float3 nz  = float3(n0, n0, n0);
@@ -2387,9 +2391,15 @@ cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
     float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
     float4 rg2;   // x aberration y aberrPx(this res) z aberrField  w -
-    float4 rg3, rg4;
+    float4 rg3;   // x shimmer y shimmerPx(this res) z shiftX(uv) w shiftY(uv)
+    float4 rg4;   // reserved for the transparent lid (other branch)
 };
 Texture2D Src : register(t0);
+// The sim's own low-res velocity field, bound only when the thermal shimmer
+// is on. It is what lets a post effect be moved BY THE FLUID instead of by
+// its own clock -- the user's rule that a burst which shoves the oil should
+// shove the heat above it too.
+Texture2D<float4> VelLow : register(t3);
 SamplerState linearClamp : register(s0);
 
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
@@ -2401,12 +2411,21 @@ VSOut VSMain(uint id : SV_VertexID) {
     return o;
 }
 
+// Value noise off the same hash: two smoothed lattice octaves are enough for
+// a heat wobble, and it costs no texture and no table. (item V3)
+float PVNoise(float2 p);
 // same hash as the display pass's PostHash21, so the grain pattern is the one
 // the user already approved
 float PHash21(float2 p) {
     p = frac(p * float2(234.34, 435.345));
     p += dot(p, p + 34.23);
     return frac(p.x * p.y);
+}
+float PVNoise(float2 p) {
+    float2 i0 = floor(p), f = frac(p);
+    float2 u  = f * f * (3.0 - 2.0 * f);
+    return lerp(lerp(PHash21(i0),                 PHash21(i0 + float2(1.0, 0.0)), u.x),
+                lerp(PHash21(i0 + float2(0.0, 1.0)), PHash21(i0 + float2(1.0, 1.0)), u.x), u.y);
 }
 float3 ToSRGB(float3 c) {
     c = saturate(c);
@@ -2497,6 +2516,46 @@ float3 Wide(float2 uv, float2 r) {
 float4 PSMain(VSOut i) : SV_Target {
     const float3 W = float3(0.2126, 0.7152, 0.0722);
     float2 uv = i.uv;
+    // ======================= V3: MOTION ====================================
+    // The user's rule for this whole family: nothing may sit at a fixed screen
+    // position on an OLED, ever. Their motion model is specific -- a SLIGHT,
+    // SLOW drift all the time, plus occasional readjustments where everything
+    // moves at once. Both of these shift the coordinate the finished frame is
+    // READ from, so every effect downstream (defocus, aberration, halation,
+    // haze, bloom) travels with the picture as one piece, while the grain and
+    // the dither stay in screen space -- which is right: the film moves, the
+    // sensor does not.
+    [branch] if (abs(rg3.z) > 1e-9 || abs(rg3.w) > 1e-9) {
+        // OLED PIXEL-SHIFT ORBIT: a couple of px on a many-minute closed path,
+        // stepped by a few thousandths of a pixel per frame. Invisible, and
+        // still moving, which is the whole trick.
+        uv += float2(rg3.z, rg3.w);
+    }
+    [branch] if (rg3.x > 0.0005) {
+        // THERMAL SHIMMER: the air above a lamp. A very fine refractive
+        // wobble, a pixel or two at most, strongest near the lamp and fading
+        // to nothing away from it -- and ADVECTED BY THE SIM, not by its own
+        // clock: the low-res velocity field offsets the noise coordinates, so
+        // a burst that shoves the oil shoves the heat above it as well.
+        float  aspS = pp0.y / max(pp0.x, 1e-9);
+        float2 qs   = float2((uv.x - rg0.x) * aspS, uv.y - rg0.y);
+        float  near = exp(-length(qs) * 1.35);
+        // CLAMPED on purpose: this texture holds the sim's velocity in the
+        // sim's own units, which a burst can drive arbitrarily high, and an
+        // unbounded offset into a noise field is not advection -- it is white
+        // noise that flickers. Bounded, a burst leans the heat and a calm
+        // frame leaves it alone, which is the behaviour that was wanted.
+        float2 vel  = clamp(VelLow.SampleLevel(linearClamp, uv, 0).xy * 0.5, -1.5, 1.5);
+        float  t    = pp2.y;
+        // two octaves, drifting upward off the lamp (heat rises) and carried
+        // sideways by the fluid
+        float2 np   = float2(uv.x * aspS, uv.y) * 11.0
+                    + vel * 1.5 + float2(0.0, -t * 0.09);
+        float  n1   = PVNoise(np);
+        float  n2   = PVNoise(np * 2.17 + 31.7 - float2(0.0, t * 0.05));
+        float2 warp = float2(n1 - 0.5, n2 - 0.5) * (2.0 * rg3.y * rg3.x * near);
+        uv += warp * pp0.xy;
+    }
     float4 c4 = Src.SampleLevel(linearClamp, uv, 0);
     float3 c  = c4.rgb;
     float3 d  = c;

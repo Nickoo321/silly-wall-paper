@@ -488,3 +488,19 @@ through the OLED's own blend), plus leak_hue for the fixed mode, chosen per pres
 lid reflections in AF: lid ghosts stay mono by default (they copy the film, which is already the
 right colour); any tinted ghost is a key, off by default. The presets decide the combo; nothing
 forces it.
+
+AI. **GOAL after AC-AH land: an on-screen feature tour, every feature on/off, on the real panel.**
+User: "after everything for now is implemented, do an on screen display of every feature on off.
+idk how you want to do it. but irl rendering is better." So NOT a headless crop sheet: the live
+exe on the OLED shows each feature toggled off then on, one at a time, so the user judges each
+in HDR at 240 Hz. Proposed shape (decide when we get there): a tray command / CLI flag
+--tour that steps through a list of (key, off value, on value) pairs from the loaded ini, holding
+each state for N seconds, with a small on-screen caption ("halation: OFF" / "halation: ON") drawn
+by the app; sim keeps running between steps so the oil is alive. Order = sim -> per-droplet optics
+-> camera -> film (racers, coalescence, big rings, weather, residue, crust, dye depth, refraction,
+lid ghosts/rings/glint/iris/sheen, DOF, aberration, halation, fog/bloom, shimmer, grain, film
+noise, vignette, hue2, leak). Needs: runtime key set without restart (no ini hot-reload today; the
+settings panel path already applies values live, reuse it), caption rendering, and a pause/step
+hotkey so the user can hold on one. Ask before the swap that starts the tour; the user may be
+gaming. This replaces the queued "review checklist document" as the walk-through vehicle; the
+document stays as the tour's script.

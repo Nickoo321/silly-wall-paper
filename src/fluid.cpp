@@ -930,6 +930,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
                          po.psfPx > 0.01f || po.dither > 0.0005f ||
+                         po.aberration > 0.0005f ||
                          po.halation > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
@@ -1070,6 +1071,13 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[5] = m_rig.tiltAmt;
     rig[6] = m_rig.focus;
     rig[7] = m_rig.movePhase;
+    // The LENS's own chromatic split (item Z). It lives in the rig block
+    // because it is a property of the same lens the rig carries the centre
+    // of: the split is radial about that centre, so the two numbers have to
+    // travel together or the null point drifts away from the axis.
+    rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
+    rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
+    rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
@@ -3997,8 +4005,24 @@ void FluidRenderer::StepCameraRig(float dt) {
         m_rig.lampX += (0.055f * sinf(t * 0.0171f) + 0.030f * sinf(t * 0.0413f + 1.7f)) * kd;
         m_rig.lampY += (0.040f * sinf(t * 0.0233f + 0.6f) + 0.022f * sinf(t * 0.0561f + 2.3f)) * kd;
     }
-    m_rig.axisX   = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
-    m_rig.axisY   = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    // ---- the LENS CENTRE -------------------------------------------------
+    // Where the optical axis meets the dish. It is not the middle of the
+    // screen and it does not stay put: the field curvature, the tilt origin
+    // and (item Z) the null point of the chromatic split all hang off it, and
+    // a null point burnt into one spot of an OLED for hours is exactly what
+    // this whole family of effects exists to avoid. Its own slow sines, in
+    // step with the lamp's idle drift but not in phase with it -- they are
+    // different parts of one rig, not one part copied twice.
+    m_rig.axisX = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
+    m_rig.axisY = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    if (po.lightDrift > 0.0005f) {
+        const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
+        const float t  = m_time;
+        m_rig.axisX += (0.026f * sinf(t * 0.0127f + 2.2f)
+                      + 0.014f * sinf(t * 0.0331f + 5.1f)) * kd;
+        m_rig.axisY += (0.022f * sinf(t * 0.0193f + 0.4f)
+                      + 0.012f * sinf(t * 0.0447f + 3.6f)) * kd;
+    }
     m_rig.tiltAmt = po.focusTilt;
 
     // ---- the focus ring ---------------------------------------------------

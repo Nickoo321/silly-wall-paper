@@ -2209,42 +2209,21 @@ R"hlsl(
     // a lens and a film emulsion sit in front of the picture, so they do not
     // mirror with it. Both amounts default to 0 and neither branch is entered
     // then, so style=fluid is untouched down to the bit unless asked.
-    // Order: aberration first (it is the lens), grain second (it is the film).
-    [branch] if (poP1.x > 0.0005 || poP1.w > 0.0005) {
-        // LATERAL CHROMATIC ABERRATION, per EDGE -- the reference's warm/cool
-        // fringe. A real lens focuses red and blue at slightly different
-        // magnifications, so every hard edge carries a warm fringe on one side
-        // and a cool one on the other; the radial corner split is only what
-        // that looks like averaged over a whole frame. There is nothing to
-        // re-sample here (the oil discs and rims are computed, not stored), so
-        // the two channels are displaced by a first-order expansion of the
-        // composite about this pixel, from the quad's own derivatives -- which
-        // is what a sub-pixel shift IS, and it covers every edge in the frame
-        // rather than only the dye.
-        float3 cdx = ddx(C), cdy = ddy(C);
-        [branch] if (poP1.x > 0.0005) {
-            const float3 W = float3(0.2126, 0.7152, 0.0722);
-            float2 eg = float2(dot(cdx, W), dot(cdy, W));   // the edge normal
-            float  el = length(eg);
-            float2 n  = (el > 1e-6) ? eg / el : float2(0.0, 0.0);
-            // px authored at 1440p, scaled with the frame: this is an optical
-            // effect, so it must be the same FRACTION of the picture at any
-            // resolution. r grows it modestly toward the field edge.
-            float2 d  = i.pos.xy * texelSize - 0.5;
-            float  px = poP1.y * (1.0 / max(texelSize.y, 1e-7)) / 1440.0
-                      * (1.0 + poP1.z * length(d) * 2.0);
-            float2 off = n * (px * poP1.x);
-            float  dR = dot(float2(cdx.r, cdy.r),  off);
-            float  dB = dot(float2(cdx.b, cdy.b), -off);
-            C = max(float3(C.r + dR, C.g, C.b + dB), 0.0);
-        }
-        // A slight fall-off toward the corners: the field stop of a macro
-        // lens, never a circle with an edge.
-        [branch] if (poP1.w > 0.0005) {
-            float2 d = i.pos.xy * texelSize - 0.5;
-            float  r2 = dot(d, d) * 2.0;
-            C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
-        }
+    // (aberration used to live here as a first-order expansion of the
+    // composite about the pixel. It could not work: the offset direction came
+    // from the LUMINANCE gradient, which always points at the brighter side,
+    // so dR was positive and dB negative on BOTH sides of every droplet -- a
+    // symmetric warm outline, never a split, at any slider value. And a 3-px
+    // displacement is not something one derivative can express anyway. It is
+    // now a real resample of the finished frame in kPostSrc, where the pixels
+    // exist to be resampled. See item Z.)
+    // A slight fall-off toward the corners: the field stop of a macro lens,
+    // never a circle with an edge. This one stays here -- it is a shading of
+    // the picture, not a displacement of it, so it needs nothing resampled.
+    [branch] if (poP1.w > 0.0005) {
+        float2 d = i.pos.xy * texelSize - 0.5;
+        float  r2 = dot(d, d) * 2.0;
+        C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -2387,7 +2366,8 @@ cbuffer PostPassCB : register(b0) {
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
     float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
-    float4 rg2, rg3, rg4;
+    float4 rg2;   // x aberration y aberrPx(this res) z aberrField  w -
+    float4 rg3, rg4;
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2545,6 +2525,50 @@ float4 PSMain(VSOut i) : SV_Target {
             wg *= lerp(1.0, 1.0 + 1.5 * step(1e-5, darker), saturate(pp2.w));
         }
         d = lerp(d, g, saturate(wg));
+    }
+    // ---- LATERAL CHROMATIC ABERRATION (item Z) ---------------------------
+    // A real lens focuses red and blue at slightly different MAGNIFICATIONS,
+    // so the three channels land on the sensor at slightly different scales:
+    // red pushed out from the optical axis, blue pulled in, green where it
+    // belongs. On a frame that is a radial split which is nothing at the
+    // centre and a couple of pixels at the corners -- exactly the LAPD sheet's
+    // colour fringing.
+    //
+    // This used to be attempted in the display pass as a first-order expansion
+    // about the pixel, and it could not work: the offset direction came from
+    // the LUMINANCE gradient, which always points at the brighter side, so red
+    // was added and blue subtracted on BOTH sides of every droplet. A
+    // symmetric warm outline, never a split, at any slider value -- which is
+    // why the user could not see it. A lateral split needs the sign to FLIP
+    // across an edge, and no derivative taken about one pixel can do that.
+    // Here the finished frame exists as a texture, so the channels are simply
+    // resampled where they actually landed.
+    //
+    // The optical centre is the RIG's lens centre, not the middle of the
+    // screen: it drifts and it re-aims with everything else, so the fringing
+    // never has a fixed null point burnt into one spot on the panel.
+    [branch] if (rg2.x > 0.0005) {
+        float  aspZ = pp0.y / max(pp0.x, 1e-9);
+        float2 qz   = float2((uv.x - rg0.z) * aspZ, uv.y - rg0.w);
+        float  rz   = length(qz);
+        float2 nz   = qz / max(rz, 1e-5);
+        // 0.60 in this space is about a 16:9 corner, so rn is ~1 there. The
+        // floor keeps a trace of it mid-frame -- a lens is never perfect in
+        // the middle either -- and aberration_field bends how fast it grows.
+        float  rn   = saturate(rz / 0.60);
+        float  ramp = lerp(0.12, 1.0, pow(rn, 1.0 + saturate(rg2.z * 0.5) * 2.0));
+        float  sp   = rg2.y * ramp * saturate(rg2.x);        // px at this res
+        float2 duv  = nz * (sp * pp0.y) * float2(1.0 / aspZ, 1.0);
+        // Applied as the DIFFERENCE the displacement makes, not as a raw
+        // resample: `d` already carries the defocus and the glare, and those
+        // are not in Src. On a sharp edge Src == d and this is exactly the
+        // split; in a defocused region the two samples are nearly equal and
+        // the fringe correctly fades out with the blur, which is what a real
+        // lens does -- you cannot see colour fringing on a bokeh disc.
+        float3 s0 = Src.SampleLevel(linearClamp, uv, 0).rgb;
+        d.r += Src.SampleLevel(linearClamp, uv + duv, 0).r - s0.r;
+        d.b += Src.SampleLevel(linearClamp, uv - duv, 0).b - s0.b;
+        d = max(d, 0.0);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)

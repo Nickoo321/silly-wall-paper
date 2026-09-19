@@ -930,6 +930,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
                          po.psfPx > 0.01f || po.dither > 0.0005f ||
+                         po.halation > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
@@ -1049,7 +1050,11 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[26] = fmaxf(po.psfPx, 0.0f) * scale;
     // OUTPUT DITHER: half an LSB of ordered noise against 10-bit banding.
     c[28] = fminf(fmaxf(po.dither, 0.0f), 8.0f);
-    // c[27], c[29..31] spare. light_x / light_y / light_drift used to live here; the
+    // HALATION: a tight warm glow taken only from the bright areas.
+    c[29] = fminf(fmaxf(po.halation, 0.0f), 1.0f);
+    c[30] = fmaxf(po.halationPx, 1.0f) * scale;
+    c[31] = fminf(fmaxf(po.halationWarmth, 0.0f), 1.0f);
+    // c[27] spare. light_x / light_y / light_drift used to live here; the
     // lamp is part of the RIG now and arrives in its own block below.
 
     // ---- THE RIG, as ONE contiguous block ---------------------------------

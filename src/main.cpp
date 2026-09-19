@@ -594,6 +594,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletLensCentre= getF(S, L"droplet_lens_centre", a.dropletLensCentre);
         a.dropletLensBand  = getF(S, L"droplet_lens_band", a.dropletLensBand);
         a.dropletSpec      = getF(S, L"droplet_spec", a.dropletSpec);
+        a.dyeDepth         = getF(S, L"dye_depth", a.dyeDepth);
+        a.dyeDepthTilt     = getF(S, L"dye_depth_tilt", a.dyeDepthTilt);
+        a.dyeDepthW        = getF(S, L"dye_depth_w", a.dyeDepthW);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1766,6 +1769,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_lens_centre", a.dropletLensCentre, 3);
         putF(S, L"droplet_lens_band", a.dropletLensBand, 2);
         putF(S, L"droplet_spec", a.dropletSpec, 3);
+        putF(S, L"dye_depth", a.dyeDepth, 3);
+        putF(S, L"dye_depth_tilt", a.dyeDepthTilt, 3);
+        putF(S, L"dye_depth_w", a.dyeDepthW, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

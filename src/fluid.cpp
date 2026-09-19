@@ -930,6 +930,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
                          po.psfPx > 0.01f || po.dither > 0.0005f ||
+                         po.aberration > 0.0005f ||
                          po.halation > 0.0005f || po.lid > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
@@ -1070,25 +1071,54 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[5] = m_rig.tiltAmt;
     rig[6] = m_rig.focus;
     rig[7] = m_rig.movePhase;
-    // ---- THE LID (task V2) -- rg2..rg4, the slots this block reserved ----
-    // The lid's authored keys ride here rather than in b0 because b0's 32
-    // root constants plus the rest of the graphics root signature already
-    // come to exactly the 64-DWORD limit; there is no room for another float4
-    // there, and these slots were declared for this effect in the first place.
-    // Widths authored in px at 1440p arrive scaled to this frame, like every
-    // other optical width in the pass.
-    rig[8]  = m_rig.lidX;
-    rig[9]  = m_rig.lidY;
-    rig[10] = m_rig.lidRot;
-    rig[11] = fminf(fmaxf(po.lid, 0.0f), 1.0f);              // master
-    rig[12] = fminf(fmaxf(po.lidGhost, 0.0f), 1.0f);
-    rig[13] = fminf(fmaxf(po.lidGhostSpread, 0.0f), 2.0f);
-    rig[14] = fminf(fmaxf(po.lidRings, 0.0f), 1.0f);
-    rig[15] = fminf(fmaxf(po.lidSheen, 0.0f), 1.0f);
-    rig[16] = fmaxf(po.lidSheenPx, 8.0f) * scale;
-    rig[17] = fminf(fmaxf(po.lidGlint, 0.0f), 1.0f);
-    rig[18] = fminf(fmaxf(po.lidIris, 0.0f), 1.0f);
-    rig[19] = fmaxf(po.lidRefractPx, 0.0f) * scale;
+    // The LENS's own chromatic split (item Z). It lives in the rig block
+    // because it is a property of the same lens the rig carries the centre
+    // of: the split is radial about that centre, so the two numbers have to
+    // travel together or the null point drifts away from the axis.
+    rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
+    rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
+    rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
+    // ---- THE LID (task V2) -- ALL OF IT IN rg4 ---------------------------
+    // rg2 is the lens's chromatic split (item Z) and rg3 is reserved for the
+    // camera executor's V3 motion, so the lid gets ONE float4. Twelve numbers
+    // into four is a packing problem, not a reason to grow the root signature
+    // (b0's 32 constants plus the rest of this signature already come to
+    // exactly the 64-DWORD limit) and not a reason to repack somebody else's
+    // slot. Each float carries an exact integer below 2^24, which a float32
+    // holds without loss, so the unpack on the other side is two divides and
+    // a floor per field and nothing is approximated twice.
+    //   rg4.x  lidX : 12 | lidY : 12          the cover's own wander, uv
+    //   rg4.y  lidRot : 12 | refractPx : 12   orientation and reflection wobble
+    //   rg4.z  ghost : 8 | rings : 8 | sheen : 8
+    //   rg4.w  glint : 7 | iris : 7 | sheenPx : 6 | ghostSpread : 4
+    // The MASTER is not sent at all: it is folded into every amplitude here,
+    // which costs nothing and buys back the twelve bits it would have taken.
+    // With the lid off all four floats are written as exact 0, which is what
+    // the shader's one branch tests.
+    {
+        auto qz = [](float v, float lo, float hi, int bits) -> float {
+            float u = (v - lo) / (hi - lo);
+            u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+            const float m = (float)((1 << bits) - 1);
+            return (float)(int)(u * m + 0.5f);
+        };
+        const float L = fminf(fmaxf(po.lid, 0.0f), 1.0f);
+        if (L <= 0.0005f) {
+            rig[16] = rig[17] = rig[18] = rig[19] = 0.0f;
+        } else {
+            rig[16] = qz(m_rig.lidX, -0.5f, 0.5f, 12) * 4096.0f
+                    + qz(m_rig.lidY, -0.5f, 0.5f, 12);
+            rig[17] = qz(m_rig.lidRot, -4.0f, 4.0f, 12) * 4096.0f
+                    + qz(fmaxf(po.lidRefractPx, 0.0f) * scale, 0.0f, 24.0f, 12);
+            rig[18] = qz(L * po.lidGhost, 0.0f, 1.0f, 8) * 65536.0f
+                    + qz(L * po.lidRings, 0.0f, 1.0f, 8) * 256.0f
+                    + qz(L * po.lidSheen, 0.0f, 1.0f, 8);
+            rig[19] = qz(L * po.lidGlint, 0.0f, 1.0f, 7) * 131072.0f
+                    + qz(L * po.lidIris,  0.0f, 1.0f, 7) * 1024.0f
+                    + qz(fmaxf(po.lidSheenPx, 8.0f) * scale, 8.0f, 1400.0f, 6) * 16.0f
+                    + qz(po.lidGhostSpread, 0.0f, 2.0f, 4);
+        }
+    }
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
@@ -4189,8 +4219,24 @@ void FluidRenderer::StepCameraRig(float dt) {
         m_rig.lampX += (0.055f * sinf(t * 0.0171f) + 0.030f * sinf(t * 0.0413f + 1.7f)) * kd;
         m_rig.lampY += (0.040f * sinf(t * 0.0233f + 0.6f) + 0.022f * sinf(t * 0.0561f + 2.3f)) * kd;
     }
-    m_rig.axisX   = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
-    m_rig.axisY   = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    // ---- the LENS CENTRE -------------------------------------------------
+    // Where the optical axis meets the dish. It is not the middle of the
+    // screen and it does not stay put: the field curvature, the tilt origin
+    // and (item Z) the null point of the chromatic split all hang off it, and
+    // a null point burnt into one spot of an OLED for hours is exactly what
+    // this whole family of effects exists to avoid. Its own slow sines, in
+    // step with the lamp's idle drift but not in phase with it -- they are
+    // different parts of one rig, not one part copied twice.
+    m_rig.axisX = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
+    m_rig.axisY = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    if (po.lightDrift > 0.0005f) {
+        const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
+        const float t  = m_time;
+        m_rig.axisX += (0.026f * sinf(t * 0.0127f + 2.2f)
+                      + 0.014f * sinf(t * 0.0331f + 5.1f)) * kd;
+        m_rig.axisY += (0.022f * sinf(t * 0.0193f + 0.4f)
+                      + 0.012f * sinf(t * 0.0447f + 3.6f)) * kd;
+    }
     m_rig.tiltAmt = po.focusTilt;
 
     // ---- the LID (task V2) ------------------------------------------------
@@ -4457,7 +4503,10 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
     float p15[4] = { fmaxf(a.oilTransparency, 0.0f), fmaxf(a.oilAbsorb, 0.0f),
                      fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
-    float p16[4] = { fmaxf(a.oilInkBlur, 0.0f), 0.0f, 0.0f, 0.0f };
+    // .y = dye_depth_w: how much the dye layer weighs against the droplets
+    // in the per-pixel depth blend (item AA; 0.25 = the old constant prior).
+    float p16[4] = { fmaxf(a.oilInkBlur, 0.0f),
+                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f), 0.0f, 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
     float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
@@ -4547,7 +4596,13 @@ void FluidRenderer::UploadAcidConstants() {
                      fminf(fmaxf(a.dropletLensCentre, 0.0f), 1.0f),
                      fmaxf(a.dropletLensBand, 0.25f) / 1440.0f,
                      fminf(fmaxf(a.dropletSpec, 0.0f), 1.0f) };
-    float p28[4] = { m_rig.lampX, m_rig.lampY, 0.0f, 0.0f };
+    // .zw = the DYE LAYER's own depth and its slope (item AA). The slope runs
+    // along the direction from the lens centre to the lamp, which drifts, so
+    // the dye slab is never parallel to the focus surface and the line where
+    // they cross travels with the rig instead of sitting on one row of pixels.
+    float p28[4] = { m_rig.lampX, m_rig.lampY,
+                     fminf(fmaxf(a.dyeDepth, 0.0f), 1.0f),
+                     a.dyeDepthTilt };
     memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     memcpy(m_acidParamData[fi], &p, sizeof(p));

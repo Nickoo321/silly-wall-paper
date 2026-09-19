@@ -52,8 +52,14 @@ Everything below is committed on `main`; nothing is running in the background.
 | Liquid Acid accent-by-size (brief J): `accent_mode`/`accent_max_r`/`accent_frac` keeps the complement shade off big masses (hash of blob index, hysteresis + 2s crossfade, no rand() draw); shipped mode 1 / max_r 0.12 / frac 0.6 in acid-rise-8020 and both 80-20 presets only | f384659, c6efa53 |
 | V1 halation: tight warm glow from film's missing anti-halation backing (`halation`/`halation_px`/`halation_warmth`); brightness gate must read the PEAK channel, not luminance -- a luminance test evaluated to zero on saturated magenta; shipped 0.25/14px/0.75 in every acid-rise-*/rising preset, off in the NO-lens twin | e925d2a, 04c49ea |
 | Fullscreen pause fix: detect games by client rect covering the monitor instead of window style -- windowed-fullscreen titles kept WS_CAPTION and were never paused | 876c72a |
+| U9 bubble weather: `[liquid_acid] weather`/`weather_period_s` give the droplet population slow seasons (rings + big hollow bubbles vs. solids, sparse vs. crowded) instead of the one steady state it used to settle into; density channel scales the droplet target by +/-0.45*weather gated on `conserve_mass`, ring channel drives `droplet_ring_frac`/`droplet_ring_big_frac`; shipped weather 0.5 / weather_period_s 300 in all 24 rising configs+presets; verified 19% swing in visible droplets over 6 min | 0a87ca2 |
+| Brief S residue: `blob_count` now walks via `AcidBlob.rTarget` instead of `SeedAcidBlobs()` reseeding the whole population every frame; fixed a bug where a rise-respawn restored `rTarget` on a blob already marked to retire, which kept the population churning instead of settling | 7fb7058 |
+| Merge of U9 bubble weather + brief S residue onto `main`, keeping both the accent block and the rTarget block in `fluid.cpp`/`fluid.h` | 99f933c |
+| Brief AA: dye masses sit at the focus depth by construction (the depth accumulator's prior is 0.5 = `camera_focus`); a curvature 0.9 / cap 14 slider test softened corner droplets but barely touched the mass edge -- fix is a rig-driven `dye_depth` key, assigned for later | b243780 |
+| Z: lateral chromatic aberration is now a real radial resample in the post pass (`kPostSrc`), red pushed out / blue pulled in from the rig's drifting lens centre, applied as the difference the displacement makes so it fades on defocused elements; old symmetric-rim derivative removed from the display pass; keys unchanged, shipped 1.0/1.8/1.2 in all acid-rise-*/rising presets; rig relabelled rg0 lamp+lens centre / rg1 tilt+focus+phase / rg2 chromatic split, rg3/rg4 free | c61ff10 |
+| Merge of `main`'s bubble weather + brief S residue (`99f933c`) into `camera-dof`, alongside brief Z and brief AA's diagnosis, ahead of item AA's fix | b4173dd |
 
-Every step kept `style=fluid` byte-identical (md5 checked before/after each change); today's re-check (2026-09-18, `we-look-live.ini`) PASS, `10e36ebf1a74edfe609065d757300054`; re-confirmed again by this session's own Sonnet rote md5 check against the worktree exe built from `876c72a`, same hash, PASS.
+Every step kept `style=fluid` byte-identical (md5 checked before/after each change); today's re-check (2026-09-18, `we-look-live.ini`) PASS, `10e36ebf1a74edfe609065d757300054`; re-confirmed again by this session's own Sonnet rote md5 check against the worktree exe built from `876c72a`, same hash, PASS; re-confirmed a third time this session against the worktree exe built from `99f933c`, same hash, PASS; re-confirmed a fourth time this session against the worktree exe built from `b4173dd`, same hash, PASS.
 
 ## The user's picks so far
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".
@@ -87,6 +93,10 @@ Every step kept `style=fluid` byte-identical (md5 checked before/after each chan
    pass, not the current display-pass derivative trick (which only gives a symmetric warm rim --
    no cool side splits off because a luminance-gradient derivative can't flip sign across an edge).
    Diagnosis in `reference/briefs/NEXT-rings-grain-aberration-refraction.md` (`efbec41`); no code yet.
+10. **Brief AA, assigned for later**: dye masses currently sit at the focus depth only because the
+    depth accumulator's prior is 0.5 = `camera_focus`; a rig-driven `dye_depth` key is the real
+    fix (a slider test with curvature 0.9 / cap 14 barely moved the mass edge). No code yet (`b243780`
+    is diagnosis only).
 
 ## End state (user, 2026-09-17): automated cycling through everything
 

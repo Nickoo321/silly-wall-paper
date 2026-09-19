@@ -579,7 +579,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
-    float4 laP16;        // x oilInkBlur y - z - w -
+    float4 laP16;        // x oilInkBlur y dyeDepthW z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
@@ -594,7 +594,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
-    float4 laP28;        // x lampX(uv) y lampY(uv)  z -  w -
+    float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
 };
 // xy = centre uv, z = radius, w = field weight (+1 oil, negative = hole)
 // rgb of .b = flat fill colour, .w = rise_stretch anisotropy (0 = round)
@@ -1044,11 +1044,30 @@ R"hlsl(
     // the ground between them is a smooth blend rather than a stencil -- which
     // matters, because a hard depth edge would print a hard blur edge in the
     // post pass and look like a cut-out instead of a lens.
-    float depSum = 0.5 * 0.25, depW = 0.25;
     // Where the optical axis meets the dish, in p-space. Everything about the
     // perspective view -- foreshortening, field curvature, the tilt gradient
     // -- is measured from here.
     const float2 axP = float2(laP24.x * aspect, laP24.y);
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- THE DYE'S OWN DEPTH (item AA) -----------------------------------
+    // This prior used to be the constant 0.5 -- which is exactly camera_focus,
+    // so every pixel with no droplet in it, i.e. every big dye mass, sat on
+    // the plane of focus BY DEFINITION and could only blur through the shape
+    // of the focus surface. The user saw it straight away: "the bottom right
+    // blob isn't getting more out of focus even as it approaches the edge."
+    //
+    // The dye is a layer at its own height instead. Its slope runs along the
+    // direction from the lens centre to the RIG's lamp, so the slab is not
+    // parallel to the focus surface: the two cross on a LINE rather than
+    // agreeing over a region, and that line travels as the lamp drifts. With
+    // dye_depth 0.5 and dye_depth_tilt 0 this is the old constant, to the bit.
+    float2 lampP = float2(laP28.x * aspect, laP28.y) - axP;
+    float2 lampD = lampP / max(length(lampP), 1e-5);
+    float  dyeW  = laP16.y;
+    float  dyeZ  = laP28.z + laP28.w * dot(pp - axP, lampD);
+    float depSum = dyeZ * dyeW, depW = dyeW;
     if (laP18.x > 0.5) {
         const int gw = (int)laP18.y, gh = (int)laP18.z;
         const int cx = clamp((int)floor(uv.x * gw), 0, gw - 1);
@@ -2209,42 +2228,21 @@ R"hlsl(
     // a lens and a film emulsion sit in front of the picture, so they do not
     // mirror with it. Both amounts default to 0 and neither branch is entered
     // then, so style=fluid is untouched down to the bit unless asked.
-    // Order: aberration first (it is the lens), grain second (it is the film).
-    [branch] if (poP1.x > 0.0005 || poP1.w > 0.0005) {
-        // LATERAL CHROMATIC ABERRATION, per EDGE -- the reference's warm/cool
-        // fringe. A real lens focuses red and blue at slightly different
-        // magnifications, so every hard edge carries a warm fringe on one side
-        // and a cool one on the other; the radial corner split is only what
-        // that looks like averaged over a whole frame. There is nothing to
-        // re-sample here (the oil discs and rims are computed, not stored), so
-        // the two channels are displaced by a first-order expansion of the
-        // composite about this pixel, from the quad's own derivatives -- which
-        // is what a sub-pixel shift IS, and it covers every edge in the frame
-        // rather than only the dye.
-        float3 cdx = ddx(C), cdy = ddy(C);
-        [branch] if (poP1.x > 0.0005) {
-            const float3 W = float3(0.2126, 0.7152, 0.0722);
-            float2 eg = float2(dot(cdx, W), dot(cdy, W));   // the edge normal
-            float  el = length(eg);
-            float2 n  = (el > 1e-6) ? eg / el : float2(0.0, 0.0);
-            // px authored at 1440p, scaled with the frame: this is an optical
-            // effect, so it must be the same FRACTION of the picture at any
-            // resolution. r grows it modestly toward the field edge.
-            float2 d  = i.pos.xy * texelSize - 0.5;
-            float  px = poP1.y * (1.0 / max(texelSize.y, 1e-7)) / 1440.0
-                      * (1.0 + poP1.z * length(d) * 2.0);
-            float2 off = n * (px * poP1.x);
-            float  dR = dot(float2(cdx.r, cdy.r),  off);
-            float  dB = dot(float2(cdx.b, cdy.b), -off);
-            C = max(float3(C.r + dR, C.g, C.b + dB), 0.0);
-        }
-        // A slight fall-off toward the corners: the field stop of a macro
-        // lens, never a circle with an edge.
-        [branch] if (poP1.w > 0.0005) {
-            float2 d = i.pos.xy * texelSize - 0.5;
-            float  r2 = dot(d, d) * 2.0;
-            C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
-        }
+    // (aberration used to live here as a first-order expansion of the
+    // composite about the pixel. It could not work: the offset direction came
+    // from the LUMINANCE gradient, which always points at the brighter side,
+    // so dR was positive and dB negative on BOTH sides of every droplet -- a
+    // symmetric warm outline, never a split, at any slider value. And a 3-px
+    // displacement is not something one derivative can express anyway. It is
+    // now a real resample of the finished frame in kPostSrc, where the pixels
+    // exist to be resampled. See item Z.)
+    // A slight fall-off toward the corners: the field stop of a macro lens,
+    // never a circle with an edge. This one stays here -- it is a shading of
+    // the picture, not a displacement of it, so it needs nothing resampled.
+    [branch] if (poP1.w > 0.0005) {
+        float2 d = i.pos.xy * texelSize - 0.5;
+        float  r2 = dot(d, d) * 2.0;
+        C *= 1.0 - saturate(poP1.w) * 0.45 * r2 * r2;
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -2381,18 +2379,26 @@ cbuffer PostPassCB : register(b0) {
 // One lamp and one lens on one body, stepped on the CPU (FluidRenderer::
 // StepCameraRig) and handed over as a single block, so the haze, the bloom,
 // the depth of field and -- later -- the lid ghosts, the flare and the
-// vignette centre cannot disagree about where the rig is. rg2..rg4 are
+// vignette centre cannot disagree about where the rig is. rg2 is the lens's
+// chromatic split, rg3 is reserved and rg4 is the lid; they are
 // reserved for those. This is b3, which the display pass uses for its mirror
 // fold and this pass has never bound.
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
     float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
-    // rg2..rg4 are THE LID (task V2). They ride here and not in b0 because
-    // b0's 32 root constants plus the rest of the graphics root signature
-    // already come to exactly the 64-DWORD limit.
-    float4 rg2;   // x lidX(uv) y lidY  z lidRot(rad)  w lid (master)
-    float4 rg3;   // x ghost    y ghostSpread  z rings  w sheen
-    float4 rg4;   // x sheenPx(this res) y glint z iris w refractPx(this res)
+    float4 rg2;   // x aberration y aberrPx(this res) z aberrField  w -
+    float4 rg3;   // reserved (camera executor, V3 motion)
+    // rg4 is THE LID (task V2), all of it, PACKED -- rg2 is the lens's
+    // chromatic split and rg3 is spoken for, so the lid gets one float4 and
+    // twelve numbers have to fit in it. Each float carries an exact integer
+    // below 2^24, so a float32 holds it without loss.
+    //   x  lidX : 12 | lidY : 12          the cover's own wander, uv
+    //   y  lidRot : 12 | refractPx : 12   orientation, reflection wobble
+    //   z  ghost : 8 | rings : 8 | sheen : 8
+    //   w  glint : 7 | iris : 7 | sheenPx : 6 | ghostSpread : 4
+    // The master is folded into the amplitudes on the CPU; all four floats
+    // are exactly 0 when the lid is off, which is the block's only branch.
+    float4 rg4;
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2412,6 +2418,29 @@ float PHash21(float2 p) {
     p = frac(p * float2(234.34, 435.345));
     p += dot(p, p + 34.23);
     return frac(p.x * p.y);
+}
+// ---- THE LID's packed constants (rg4) -----------------------------------
+// Each field was quantised on the CPU and shifted into one exact integer.
+// float32 carries 24 bits of mantissa, so every pack below is lossless and
+// the unpack is a divide and a floor per field.
+float2 LidU12(float v) {
+    float a = floor(v * (1.0 / 4096.0));
+    return float2(a, v - a * 4096.0) * (1.0 / 4095.0);
+}
+float3 LidU8(float v) {
+    float a = floor(v * (1.0 / 65536.0));
+    float r = v - a * 65536.0;
+    float b = floor(r * (1.0 / 256.0));
+    return float3(a, b, r - b * 256.0) * (1.0 / 255.0);
+}
+float4 LidU7764(float v) {
+    float a = floor(v * (1.0 / 131072.0));
+    float r = v - a * 131072.0;
+    float b = floor(r * (1.0 / 1024.0));
+    r -= b * 1024.0;
+    float c = floor(r * (1.0 / 16.0));
+    return float4(a * (1.0 / 127.0), b * (1.0 / 127.0),
+                  c * (1.0 / 63.0), (r - c * 16.0) * (1.0 / 15.0));
 }
 float3 ToSRGB(float3 c) {
     c = saturate(c);
@@ -2551,6 +2580,50 @@ float4 PSMain(VSOut i) : SV_Target {
         }
         d = lerp(d, g, saturate(wg));
     }
+    // ---- LATERAL CHROMATIC ABERRATION (item Z) ---------------------------
+    // A real lens focuses red and blue at slightly different MAGNIFICATIONS,
+    // so the three channels land on the sensor at slightly different scales:
+    // red pushed out from the optical axis, blue pulled in, green where it
+    // belongs. On a frame that is a radial split which is nothing at the
+    // centre and a couple of pixels at the corners -- exactly the LAPD sheet's
+    // colour fringing.
+    //
+    // This used to be attempted in the display pass as a first-order expansion
+    // about the pixel, and it could not work: the offset direction came from
+    // the LUMINANCE gradient, which always points at the brighter side, so red
+    // was added and blue subtracted on BOTH sides of every droplet. A
+    // symmetric warm outline, never a split, at any slider value -- which is
+    // why the user could not see it. A lateral split needs the sign to FLIP
+    // across an edge, and no derivative taken about one pixel can do that.
+    // Here the finished frame exists as a texture, so the channels are simply
+    // resampled where they actually landed.
+    //
+    // The optical centre is the RIG's lens centre, not the middle of the
+    // screen: it drifts and it re-aims with everything else, so the fringing
+    // never has a fixed null point burnt into one spot on the panel.
+    [branch] if (rg2.x > 0.0005) {
+        float  aspZ = pp0.y / max(pp0.x, 1e-9);
+        float2 qz   = float2((uv.x - rg0.z) * aspZ, uv.y - rg0.w);
+        float  rz   = length(qz);
+        float2 nz   = qz / max(rz, 1e-5);
+        // 0.60 in this space is about a 16:9 corner, so rn is ~1 there. The
+        // floor keeps a trace of it mid-frame -- a lens is never perfect in
+        // the middle either -- and aberration_field bends how fast it grows.
+        float  rn   = saturate(rz / 0.60);
+        float  ramp = lerp(0.12, 1.0, pow(rn, 1.0 + saturate(rg2.z * 0.5) * 2.0));
+        float  sp   = rg2.y * ramp * saturate(rg2.x);        // px at this res
+        float2 duv  = nz * (sp * pp0.y) * float2(1.0 / aspZ, 1.0);
+        // Applied as the DIFFERENCE the displacement makes, not as a raw
+        // resample: `d` already carries the defocus and the glare, and those
+        // are not in Src. On a sharp edge Src == d and this is exactly the
+        // split; in a defocused region the two samples are nearly equal and
+        // the fringe correctly fades out with the blur, which is what a real
+        // lens does -- you cannot see colour fringing on a bokeh disc.
+        float3 s0 = Src.SampleLevel(linearClamp, uv, 0).rgb;
+        d.r += Src.SampleLevel(linearClamp, uv + duv, 0).r - s0.r;
+        d.b += Src.SampleLevel(linearClamp, uv - duv, 0).b - s0.b;
+        d = max(d, 0.0);
+    }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
@@ -2684,7 +2757,7 @@ R"hlsl(
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
     // =====================================================================
-    // THE LID (task V2)  -- self-contained; own constants (rg2..rg4), own
+    // THE LID (task V2)  -- self-contained; ONE packed constant (rg4), own
     // branch, nothing above or below it touched. The user's constraints are
     // NEGATIVE ones: no visible instrument, no dish rim, no grid, no UI
     // marks, no dark corners -- the oil stays full-bleed. So there is no mask
@@ -2699,18 +2772,26 @@ R"hlsl(
     //
     // NOTHING HERE IS AT A FIXED SCREEN POSITION. Every position is built
     // from the rig: the lamp (rg0.xy, always drifting), the lens axis
-    // (rg0.zw) and the lid's own wander (rg2.xy, four periods between three
+    // (rg0.zw) and the lid's own wander (rg4.x, four periods between three
     // and twelve minutes). At each of the rig's occasional readjustments the
     // lid is shoved to a new resting offset on the same spring the focus
     // rides, so the ghosts, the sheen and the glint all arrive together --
     // never one effect moving alone.
     // =====================================================================
-    [branch] if (rg2.w > 0.0005) {
+    [branch] if (rg4.z > 0.5 || rg4.w > 0.5) {
         float  sdrL = max(pp2.z, 1e-3);
         float  aspL = pp0.y / max(pp0.x, 1e-9);            // W/H
-        float  M    = saturate(rg2.w);
-        float2 lidO = rg2.xy;
-        float  lidA = rg2.z;
+        // unpack: see the rg4 comment in the cbuffer above
+        float2 lidO = LidU12(rg4.x) - 0.5;                 // uv, +-0.5
+        float2 lidB = LidU12(rg4.y);
+        float  lidA = lidB.x * 8.0 - 4.0;                  // rad
+        float  lidW = lidB.y * 24.0;                       // refract, px here
+        float3 lidC = LidU8(rg4.z);                        // ghost rings sheen
+        float4 lidD = LidU7764(rg4.w);                     // glint iris shPx spread
+        float  lidS = 8.0 + lidD.z * 1392.0;               // sheen px, this res
+        float  lidP = lidD.w * 2.0;                        // ghost spread
+        // The master is already folded into every amplitude on the CPU.
+        const float M = 1.0;
         // Where the sheet's optical centre sits: the lens axis, carried by
         // the lid's own wander.
         float2 ctrL = float2(rg0.z, rg0.w) + lidO * 0.45;
@@ -2734,17 +2815,17 @@ R"hlsl(
         // faces twice, transmitted light barely at all.
         float2 wob = float2(sin(uv.y * 7.3 + lidA * 3.1 + pp2.y * 0.047),
                             sin(uv.x * 6.1 - lidA * 2.3 + pp2.y * 0.031))
-                   * (rg4.w * pp0.xy);
+                   * (lidW * pp0.xy);
 
         // ---- GHOSTS: offset, dimmed, slightly magnified copies ----------
         // The classic lens-flare chain: each internal bounce puts a copy of
         // the bright field on the line from the lamp's reflection through the
         // optical centre, at its own scale. Tinted by the coating it bounced
         // off -- amber, green, magenta, which is what the LAPD sheet shows.
-        [branch] if (rg3.x > 0.0005) {
+        [branch] if (lidC.x > 0.0005) {
             float3 gsum = float3(0.0, 0.0, 0.0);
             [unroll] for (int gi = 0; gi < 3; gi++) {
-                float  fk = lerp(-0.42, 0.80, (float)gi * 0.5) * (0.4 + rg3.y);
+                float  fk = lerp(-0.42, 0.80, (float)gi * 0.5) * (0.4 + lidP);
                 float2 guv = ctrL + (uv - ctrL) * (1.0 + fk * 0.55)
                            - (lampR - ctrL) * fk + wob;
                 float3 sp  = Src.SampleLevel(linearClamp, guv, 0).rgb;
@@ -2766,7 +2847,7 @@ R"hlsl(
                 float  gw   = (gi == 0) ? 1.00 : ((gi == 1) ? 0.55 : 0.40);
                 gsum += sp * (ex * fe.x * fe.y * gw) * tint;
             }
-            d += gsum * (M * rg3.x * 0.085 * into);
+            d += gsum * (M * lidC.x * 0.085 * into);
         }
 
         // ---- RING GHOSTS: the concentric coloured arcs ------------------
@@ -2775,17 +2856,17 @@ R"hlsl(
         // centre that is the far end of the ghost chain, so they travel with
         // the ghosts. Weighted into the dark, never a drawn circle over the
         // oil.
-        [branch] if (rg3.z > 0.0005) {
-            float2 rc = ctrL - (lampR - ctrL) * (0.55 + 0.30 * rg3.y);
+        [branch] if (lidC.y > 0.0005) {
+            float2 rc = ctrL - (lampR - ctrL) * (0.55 + 0.30 * lidP);
             float2 q  = (uv - rc) * float2(aspL, 1.0);
-            float  rr = length(q) / max(0.34 + 0.22 * rg3.y, 1e-4);
+            float  rr = length(q) / max(0.34 + 0.22 * lidP, 1e-4);
             float  b1 = exp(-64.0 * (rr - 0.55) * (rr - 0.55));
             float  b2 = exp(-192.0 * (rr - 0.74) * (rr - 0.74));
             float  b3 = exp(-36.0 * (rr - 0.96) * (rr - 0.96));
             float3 rcol = float3(0.30, 1.00, 0.68) * b1
                         + float3(1.00, 0.80, 0.30) * b2
                         + float3(1.00, 0.26, 0.12) * b3;
-            d += rcol * (M * rg3.z * 0.030 * into * sdrL);
+            d += rcol * (M * lidC.y * 0.030 * into * sdrL);
         }
 
         // ---- SHEEN: the broad soft specular off the cover ---------------
@@ -2795,28 +2876,28 @@ R"hlsl(
         // weak, so it reads as glass in front of the picture rather than as a
         // light in it.
         float sheenE = 0.0;
-        [branch] if (rg3.w > 0.0005 || rg4.z > 0.0005) {
-            float  rs = max(rg4.x * pp0.y, 1e-4);          // px at this res -> uv
+        [branch] if (lidC.z > 0.0005 || lidD.y > 0.0005) {
+            float  rs = max(lidS * pp0.y, 1e-4);          // px at this res -> uv
             float2 q  = (uv - lampR) * float2(aspL, 1.0);
             float  ca = cos(lidA), sa = sin(lidA);
             float2 e2 = float2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca);
             e2.x /= 2.7;                                   // drawn out along the sheet
             sheenE = exp(-dot(e2, e2) / (rs * rs));
             d += float3(1.00, 0.88, 0.70)
-               * (M * saturate(rg3.w) * 0.075 * sheenE * sdrL);
+               * (M * lidC.z * 0.075 * sheenE * sdrL);
         }
 
         // ---- IRIDESCENCE: the thin oil film on the cover ----------------
         // Interference colours: a slowly turning phase ramp read through a
         // cosine palette, living only where the sheet is catching light, so
         // it appears as a colour sweep across the sheen and nowhere else.
-        [branch] if (rg4.z > 0.0005) {
+        [branch] if (lidD.y > 0.0005) {
             float2 q  = (uv - ctrL) * float2(aspL, 1.0);
             float  ph = 7.0 * (q.x * cos(lidA) + q.y * sin(lidA))
                       + 2.6 * sin(q.y * 3.3 - lidA * 1.7)
                       + pp2.y * 0.021;
             float3 ir = 0.5 + 0.5 * cos(ph + float3(0.0, 2.0944, 4.1888));
-            d += (ir - 0.333) * (M * rg4.z * 0.055 * sheenE * sdrL);
+            d += (ir - 0.333) * (M * lidD.y * 0.055 * sheenE * sdrL);
         }
 
         // ---- GLINT: the lamp itself, seen in the cover ------------------
@@ -2824,13 +2905,13 @@ R"hlsl(
         // modest on purpose: it is the brightest thing this block adds and it
         // lives on an OLED, so it is a blob that wanders hundreds of pixels
         // over the minutes, never a star pinned to a pixel.
-        [branch] if (rg4.y > 0.0005) {
+        [branch] if (lidD.x > 0.0005) {
             float  dd   = length((uv - lampR) * float2(aspL, 1.0));
             float  core = exp(-(dd * dd) / (0.030 * 0.030));
             float  halo = exp(-dd / 0.19);
             d += (float3(1.00, 0.90, 0.72) * (core * 0.55)
                 + float3(1.00, 0.56, 0.20) * (halo * 0.13))
-                 * (M * saturate(rg4.y) * sdrL);
+                 * (M * lidD.x * sdrL);
         }
     }
 )hlsl"

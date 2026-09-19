@@ -575,6 +575,26 @@ struct LiquidAcidConfig {
     float dropletLensBand   = 3.0f;   // px at 1440p    droplet_lens_band
     float dropletSpec       = 0.0f;   //                     droplet_spec
 
+    // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
+    // The user, on the halation frame: "the bottom right blob isn't getting
+    // more out of focus even as it approaches the edge." True, and by
+    // construction: the per-pixel depth accumulator was primed with a
+    // CONSTANT 0.5, which is exactly camera_focus, so every pixel with no
+    // droplet in it -- i.e. every big dye mass -- sat on the plane of focus by
+    // definition. A mass could only ever defocus through the curvature and
+    // tilt of the focus SURFACE, never through its own position, and no
+    // slider could fix that.
+    // So the dye is a layer with a depth of its own. dye_depth is where it
+    // floats, and dye_depth_tilt gives it a gentle slope along the direction
+    // of the RIG's lamp -- which means the dye slab and the focus surface are
+    // not parallel, so they cross on a LINE rather than agreeing over a whole
+    // region, and the crossing moves when the rig does. dye_depth_w is the
+    // weight the dye carries where droplets overlap it (0.25 = as before).
+    // Defaults reproduce today's frame exactly.
+    float dyeDepth     = 0.5f;      // 0..1, 0.5 = the old constant  dye_depth
+    float dyeDepthTilt = 0.0f;      // slope across the frame   dye_depth_tilt
+    float dyeDepthW    = 0.25f;     // its weight in the blend     dye_depth_w
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".

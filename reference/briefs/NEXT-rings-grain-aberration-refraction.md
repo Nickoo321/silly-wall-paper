@@ -471,3 +471,10 @@ masses, which only a dye in the film does. So:
   AH = kept small: a rare additive edge leak plus dust as EVENTS tied to the sim, default amount
        low enough that the oil colour does the work. Never lifts black more than leak_black_lift.
 Order: AE first (one Opus executor), then AF/AG, AH last. style=fluid untouched, parity md5 holds.
+
+CORRECTION (user, same day): "it can be in both. oil and film." So AE and AH are BOTH full
+features, not oil-first with a token leak. The oil colour field (AE) and the film leak/dust layer
+(AH) each get their own keys and each default to a visible amount; the two are tuned together so
+they read as one thing (leak hue follows film_hue2 by default, key leak_hue_follow). The only rule
+kept from the decision above: the leak's black lift stays capped (leak_black_lift) so OLED black
+holds. Order unchanged: AE, then AF/AG, then AH, unless the user picks otherwise.

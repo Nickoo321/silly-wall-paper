@@ -4903,8 +4903,28 @@ void FluidRenderer::UploadAcidConstants() {
                      3.0f / 1440.0f, 0.0f, 0.0f };
     memcpy(p.p29, p29, 16);
     // ---- brief AE: the second (and third) dye hue ------------------------
+    // ---- the contrast hue WOBBLES (brief AE-b) ---------------------------
+    // The user: "the contrast colour wiggles around like 170-190 degrees
+    // opposite the primary". So the angle is not a constant: it breathes a
+    // few degrees either side of the authored one. Two sines whose periods
+    // are in the golden ratio never come back into phase, so the pair never
+    // repeats exactly; m_mixPhase is the rig's readjustment phase, already
+    // eased, so the contrast angle re-aims at the same moment the lamp, the
+    // lid, the focus and the hue2 patches do -- nothing moves alone.
+    // film_hue2 itself is applied in the shader to the film colour AFTER the
+    // global hue_rotate_period rotation has turned the palette, so the two
+    // hues rotate together as a PAIR and the combo drifts round the wheel.
+    float hue2Eff = a.filmHue2;
+    if (fabsf(a.filmHue2Wobble) > 0.001f) {
+        const float P = fmaxf(a.filmHue2WobbleP, 5.0f);
+        const float TAU = 6.2831853f;
+        const float w = 0.62f * sinf(TAU * m_time / P + m_mixPhase)
+                      + 0.38f * sinf(TAU * m_time / (P * 0.61803399f)
+                                     + 1.7f + m_mixPhase * 0.7f);
+        hue2Eff += a.filmHue2Wobble * w;
+    }
     float p30[4] = { fminf(fmaxf(a.filmHue2Amt, 0.0f), 1.0f),
-                     a.filmHue2,
+                     hue2Eff,
                      fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f),
                      a.filmHue3 };
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f), 0.0f, 0.0f, 0.0f };

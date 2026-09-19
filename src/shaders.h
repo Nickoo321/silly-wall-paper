@@ -1696,7 +1696,14 @@ R"hlsl(
         // picture in the intermediate hues, which reads as a rainbow gradient
         // rather than as two dyes meeting. 0.50..0.74 puts roughly a third of
         // the frame in the patch and keeps the magenta-to-cyan run short.
-        float k2 = smoothstep(0.50, 0.74, mixV) * saturate(laP30.x);
+        // The band has to be NARROW, and the wider the rotation the narrower
+        // it has to be. k2 sweeps the hue continuously from 0 to film_hue2,
+        // so with a 180 deg contrast the transition passes through EVERY
+        // intermediate hue -- at 0.50..0.74 that put a full rainbow across a
+        // quarter of the frame and the picture stopped reading as two dyes
+        // meeting. 0.56..0.68 keeps the rainbow as a thin rim, which is what
+        // the reference actually shows at a patch edge.
+        float k2 = smoothstep(0.56, 0.68, mixV) * saturate(laP30.x);
         // The droplets INSIDE a mass take their own share of it (the ref's
         // cyan-lit specks in the black). 1 = the same as the film.
         if (fieldB < thresh) k2 *= saturate(laP31.x);

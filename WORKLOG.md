@@ -1289,3 +1289,34 @@ brief AA commit, plus this session's own md5 regression re-check.
 **Regression (this session, Sonnet rote, worktree exe built from `99f933c`):** `we-look-live.ini`
 60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
 expected.
+
+## 2026-09-18 -- brief Z lateral aberration lands; merge onto camera-dof for item AA (Sonnet rote docs pass, c61ff10..b4173dd)
+
+Rote docs pass, no code changes; recap of executor A's brief Z implementation and the merge that
+brought `main`'s weather/residue work (`99f933c`) onto the `camera-dof` branch alongside it, plus
+this session's own md5 regression re-check.
+
+- **Z: lateral chromatic aberration, as a real resample in the post pass (`c61ff10`).** The
+  diagnosis from `efbec41` is now code: the display pass's derivative trick only ever gave a
+  symmetric warm rim -- the offset was taken along the luminance gradient, which always points at
+  the brighter side, so red was added and blue subtracted on BOTH sides of every dark droplet, never
+  a split. The fix moves into `kPostSrc`, which has the finished frame as a texture and can resample
+  where the channels actually landed: red pushed OUT from the optical axis, blue pulled IN, green
+  where it belongs. Applied as the DIFFERENCE the displacement makes rather than a raw resample,
+  since `d` already carries the defocus and glare that `Src` lacks -- a sharp edge shows the full
+  split, a defocused element's two samples are nearly equal and the fringe fades out with the blur.
+  The optical axis is the rig's lens centre, which now has its own slow idle drift (in step with the
+  lamp, out of phase with it), so the null point of the split never burns into one spot of the panel.
+  Keys unchanged (`aberration`/`aberration_px`/`aberration_field`, same ranges); shipped 1.0/1.8/1.2
+  in all `acid-rise-*.ini` and rising presets, NO-lens twin left off. The old derivative version is
+  removed from the display pass entirely -- that pass has nothing stored to resample anyway. Rig
+  block relabelled: `rg0` lamp+lens centre, `rg1` tilt/focus/phase, `rg2` chromatic split, `rg3`/`rg4`
+  still free. `style=fluid` names none of these keys and the post pass is not entered there, so md5
+  is unaffected.
+- **Merge (`b4173dd`).** `main` (`99f933c`: bubble weather + brief S residue) merged into the
+  `camera-dof` branch, bringing that work together with brief Z and brief AA's diagnosis ahead of
+  item AA's fix.
+
+**Regression (this session, Sonnet rote, worktree exe built from `b4173dd`):** `we-look-live.ini`
+60 s 2560x1440 seed 1234 `--hdr on` -- **PASS**, md5 `10E36EBF1A74EDFE609065D757300054` matches
+expected.

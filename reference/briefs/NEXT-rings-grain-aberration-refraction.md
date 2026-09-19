@@ -356,3 +356,26 @@ Do (executor, in kPostSrc, AFTER the psf/glow taps, BEFORE grain/dither):
 - style=fluid: keys are 0 there -> post pass not entered -> md5 must hold.
 - Verify: 4x nearest-neighbour crop of a droplet at the frame edge shows red on the outer side,
   blue/cyan on the inner side; centre droplets near-neutral. One --shot at 1440p, seed 1234.
+
+## AA. The dye masses need a depth of their own (2026-09-18, user on the halation shot)
+
+User: "the bottom right blob isn't getting more out of focus even as it approaches the edge."
+Correct observation, and by construction: in the display pass the depth accumulator starts at
+`depSum = 0.5*0.25, depW = 0.25` (src/shaders.h ~line 1047), i.e. any pixel with no droplet in
+it -- every big black dye mass -- sits at depth 0.5, which is exactly camera_focus. A mass can
+therefore only defocus through the curvature/tilt of the focus SURFACE, never through its own
+position, and with camera_field_curve 0.12 and dof_max_px 5 that is invisible.
+Slider test (build2/shots/live/2026-09-18-fieldcurve-corner-ab.png): curvature 0.9, band 220,
+cap 14 softens the corner droplets clearly but the mass edge only a little. Sliders are not enough.
+
+Do (executor A, camera rig, after Z and the lid):
+- Give the dye field a depth: `dye_depth` (0..1, default 0.5 = today's behaviour) plus
+  `dye_depth_tilt` (a gentle slope across the frame, direction from the rig) and let the rig's
+  slow drift + occasional readjustment move it like everything else -- the black body is a
+  layer floating at its own distance, not glued to the focus plane.
+- Where droplets and dye overlap, blend the depths by weight as now (dye weight = today's 0.25
+  prior, or expose `dye_depth_w`).
+- Keep the steep shoulder; raise the default dof_max_px only in the acid-rise inis if the
+  executor's own crop shows the corner mass edge still too sharp at the shipped keys.
+- style=fluid untouched (post pass not entered, md5 must hold).
+- Verify: corner crop of a mass edge, shipped keys vs new, seed 1234, t=60.

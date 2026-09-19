@@ -2375,7 +2375,7 @@ cbuffer PostPassCB : register(b0) {
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
     float4 pp5;   // x stock      y fog        z bloom   w dofMaxPx(this res; 0 = alpha is not a CoC)
     float4 pp6;   // x fogReach(uv) y bloomPx(this res) z psfPx(this res) w -
-    float4 pp7;   // x dither (LSB of 10 bit)   y,z,w -
+    float4 pp7;   // x dither  y halation  z halationPx(this res)  w warmth
 };
 // ---- THE RIG -------------------------------------------------------------
 // One lamp and one lens on one body, stepped on the CPU (FluidRenderer::
@@ -2545,6 +2545,62 @@ float4 PSMain(VSOut i) : SV_Target {
             wg *= lerp(1.0, 1.0 + 1.5 * step(1e-5, darker), saturate(pp2.w));
         }
         d = lerp(d, g, saturate(wg));
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- HALATION (item V1) ----------------------------------------------
+    // CineStill 800T is ordinary cinema stock with the anti-halation backing
+    // removed: light from a highlight goes through the emulsion, reflects off
+    // the film base and comes back a few pixels out, reddened by the layers it
+    // has now crossed twice. So it is NOT the wide weak wash `bloom` already
+    // does. It is tight (a dozen px), it is taken only from what is genuinely
+    // bright, and it lands in the DARK around a highlight rather than on the
+    // highlight itself -- which is the difference between the film glowing and
+    // the picture simply being over-exposed.
+    //
+    // Two jittered rings of taps around a centre pushed toward the rig's LAMP,
+    // so the glow pools on the lamp side and the whole field's asymmetry turns
+    // when the lamp wanders. Nothing here is ever at a fixed screen position.
+    [branch] if (pp7.y > 0.0005) {
+        float  sdrH = max(pp2.z, 1e-3);
+        float  asp  = pp0.y / max(pp0.x, 1e-9);
+        float2 toL  = float2((rg0.x - uv.x) * asp, rg0.y - uv.y);
+        float2 lean = toL / max(length(toL), 1e-5) * float2(1.0 / asp, 1.0);
+        float2 rad  = pp7.z * pp0.xy;
+        float2 ctr  = uv + lean * rad * 0.30;
+        float  jt   = 6.2831853 * PHash21(i.pos.xy * 0.0271 + 7.13);
+        float3 hot  = float3(0.0, 0.0, 0.0);
+        float  hw   = 0.0;
+        [unroll] for (int k = 0; k < 8; k++) {
+            float a2 = (float)k * 0.7853982 + jt;
+            float3 sp = Src.SampleLevel(linearClamp, ctr + float2(cos(a2), sin(a2)) * (0.55 * rad), 0).rgb;
+            // Only what is REALLY bright contributes, with a soft knee so a
+            // drifting highlight does not switch the glow on in one frame.
+            // The test is on the PEAK CHANNEL, not on luminance: this film is
+            // a saturated magenta whose luminance is a third of its red
+            // channel, so a luminance threshold called the brightest thing in
+            // the frame dark and the whole effect evaluated to exactly zero.
+            // Physically the peak channel is also the right question -- the
+            // film base scatters whatever light reached it, and a saturated
+            // red highlight halates hard however little it weighs in Y.
+            float  ex = smoothstep(0.55, 1.05, max(sp.r, max(sp.g, sp.b)) / sdrH);
+            hot += sp * ex; hw += 1.0;
+        }
+        [unroll] for (int m = 0; m < 12; m++) {
+            float a2 = (float)m * 0.5235988 + jt * 1.7;
+            float3 sp = Src.SampleLevel(linearClamp, ctr + float2(cos(a2), sin(a2)) * rad, 0).rgb;
+            float  ex = smoothstep(0.55, 1.05, max(sp.r, max(sp.g, sp.b)) / sdrH);
+            hot += sp * ex * 0.6; hw += 0.6;
+        }
+        hot /= max(hw, 1e-5);
+        // reddened by the two passes through the emulsion
+        float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.00, 0.34, 0.13), saturate(pp7.w));
+        // ...and it only shows where this pixel is DARKER than what it is
+        // gathering: on the bright film itself there is nothing to see.
+        float  own  = max(d.r, max(d.g, d.b)) / sdrH;   // same metric as the gather
+        float  into = 1.0 - smoothstep(0.30, 0.95, own);
+        d += hot * tint * (saturate(pp7.y) * 0.55 * into);
     }
     // ---- film grain, after the glass ------------------------------------
     // The display pass's grain lives in the sRGB-encoded domain before the HDR

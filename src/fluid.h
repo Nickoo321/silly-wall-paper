@@ -885,6 +885,20 @@ struct PostConfig {
     // out into true black, because a lifted black would be a far worse bug
     // than a band. 1 = half an LSB; higher is for looking at it.
     float dither = 0.0f;           //                                dither
+
+    // --- HALATION (item V1) -----------------------------------------------
+    // CineStill 800T is ordinary cinema stock with the anti-halation backing
+    // removed: light from a highlight passes through the emulsion, reflects
+    // off the base and comes back a few pixels out, reddened by the layers it
+    // crossed twice. So every hot area carries a TIGHT warm glow -- not the
+    // wide weak wash `bloom` already does, and taken only from what is
+    // actually bright. It lands in the DARK around a highlight rather than on
+    // the highlight itself, which is what makes it read as the film glowing
+    // rather than as more exposure, and it leans toward the rig's lamp, so
+    // nothing about it sits still.
+    float halation       = 0.0f;   // 0..1 master                    halation
+    float halationPx     = 14.0f;  // radius, px at 1440p         halation_px
+    float halationWarmth = 0.75f;  // 0 white .. 1 red-orange halation_warmth
 };
 
 struct MirrorConfig {

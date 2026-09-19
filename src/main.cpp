@@ -411,6 +411,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.dofMaxPx       = getF(S, L"dof_max_px", po.dofMaxPx);
         po.psfPx          = getF(S, L"psf_px", po.psfPx);
         po.dither         = getF(S, L"dither", po.dither);
+        po.halation       = getF(S, L"halation", po.halation);
+        po.halationPx     = getF(S, L"halation_px", po.halationPx);
+        po.halationWarmth = getF(S, L"halation_warmth", po.halationWarmth);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1574,6 +1577,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"dof_max_px", po.dofMaxPx, 2);
         putF(S, L"psf_px", po.psfPx, 2);
         putF(S, L"dither", po.dither, 2);
+        putF(S, L"halation", po.halation, 3);
+        putF(S, L"halation_px", po.halationPx, 1);
+        putF(S, L"halation_warmth", po.halationWarmth, 2);
     }
     {
         const DropConfig& d = c.drops;

@@ -930,7 +930,7 @@ bool FluidRenderer::PostActive() const {
                          po.filmNoise > 0.0005f || po.filmStock > 0.0005f ||
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
                          po.psfPx > 0.01f || po.dither > 0.0005f ||
-                         po.halation > 0.0005f ||
+                         po.halation > 0.0005f || po.lid > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
@@ -1070,6 +1070,25 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[5] = m_rig.tiltAmt;
     rig[6] = m_rig.focus;
     rig[7] = m_rig.movePhase;
+    // ---- THE LID (task V2) -- rg2..rg4, the slots this block reserved ----
+    // The lid's authored keys ride here rather than in b0 because b0's 32
+    // root constants plus the rest of the graphics root signature already
+    // come to exactly the 64-DWORD limit; there is no room for another float4
+    // there, and these slots were declared for this effect in the first place.
+    // Widths authored in px at 1440p arrive scaled to this frame, like every
+    // other optical width in the pass.
+    rig[8]  = m_rig.lidX;
+    rig[9]  = m_rig.lidY;
+    rig[10] = m_rig.lidRot;
+    rig[11] = fminf(fmaxf(po.lid, 0.0f), 1.0f);              // master
+    rig[12] = fminf(fmaxf(po.lidGhost, 0.0f), 1.0f);
+    rig[13] = fminf(fmaxf(po.lidGhostSpread, 0.0f), 2.0f);
+    rig[14] = fminf(fmaxf(po.lidRings, 0.0f), 1.0f);
+    rig[15] = fminf(fmaxf(po.lidSheen, 0.0f), 1.0f);
+    rig[16] = fmaxf(po.lidSheenPx, 8.0f) * scale;
+    rig[17] = fminf(fmaxf(po.lidGlint, 0.0f), 1.0f);
+    rig[18] = fminf(fmaxf(po.lidIris, 0.0f), 1.0f);
+    rig[19] = fmaxf(po.lidRefractPx, 0.0f) * scale;
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
@@ -4174,6 +4193,30 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_rig.axisY   = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
     m_rig.tiltAmt = po.focusTilt;
 
+    // ---- the LID (task V2) ------------------------------------------------
+    // A sheet of glass resting on the dish is never quite still, and on an
+    // OLED it had better not be: every reflection in it, every sheen and the
+    // lamp's glint hang off this offset, so this is what keeps them off a
+    // fixed pixel. Four incommensurate periods between 3 and 12 minutes --
+    // the pattern never repeats within a session -- and the amplitude is
+    // deliberately large in uv (about a sixth of the frame), because these
+    // are the brightest things the lid adds.
+    // This runs BEFORE the focus ring's early return: the lens may be bolted
+    // down (focus_tilt_period 0) and the lid still has to wander.
+    {
+        const float tl = m_time;
+        const float ix = 0.085f * sinf(tl * 0.0131f + 0.9f)
+                       + 0.045f * sinf(tl * 0.0307f + 2.4f);
+        const float iy = 0.070f * sinf(tl * 0.0163f + 1.9f)
+                       + 0.038f * sinf(tl * 0.0271f + 0.3f);
+        const float ir = 0.55f  * sinf(tl * 0.0089f)
+                       + 0.28f  * sinf(tl * 0.0193f + 1.2f);
+        m_rig.lidX = ix + m_lidTargX;
+        m_rig.lidY = iy + m_lidTargY;
+        m_rig.lidRot = ir + m_lidTargR;
+        m_lidIdleX = ix; m_lidIdleY = iy; m_lidIdleR = ir;
+    }
+
     // ---- the focus ring ---------------------------------------------------
     if (!m_camInit) {
         m_rig.tiltAngle = m_camAngleA = m_camAngleB = po.focusTiltAngle * DEG;
@@ -4208,12 +4251,20 @@ void FluidRenderer::StepCameraRig(float dt) {
         e += (1.0f - e) * (t * t * (3.0f - 2.0f * t));
         m_rig.tiltAngle = m_camAngleA + (m_camAngleB - m_camAngleA) * e;
         m_rig.focus     = m_camFocusA + (m_camFocusB - m_camFocusA) * e;
+        // ...and the LID slides with them, on the same spring, so the ghosts,
+        // the sheen and the glint arrive when the focus does. This is the
+        // user's "all the things move at once": never one effect alone.
+        m_rig.lidX = m_lidIdleX + m_lidPrevX + (m_lidTargX - m_lidPrevX) * e;
+        m_rig.lidY = m_lidIdleY + m_lidPrevY + (m_lidTargY - m_lidPrevY) * e;
+        m_rig.lidRot = m_lidIdleR + m_lidPrevR + (m_lidTargR - m_lidPrevR) * e;
         m_rig.movePhase = u;
         if (u >= 1.0f) {
             m_rig.tiltAngle = m_camAngleA = m_camAngleB;
             m_rig.focus     = m_camFocusA = m_camFocusB;
             m_camMoveT = -1.0f;
             m_camHold  = po.focusTiltPeriod * (0.55f + 0.9f * rf());
+            m_lidPrevX = m_lidTargX; m_lidPrevY = m_lidTargY;
+            m_lidPrevR = m_lidTargR;
         }
         return;
     }
@@ -4229,6 +4280,11 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_camAngleB = po.focusTiltAngle * DEG + (rf() * 2.0f - 1.0f) * 70.0f * DEG;
     m_camFocusB = po.cameraFocus + (rf() * 2.0f - 1.0f) * 0.22f;
     m_camMoveDur = fmaxf(po.focusTiltMoveS, 0.15f) * (0.8f + 0.4f * rf());
+    // ...and the lid is shoved to a new resting offset by the same move.
+    m_lidPrevX = m_lidTargX; m_lidPrevY = m_lidTargY; m_lidPrevR = m_lidTargR;
+    m_lidTargX = (rf() * 2.0f - 1.0f) * 0.10f;
+    m_lidTargY = (rf() * 2.0f - 1.0f) * 0.08f;
+    m_lidTargR = (rf() * 2.0f - 1.0f) * 0.9f;
     m_camMoveT = 0.0f;
     m_rig.movePhase = 0.0f;
 }

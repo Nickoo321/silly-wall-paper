@@ -414,6 +414,16 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.halation       = getF(S, L"halation", po.halation);
         po.halationPx     = getF(S, L"halation_px", po.halationPx);
         po.halationWarmth = getF(S, L"halation_warmth", po.halationWarmth);
+        // --- THE LID (task V2) ---
+        po.lid            = getF(S, L"lid",              po.lid);
+        po.lidGhost       = getF(S, L"lid_ghost",        po.lidGhost);
+        po.lidGhostSpread = getF(S, L"lid_ghost_spread", po.lidGhostSpread);
+        po.lidRings       = getF(S, L"lid_rings",        po.lidRings);
+        po.lidSheen       = getF(S, L"lid_sheen",        po.lidSheen);
+        po.lidSheenPx     = getF(S, L"lid_sheen_px",     po.lidSheenPx);
+        po.lidGlint       = getF(S, L"lid_glint",        po.lidGlint);
+        po.lidIris        = getF(S, L"lid_iris",         po.lidIris);
+        po.lidRefractPx   = getF(S, L"lid_refract_px",   po.lidRefractPx);
     }
     // ---- ink drops ([drops]); usable with ANY look --------------------------
     {
@@ -1592,6 +1602,15 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"halation", po.halation, 3);
         putF(S, L"halation_px", po.halationPx, 1);
         putF(S, L"halation_warmth", po.halationWarmth, 2);
+        putF(S, L"lid", po.lid, 3);
+        putF(S, L"lid_ghost", po.lidGhost, 3);
+        putF(S, L"lid_ghost_spread", po.lidGhostSpread, 3);
+        putF(S, L"lid_rings", po.lidRings, 3);
+        putF(S, L"lid_sheen", po.lidSheen, 3);
+        putF(S, L"lid_sheen_px", po.lidSheenPx, 1);
+        putF(S, L"lid_glint", po.lidGlint, 3);
+        putF(S, L"lid_iris", po.lidIris, 3);
+        putF(S, L"lid_refract_px", po.lidRefractPx, 2);
     }
     {
         const DropConfig& d = c.drops;

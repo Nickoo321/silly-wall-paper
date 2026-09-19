@@ -2387,7 +2387,12 @@ cbuffer PostPassCB : register(b0) {
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
     float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
-    float4 rg2, rg3, rg4;
+    // rg2..rg4 are THE LID (task V2). They ride here and not in b0 because
+    // b0's 32 root constants plus the rest of the graphics root signature
+    // already come to exactly the 64-DWORD limit.
+    float4 rg2;   // x lidX(uv) y lidY  z lidRot(rad)  w lid (master)
+    float4 rg3;   // x ghost    y ghostSpread  z rings  w sheen
+    float4 rg4;   // x sheenPx(this res) y glint z iris w refractPx(this res)
 };
 Texture2D Src : register(t0);
 SamplerState linearClamp : register(s0);
@@ -2672,6 +2677,160 @@ R"hlsl(
             float wd = 1.0 - smoothstep(0.10, 0.75, lum0);
             float lw = 0.75 + 0.50 * exp(-dl / max(pp6.x * 1.5, 1e-4));
             d += bl * (saturate(pp5.z) * 0.20 * wd * lw);
+        }
+    }
+
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // =====================================================================
+    // THE LID (task V2)  -- self-contained; own constants (rg2..rg4), own
+    // branch, nothing above or below it touched. The user's constraints are
+    // NEGATIVE ones: no visible instrument, no dish rim, no grid, no UI
+    // marks, no dark corners -- the oil stays full-bleed. So there is no mask
+    // and no border anywhere in here. Every term is ADDITIVE and full-frame.
+    //
+    // The excuse for all of it is a sheet of glass or plastic lying over the
+    // dish: what you see is the bright film reflected INSIDE that sheet
+    // (ghosts and ring ghosts), the lamp smeared across its surface (sheen
+    // and glint), the interference colours of the thin oil film on it (iris),
+    // and the wobble a cheap sheet gives its own reflections (refract).
+    // Reference: the LAPD optics sheet, endgoal-ref-13.
+    //
+    // NOTHING HERE IS AT A FIXED SCREEN POSITION. Every position is built
+    // from the rig: the lamp (rg0.xy, always drifting), the lens axis
+    // (rg0.zw) and the lid's own wander (rg2.xy, four periods between three
+    // and twelve minutes). At each of the rig's occasional readjustments the
+    // lid is shoved to a new resting offset on the same spring the focus
+    // rides, so the ghosts, the sheen and the glint all arrive together --
+    // never one effect moving alone.
+    // =====================================================================
+    [branch] if (rg2.w > 0.0005) {
+        float  sdrL = max(pp2.z, 1e-3);
+        float  aspL = pp0.y / max(pp0.x, 1e-9);            // W/H
+        float  M    = saturate(rg2.w);
+        float2 lidO = rg2.xy;
+        float  lidA = rg2.z;
+        // Where the sheet's optical centre sits: the lens axis, carried by
+        // the lid's own wander.
+        float2 ctrL = float2(rg0.z, rg0.w) + lidO * 0.45;
+        // ...and where the lamp's reflection lands in it: the lamp mirrored
+        // through that centre and pulled back inside the frame, so it is
+        // always somewhere on screen and always moving with the lamp.
+        float2 lampR = ctrL - (float2(rg0.x, rg0.y) - ctrL) * 0.55 + lidO * 0.75;
+        // The peak channel, never luminance: this film is a saturated
+        // magenta whose luminance is a third of its red, and a luminance
+        // test calls the brightest thing in the frame dark.
+        float  ownL = max(d.r, max(d.g, d.b)) / sdrL;
+        // Reflections in a cover show up in the DARK; on the bright film
+        // itself there is nothing to see. Not a hard gate -- a lean.
+        float  into = lerp(0.30, 1.0, 1.0 - smoothstep(0.25, 0.95, ownL));
+
+        // ---- the sheet is not flat: its reflections wobble --------------
+        // Only the REFLECTIONS wobble, not the transmitted picture: warping
+        // the picture would mean resampling the frame and undoing the depth
+        // of field the camera pass just computed. Physically it is also the
+        // right half -- light bounced inside the sheet crosses its uneven
+        // faces twice, transmitted light barely at all.
+        float2 wob = float2(sin(uv.y * 7.3 + lidA * 3.1 + pp2.y * 0.047),
+                            sin(uv.x * 6.1 - lidA * 2.3 + pp2.y * 0.031))
+                   * (rg4.w * pp0.xy);
+
+        // ---- GHOSTS: offset, dimmed, slightly magnified copies ----------
+        // The classic lens-flare chain: each internal bounce puts a copy of
+        // the bright field on the line from the lamp's reflection through the
+        // optical centre, at its own scale. Tinted by the coating it bounced
+        // off -- amber, green, magenta, which is what the LAPD sheet shows.
+        [branch] if (rg3.x > 0.0005) {
+            float3 gsum = float3(0.0, 0.0, 0.0);
+            [unroll] for (int gi = 0; gi < 3; gi++) {
+                float  fk = lerp(-0.42, 0.80, (float)gi * 0.5) * (0.4 + rg3.y);
+                float2 guv = ctrL + (uv - ctrL) * (1.0 + fk * 0.55)
+                           - (lampR - ctrL) * fk + wob;
+                float3 sp  = Src.SampleLevel(linearClamp, guv, 0).rgb;
+                // Same knee as halation, and on the PEAK CHANNEL for the same
+                // reason: only what is genuinely bright bounces.
+                float  ex  = smoothstep(0.55, 1.15,
+                                        max(sp.r, max(sp.g, sp.b)) / sdrL);
+                // fade where the copy runs off the plate, or the clamp would
+                // paint a static-looking band along the edge
+                float2 fe = smoothstep(0.0, 0.05, guv) * smoothstep(1.0, 0.95, guv);
+                // Desaturated on purpose. A fully saturated green bounce over
+                // a magenta film comes out OLIVE and the black masses turn to
+                // mud; these are coatings, not filters.
+                float3 tint = (gi == 0) ? float3(1.00, 0.70, 0.38)
+                           : ((gi == 1) ? float3(0.60, 0.95, 0.80)
+                                        : float3(0.95, 0.66, 1.00));
+                // ...and the green bounce is the weakest of the three, for
+                // the same reason.
+                float  gw   = (gi == 0) ? 1.00 : ((gi == 1) ? 0.55 : 0.40);
+                gsum += sp * (ex * fe.x * fe.y * gw) * tint;
+            }
+            d += gsum * (M * rg3.x * 0.085 * into);
+        }
+
+        // ---- RING GHOSTS: the concentric coloured arcs ------------------
+        // A reflection off a curved element images the field as a ring, not
+        // as a copy. Three annuli of different width and colour about a
+        // centre that is the far end of the ghost chain, so they travel with
+        // the ghosts. Weighted into the dark, never a drawn circle over the
+        // oil.
+        [branch] if (rg3.z > 0.0005) {
+            float2 rc = ctrL - (lampR - ctrL) * (0.55 + 0.30 * rg3.y);
+            float2 q  = (uv - rc) * float2(aspL, 1.0);
+            float  rr = length(q) / max(0.34 + 0.22 * rg3.y, 1e-4);
+            float  b1 = exp(-64.0 * (rr - 0.55) * (rr - 0.55));
+            float  b2 = exp(-192.0 * (rr - 0.74) * (rr - 0.74));
+            float  b3 = exp(-36.0 * (rr - 0.96) * (rr - 0.96));
+            float3 rcol = float3(0.30, 1.00, 0.68) * b1
+                        + float3(1.00, 0.80, 0.30) * b2
+                        + float3(1.00, 0.26, 0.12) * b3;
+            d += rcol * (M * rg3.z * 0.030 * into * sdrL);
+        }
+
+        // ---- SHEEN: the broad soft specular off the cover ---------------
+        // A wide anisotropic smear about the lamp's reflection, its long axis
+        // turning with the sheet. This is the "warm veiling flare across the
+        // field" of the reference -- deliberately enormous and deliberately
+        // weak, so it reads as glass in front of the picture rather than as a
+        // light in it.
+        float sheenE = 0.0;
+        [branch] if (rg3.w > 0.0005 || rg4.z > 0.0005) {
+            float  rs = max(rg4.x * pp0.y, 1e-4);          // px at this res -> uv
+            float2 q  = (uv - lampR) * float2(aspL, 1.0);
+            float  ca = cos(lidA), sa = sin(lidA);
+            float2 e2 = float2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca);
+            e2.x /= 2.7;                                   // drawn out along the sheet
+            sheenE = exp(-dot(e2, e2) / (rs * rs));
+            d += float3(1.00, 0.88, 0.70)
+               * (M * saturate(rg3.w) * 0.075 * sheenE * sdrL);
+        }
+
+        // ---- IRIDESCENCE: the thin oil film on the cover ----------------
+        // Interference colours: a slowly turning phase ramp read through a
+        // cosine palette, living only where the sheet is catching light, so
+        // it appears as a colour sweep across the sheen and nowhere else.
+        [branch] if (rg4.z > 0.0005) {
+            float2 q  = (uv - ctrL) * float2(aspL, 1.0);
+            float  ph = 7.0 * (q.x * cos(lidA) + q.y * sin(lidA))
+                      + 2.6 * sin(q.y * 3.3 - lidA * 1.7)
+                      + pp2.y * 0.021;
+            float3 ir = 0.5 + 0.5 * cos(ph + float3(0.0, 2.0944, 4.1888));
+            d += (ir - 0.333) * (M * rg4.z * 0.055 * sheenE * sdrL);
+        }
+
+        // ---- GLINT: the lamp itself, seen in the cover ------------------
+        // A soft core with a wide amber halo. The core is kept soft and
+        // modest on purpose: it is the brightest thing this block adds and it
+        // lives on an OLED, so it is a blob that wanders hundreds of pixels
+        // over the minutes, never a star pinned to a pixel.
+        [branch] if (rg4.y > 0.0005) {
+            float  dd   = length((uv - lampR) * float2(aspL, 1.0));
+            float  core = exp(-(dd * dd) / (0.030 * 0.030));
+            float  halo = exp(-dd / 0.19);
+            d += (float3(1.00, 0.90, 0.72) * (core * 0.55)
+                + float3(1.00, 0.56, 0.20) * (halo * 0.13))
+                 * (M * saturate(rg4.y) * sdrL);
         }
     }
 )hlsl"

@@ -40,8 +40,17 @@ Everything below is committed on `main`; nothing is running in the background.
 | `oil_drag`/`oil_dye_block` (drag + dye-block the field toward the oil's own motion), `rise_parallax`/`rise_parallax_dim` (small blobs rise slower, dim more), `oil_viscosity` (damps blob motion), `mouse_oil_mode` push/comb with `mouse_oil_radius`/`mouse_oil_gain`; all default off. Rising presets updated, two new mouse-variant presets. Sheets build2/shots/oildrag/ | 5abf21f |
 | Droplet ring fix: `droplet_oil_weight` now carries the local field deficit instead of a fixed 1.2, and the size floor is `max(1 px, 1.6x rim half-width)`, so an oil droplet is a real disc wherever it sits instead of a hollow rim; flicker diagnostic `tools/popdetect.py` + millisecond `--shot-series` names (flicker fix itself parked, see WORKLOG) | 7f0188d |
 | `tools/popdetect.py` hysteresis (loose-mask overlap drops classifier-drift false positives, 334 -> 0 pops); `oil_edge_mode` 0 soft / 1 crisp film edge with the band-jitter cause fixed (`lensR` takes the blob-only gradient where credible); rising presets ship mode 1, "(soft film edge)" variant carries mode 0 | 6bc9a11, 8b82ad5 |
+| Camera/DOF/tilt-shift (briefs N, R, T): perspective camera + curved focal plane fixes the DOF ring artefact, tilt-shift/freelensing focus plane with occasional readjustment (not drift), Blade Runner 2049 lab-instrument razor-sharp slice, shared camera rig block, dof_max_px 9->5 | 0f9b098, d4a96b3, 86ef4f1, 7e62f37, a9744b4, dd324a1, 8ebd567, 540d8e2, f7acb9a, 168bc42, d488b35, 8bfd600, 7f7cebf, a64c54b |
+| Diffraction (brief W): point-spread blur, darkness scales with droplet size, PSF fixed to size-dependent contrast | bfde4a7, cb6ff0a |
+| Droplet lens shading (brief X): crisp at the edge, gradual toward the interior; DOF ratio tightened by ini | 7371e38, f781695, af53f84 |
+| Bloom: disc kernel (4 radii, Gaussian weights, per-pixel radius jitter) replacing the two-ring bloom that photographed as concentric rings | 74f1094 |
+| Conservation of mass (briefs A+S) in the acid sim -- no oil spawning/vanishing in view -- shipped to every rising preset; brief V shared rig state (lamp, lid ghosts, focus, motion) + motion model (slow drift, occasional all-at-once readjustments); droplet population/clustering tuned twice (1500->1350->950, fewer small droplets, more large masses) | 5cd7b53, 6328bdb, ea25d37, dee52c7, 5b51e06, c0bb68d, fe23cec |
+| Coalescence + big hollow bubbles: touching solids become one instead of a lumpy group; big hollow bubbles sized so rings may outgrow the droplet grid cell | 2810fbb, b11521f, ef26209 |
+| Film scratches (faint, soft-edged, flickering segments) implemented, shipped OFF -- user: "no film has a line like that" | 85b3f74 |
+| Cellulose/film-overlay/light-in-the-water (briefs O, P, Q): macro cellulose texture in the black masses, film overlay artefacts (hairs/dust/scratches/light-leak/grain), wide weak bloom + volumetric fog as "light in the water" | 7049d02, 6009b1d, b62e447 |
+| V0: output dither, half an LSB against 10-bit banding | 19d5f4a |
 
-Every step kept `style=fluid` byte-identical (md5 checked before/after each change).
+Every step kept `style=fluid` byte-identical (md5 checked before/after each change); today's re-check (2026-09-18, `we-look-live.ini`) PASS, `10e36ebf1a74edfe609065d757300054`.
 
 ## The user's picks so far
 - Liquid Acid palette A (orange oil / teal ink), sweep variant B approved for "more opposite hues".

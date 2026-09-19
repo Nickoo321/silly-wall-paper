@@ -562,6 +562,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletRingLift  = getF(S, L"droplet_ring_lift", a.dropletRingLift);
         a.dropletRingClump = getF(S, L"droplet_ring_clump", a.dropletRingClump);
         // --- conservation of mass (brief S) ---
+        a.weather            = getF(S, L"weather",          a.weather);
+        a.weatherPeriodS     = getF(S, L"weather_period_s", a.weatherPeriodS);
         a.dropletRacerFrac   = getF(S, L"droplet_racer_frac",   a.dropletRacerFrac);
         a.dropletRacerSpeed  = getF(S, L"droplet_racer_speed",  a.dropletRacerSpeed);
         a.dropletRacerWobble = getF(S, L"droplet_racer_wobble", a.dropletRacerWobble);
@@ -824,19 +826,22 @@ static bool FullscreenAppActive() {
     if (!MonitorIsOurs(fgMon)) return false;
 
     // Maximized windows are not fullscreen — including borderless
-    // custom-titlebar apps (Electron, Windows Terminal). True fullscreen is a
-    // non-maximized borderless popup sized to the monitor.
+    // custom-titlebar apps (Electron, Windows Terminal); pause_on_maximized
+    // owns those. Fullscreen is any NON-maximized window whose CLIENT area
+    // covers the whole monitor. The window STYLE is deliberately not consulted:
+    // "windowed fullscreen" games (DRAGON BALL FighterZ, 2026-09-18: a
+    // WS_CAPTION window at -8,-31..2568,1448 with its frame hanging off-screen)
+    // keep a caption style and were never detected when the style was tested.
     if (IsZoomed(fg)) return false;
-    LONG style = GetWindowLongW(fg, GWL_STYLE);
-    if ((style & WS_CAPTION) == WS_CAPTION) return false;
-    if (style & WS_THICKFRAME) return false;
 
     MONITORINFO mi = { sizeof(mi) };
     if (!GetMonitorInfoW(fgMon, &mi)) return false;
-    RECT r;
-    if (!GetWindowRect(fg, &r)) return false;
-    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
-           r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+    RECT c;
+    if (!GetClientRect(fg, &c)) return false;
+    POINT tl = { c.left, c.top }, br = { c.right, c.bottom };
+    if (!ClientToScreen(fg, &tl) || !ClientToScreen(fg, &br)) return false;
+    return tl.x <= mi.rcMonitor.left && tl.y <= mi.rcMonitor.top &&
+           br.x >= mi.rcMonitor.right && br.y >= mi.rcMonitor.bottom;
 }
 
 static bool MaximizedAppActive() {
@@ -1720,6 +1725,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_width", a.dropletRingWidth, 3);
         putF(S, L"droplet_ring_lift", a.dropletRingLift, 3);
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
+        putF(S, L"weather", a.weather, 3);
+        putF(S, L"weather_period_s", a.weatherPeriodS, 1);
         putF(S, L"droplet_racer_frac", a.dropletRacerFrac, 3);
         putF(S, L"droplet_racer_speed", a.dropletRacerSpeed, 3);
         putF(S, L"droplet_racer_wobble", a.dropletRacerWobble, 3);

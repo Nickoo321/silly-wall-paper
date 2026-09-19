@@ -12,16 +12,16 @@
 //
 // Macro footage of oil floating on inked water, per reference/shots/photos/
 // liquid-acid-ref-*.jpg. Two layers:
-//   INK  — the fluid sim's dye, re-styled: luminance posterised into soft flat
+//   INK  â€” the fluid sim's dye, re-styled: luminance posterised into soft flat
 //          bands, remapped through a 4-stop duotone ramp, dark seams painted
 //          where the dye gradient is steep. The marbling/filaments are the
 //          sim's, unchanged; only the colour mapping is restyled.
-//   OIL  — a CPU metaball field (discs, webs, bubbles, plus NEGATIVE blobs that
+//   OIL  â€” a CPU metaball field (discs, webs, bubbles, plus NEGATIVE blobs that
 //          eat round holes/bubbles out of the oil) advected by the fluid's own
 //          velocity field, rendered as flat saturated fills with a thin dark
 //          rim just inside the field==1 isoline.
 // Every constant below is a named field so the look is tunable from the ini
-// and the settings window. All of it is inert when `enabled` is false — the
+// and the settings window. All of it is inert when `enabled` is false â€” the
 // display shader is then compiled without the LIQUID_ACID macro at all, so the
 // normal fluid look is bit-identical.
 // ---------------------------------------------------------------------------
@@ -29,8 +29,8 @@ struct LiquidAcidConfig {
     bool  enabled = false;          // [look] style = fluid | liquid_acid
 
     // Which ink the oil floats on:
-    //   0 "bands" — the posterised duotone ramp below (the shipped look)
-    //   1 "water" — the SHARED ink-in-water block (Beer-Lambert translucency,
+    //   0 "bands" â€” the posterised duotone ramp below (the shipped look)
+    //   1 "water" â€” the SHARED ink-in-water block (Beer-Lambert translucency,
     //               edge darkening, paper/inverted), i.e. exactly what
     //               [look] style=ink renders, with the oil composited on top.
     //               The acid refs literally are oil floating on inked water.
@@ -156,7 +156,7 @@ struct LiquidAcidConfig {
     float rimInset    = 0.0013f;    // rim band centre, INSIDE the isoline
     float rimDark     = 0.80f;      // 0..1 darkening at the rim core
     // meniscus: the THIN BRIGHT ink-coloured halo just outside the dark rim
-    // (cyan on ref 1, pale violet on ref 2) — the ink refracted by the edge of
+    // (cyan on ref 1, pale violet on ref 2) â€” the ink refracted by the edge of
     // the oil lens. Painted with the ink ramp's bright stop so it reads even
     // where the ink behind is black.
     float meniscus    = 0.85f;      // 0..1 strength
@@ -172,7 +172,7 @@ struct LiquidAcidConfig {
     float rimInkFollow= 0.0f;       // 0..1 scale the halo by the ink
                                     // brightness just OUTSIDE the isoline
                                     // (the halo is refracted ink)
-    // Paired-annulus ordering (Micromachines 13(7):1021 — the meniscus makes a
+    // Paired-annulus ordering (Micromachines 13(7):1021 â€” the meniscus makes a
     // DARK ring hugging the drop and a BRIGHT caustic piled up just outside
     // it). 0 = the shipped placement (rim at rim_inset, halo at
     // meniscus_offset, which may overlap or sit apart); 1 = force them
@@ -431,6 +431,22 @@ struct LiquidAcidConfig {
     //   droplet_racer_wobble  lateral zigzag, as a fraction of that climb.
     //   droplet_racer_r_max   only droplets at or below this radius qualify.
     //                         0 = twice droplet_r_min.
+    // --- BUBBLE WEATHER (U9, 2026-09-18) ---------------------------------
+    // The droplet population has one steady state and settles into it: after
+    // a couple of minutes the frame's density and its ring/solid mix never
+    // change again. Weather gives it SEASONS on a minutes-long clock -- a
+    // spell of rings, then of solids, a sparse spell, a crowded one -- by
+    // walking the target count and the ring share between hashed per-phase
+    // targets. It never jumps and it never kills a population: the target
+    // moves smoothly and the conserve_mass machinery does the rest (surplus
+    // shrinks away over dissolve_s, shortfall grows in over spawn_grow_s),
+    // which is why the DENSITY half only runs when conserve_mass is on.
+    //   weather           0 = today. Amplitude of the whole effect.
+    //   weather_period_s  mean seconds per phase (the phase's hold/ramp
+    //                     split is hashed too, so they are not all alike).
+    float weather         = 0.0f;   // 0..1                          weather
+    float weatherPeriodS  = 300.0f; // s per phase          weather_period_s
+
     float dropletRacerFrac  = 0.0f;  // 0..1            droplet_racer_frac
     float dropletRacerSpeed = 2.5f;  // x                 droplet_racer_speed
     float dropletRacerWobble= 0.5f;  // 0..2             droplet_racer_wobble
@@ -583,7 +599,7 @@ struct LiquidAcidConfig {
     float grainAmt    = 0.030f;     // coarse animated film grain
     float grainScale  = 3.0f;       // px per grain cell (>1 = coarse)
     // Weight the grain into the SHADOWS (the refs' dark ink is visibly noisy
-    // while the flat oil discs are clean — real sensor noise, not an overlay).
+    // while the flat oil discs are clean â€” real sensor noise, not an overlay).
     // amplitude *= lerp(1, (1-luma)^2, w). 0 = the shipped uniform grain.
     float grainShadowW= 0.0f;       //                       grain_shadow_weight
     // Ink-tinted toe: lift the very darkest pixels toward a dark version of
@@ -608,7 +624,7 @@ struct LiquidAcidConfig {
 // "Ink in water" RENDER look (ini section [ink], enabled by [look] style=ink).
 //
 // Per reference/shots/photos/ink-in-water-ref-*.jpg: black acrylic ink dropped
-// into backlit clear water. What defines it is ABSORPTION, not emission — thin
+// into backlit clear water. What defines it is ABSORPTION, not emission â€” thin
 // veils are see-through grey, thick cores are opaque, and every fold reads as
 // a darker outline because you are looking through more ink edge-on.
 //
@@ -621,7 +637,7 @@ struct LiquidAcidConfig {
 //
 // The same block is shared with the Liquid Acid look via
 // LiquidAcidConfig::inkMode = 1, so oil can float on ink-in-water.
-// All of it is inert unless `enabled` — the display shader is then compiled
+// All of it is inert unless `enabled` â€” the display shader is then compiled
 // without the INK macro and contains none of this code.
 // ---------------------------------------------------------------------------
 struct InkConfig {
@@ -644,7 +660,7 @@ struct InkConfig {
     // Duotone PAIR ROTATION. With chroma=0 the ink is a fixed two-colour
     // duotone (thin veil / opaque core). This cross-fades that pair through
     // the SAME curated complementary list liquid_acid sweeps
-    // (LiquidAcidConfig::sweepInk / sweepOil, hue-preserving HSV lerp — the
+    // (LiquidAcidConfig::sweepInk / sweepOil, hue-preserving HSV lerp â€” the
     // CSS hue matrix was tried and went muddy). Thin takes the ink anchor
     // (the darker half) and thick the oil anchor, which is exactly the
     // assignment the user's hand-picked duotone inis already use.
@@ -708,7 +724,7 @@ struct InkConfig {
 };
 
 // ---------------------------------------------------------------------------
-// Ink DROPS — a style-agnostic emitter ([drops], usable with any [look]).
+// Ink DROPS â€” a style-agnostic emitter ([drops], usable with any [look]).
 // One drop = a single downward Gaussian velocity impulse plus dye. After the
 // pressure projection that impulse is a vortex dipole, which is what rolls the
 // head into the mushroom cap in ref 1; dye-weighted gravity ([sim] gravity)
@@ -735,7 +751,7 @@ struct DropConfig {
     // The velocity impulse is SPATIALLY WIDER than the dye stamp, by this
     // ratio. With them the same size, the outer wings of the dye Gaussian sit
     // outside the moving core, get no momentum, and stay parked at the
-    // injection point as a round blob for the drop's whole life — soft mist on
+    // injection point as a round blob for the drop's whole life â€” soft mist on
     // paper, a blown-out white orb in inverted + HDR. A real drop pushes a
     // volume of water larger than itself, so >1 is also the physical case.
     // (splat `radius` is a squared scale, hence the square here.) impulse_spread
@@ -757,7 +773,7 @@ struct DropConfig {
 
 // Screen mirroring / kaleidoscope ([mirror]). A pure DISPLAY-pass uv
 // transform, applied FIRST in PSMain: before the dye sample, before the acid
-// metaball field (pp derives from uv) and before InkWater — so every look
+// metaball field (pp derives from uv) and before InkWater â€” so every look
 // (fluid / liquid_acid / ink) folds consistently, blobs, rims, swarms and
 // speckle included. mode 0 is a taken-early-out branch in the SHARED shader,
 // not a macro or a second PSO, so style=fluid stays bit-identical with it off.
@@ -768,7 +784,7 @@ struct DropConfig {
 // nearest fold line, so a later "side weight" can reuse the distance without
 // touching the mirror modes.
 // ---------------------------------------------------------------------------
-// [post] — the LAST thing that happens to the composite, for every look.
+// [post] â€” the LAST thing that happens to the composite, for every look.
 // Applied after post_chroma / post_lift and after the acid's own grain, in
 // screen space (never folded by the mirror: film sits in front of the lens).
 // Both keys are 0 by default and the whole block is skipped when they are, so
@@ -971,23 +987,23 @@ struct FluidConfig {
     // Dye-weighted gravity ([sim] gravity / gravity_pow). Style-agnostic: any
     // look can use it. Units are sim texels/s^2 per unit density, +y = DOWN.
     // Velocity dissipation 0.999/step is an ~8 s drag time constant, so terminal
-    // speed is ~8x gravity — tens, not thousands. 0 = the sim is untouched
+    // speed is ~8x gravity â€” tens, not thousands. 0 = the sim is untouched
     // (the branch in CSVorticity is not taken and the fluid look is identical).
     float gravity = 0.0f;
     float gravityPow = 1.5f;    // rho^p: thin veils hang, dense cores fall
     // Blur radius (sim texels) of the density the gravity force reads. Driving
     // it from the raw per-texel density seeds grid-scale Rayleigh-Taylor
-    // fingers that vorticity confinement then amplifies — the plume comes out
+    // fingers that vorticity confinement then amplifies â€” the plume comes out
     // a fuzzy cauliflower instead of the references' smooth sheets. Blurring
     // raises the instability wavelength to this scale. [sim] gravity_blur
     float gravityBlur = 3.0f;
-    float flowSpeed = 1.0f;     // global impulse multiplier — slows/strengthens all currents
+    float flowSpeed = 1.0f;     // global impulse multiplier â€” slows/strengthens all currents
     float splatRadius = 0.64f;      // percent, /100 like reference
     bool  shading = true;
-    float dyeDiffusion = 0.0f;      // D∇²c strength: 0 = classic sharp look, >0 = smoke-like spread
+    float dyeDiffusion = 0.0f;      // Dâˆ‡Â²c strength: 0 = classic sharp look, >0 = smoke-like spread
     float decayFast = 1.0f;         // 1.0 = WE-original balance. 0.90 starved the field to black:
                                     // wanderer dye (0.1 * 0.15 intensity) died before accumulating.
-                                    // Tail snappiness is a settings slider now — user taste, not a default.
+                                    // Tail snappiness is a settings slider now â€” user taste, not a default.
     float decayThreshold = 0.29f;
     // M4 HDR output mapping (controlled live from the tray menu)
     int   gamutMode = 1;            // 0 sRGB, 1 Display-P3 (WE parity, default), 2 BT.2020 (over-saturates vs WE)
@@ -1000,7 +1016,7 @@ struct FluidConfig {
     float idleInterval = 9.6f;
     int   idleAmount = 8;
     float idleBrightness = 1.5f;   // burst intensity (wanderers paint at 0.15)
-    // post color filter — the equivalent of Wallpaper Engine's right-panel
+    // post color filter â€” the equivalent of Wallpaper Engine's right-panel
     // color controls the user ran the original with (1/1/1/0 = neutral)
     float postSaturation = 1.0f;
     float postContrast = 1.0f;
@@ -1067,15 +1083,15 @@ struct FluidConfig {
     bool  gradientMode = false;     // render the M1 HDR test gradient instead
     int   calibratePage = 0;        // >0: render quiz pattern page N (--calibrate N)
     bool  stats = false;            // periodic dye-field readback stats to stdout
-    // "Liquid Acid" render look — additive; inert unless acid.enabled
+    // "Liquid Acid" render look â€” additive; inert unless acid.enabled
     LiquidAcidConfig acid;
-    // "Ink in water" render look — additive; inert unless ink.enabled
+    // "Ink in water" render look â€” additive; inert unless ink.enabled
     InkConfig ink;
-    // drop emitter — style-agnostic; inert unless drops.enabled
+    // drop emitter â€” style-agnostic; inert unless drops.enabled
     DropConfig drops;
-    // screen mirroring / kaleidoscope — display-only; inert unless mirror.mode
+    // screen mirroring / kaleidoscope â€” display-only; inert unless mirror.mode
     MirrorConfig mirror;
-    // final composite trim (film grain, aberration vignette) — every look
+    // final composite trim (film grain, aberration vignette) â€” every look
     PostConfig post;
 };
 
@@ -1130,7 +1146,7 @@ public:
         m_cfg.gamutMode = gamutMode;
     }
     // live settings-window access; fields are read per frame, so edits apply
-    // immediately (resolution fields excluded from the UI — they need recreate)
+    // immediately (resolution fields excluded from the UI â€” they need recreate)
     FluidConfig& Config() { return m_cfg; }
     void ReinitWanderers() { InitWanderers(); }
     // One ink drop at (x, y) PIXELS: a downward velocity impulse plus dye, and
@@ -1275,6 +1291,10 @@ private:
     // --- Liquid Acid look ---
     void CreateAcidBuffers();       // blob SRV + param CBV upload rings (always)
     void SeedAcidBlobs();           // deterministic under the shot seed
+    // Walk the blob population toward `want` without a re-seed: the surplus
+    // is marked to shrink away, a shortfall is grown in from under the bottom
+    // edge. conserve_mass only; see the brief S residue.
+    void AdjustAcidBlobCount(int want);
     void StepAcidBlobs(float dt);   // CPU sim: fluid advection + curl + repulsion
     // Droplet particle sim: nucleation, advection by the oil, attraction,
     // coalescence, dissolution; then the uniform-grid bin the shader reads.
@@ -1485,9 +1505,17 @@ private:
         // directly, so the population does not fade in at t = 0.
         float accentMix   = -1.0f;
         int   accentSmall = -1;
+        // CONSERVATION (brief S residue): baseR relaxes toward rTarget so a
+        // blob can be grown in or shrunk away instead of appearing and
+        // vanishing when the blob_count slider moves. 0 = "retire me".
+        // Equal to baseR everywhere else, so nothing relaxes on its own.
+        float rTarget = 0.0f;
     };
     std::vector<AcidBlob> m_acidBlobs;
     bool   m_acidSeeded = false;
+    // blob_count, as last requested. Under conserve_mass the population walks
+    // toward it rather than being re-seeded in one frame.
+    int    m_acidWantBlobs = -1;
     // Private stream for rise_respawn draws. Seeded from the same seed as the
     // population, stepped only by respawns, so a --shot replays exactly and
     // the fluid's own rand() sequence is never touched.

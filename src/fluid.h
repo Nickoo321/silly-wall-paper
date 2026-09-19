@@ -815,7 +815,13 @@ struct PostConfig {
     // peaks stay clean, true black is only barely lifted), animated.
     float filmGrain      = 0.0f;   // 0..1 amount                 film_grain
     float filmGrainSize  = 1.5f;   // px per grain cell      film_grain_size
-    float filmGrainSpeed = 1.0f;   // 1 = a new pattern every frame  film_grain_speed
+    float filmGrainSpeed = 1.0f;   // multiplier on film_grain_fps    film_grain_speed
+    // The grain's frame rate. Real film changes its grain once per FRAME of
+    // the stock, not once per refresh of the panel: 24 (or 30) divides 240
+    // exactly, so every pattern holds for a whole number of refreshes and
+    // the chatter has a film cadence instead of a 144 Hz fizz. Both the grain
+    // and film_noise quantise their time to this.
+    float filmGrainFps   = 24.0f;  // patterns per second     film_grain_fps
     float filmGrainColor = 0.0f;   // 0 mono .. 1 RGB       film_grain_color
     // Chromatic aberration, LATERAL and per-edge (the reference's warm/cool
     // fringe): R and B displaced in opposite directions along the local edge

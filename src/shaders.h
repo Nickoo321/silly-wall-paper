@@ -462,7 +462,7 @@ cbuffer MirrorCB : register(b3) {
     // and needs exactly the same two numbers (time, aspect) that mrP0 already
     // carries. Both amounts are 0 by default and the code is branched out.
     float4 poP0;   // x film_grain y grain_size z grain_speed w grain_color
-    float4 poP1;   // x aberration y aberr_px z aberr_field w vignette
+    float4 poP1;   // x -          y grainFps   z -            w vignette
 };
 
 // |d| with the corner rounded off over a band of half-width s: equals abs(d)
@@ -2254,10 +2254,11 @@ R"hlsl(
         // is TRUE BLACK gets only a whisper -- an off OLED pixel is the best
         // thing on this panel and grain would light the whole frame's floor.
         float2 gc  = floor(i.pos.xy / max(poP0.y, 0.25));
-        // One new pattern per frame at speed 1 (144 = this machine's rate);
-        // lower speeds hold a pattern for several frames, which is the slow
-        // chatter of a big-grain stock.
-        float  tq  = floor(mrP0.w * 144.0 * max(poP0.z, 0.0));
+        // film_grain_fps patterns per second at speed 1 (24 by default: the
+        // grain changes once per FRAME of the stock, not once per refresh);
+        // lower speeds hold a pattern longer, the slow chatter of a big-grain
+        // stock.
+        float  tq  = floor(mrP0.w * max(poP1.y, 1.0) * max(poP0.z, 0.0));
         float2 tj  = frac(tq * float2(0.1031, 0.0973)) * 733.0;
         float  n0  = PostHash21(gc + tj);
         float3 nz  = float3(n0, n0, n0);
@@ -2372,7 +2373,7 @@ cbuffer PostPassCB : register(b0) {
     float4 pp3;   // x dust       y hairs      z scratches          w leak
     float4 pp4;   // x rate (s)   y noise      z noiseSize(this res) w H/1440
     float4 pp5;   // x stock      y fog        z bloom   w dofMaxPx(this res; 0 = alpha is not a CoC)
-    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z psfPx(this res) w -
+    float4 pp6;   // x fogReach(uv) y bloomPx(this res) z psfPx(this res) w grainFps
     float4 pp7;   // x dither  y halation  z halationPx(this res)  w warmth
 };
 // ---- THE RIG -------------------------------------------------------------
@@ -2864,7 +2865,9 @@ R"hlsl(
     // ---- film grain, after the glass ------------------------------------
     [branch] if (pp1.y > 0.0005) {
         float2 gc  = floor(i.pos.xy / max(pp1.z, 0.25));
-        float  tq  = floor(pp2.y * 144.0 * max(pp1.w, 0.0));
+        // film_grain_fps patterns per second (24 by default: once per frame of
+        // the stock, a whole number of panel refreshes each) times the speed.
+        float  tq  = floor(pp2.y * max(pp6.w, 1.0) * max(pp1.w, 0.0));
         float2 tj  = frac(tq * float2(0.1031, 0.0973)) * 733.0;
         float  n0  = PHash21(gc + tj);
         float3 nz  = float3(n0, n0, n0);
@@ -2875,11 +2878,12 @@ R"hlsl(
         d = Emulsion(d, nz, pp1.y, max(pp2.z, 1e-3));
     }
     // ---- film_noise: the finer, faster layer under the stock's grain -----
-    // A new pattern every frame whatever the grain speed, one px at 1440p by
-    // default: the emulsion's fizz as against the stock's grain structure.
+    // A new pattern every FRAME OF THE STOCK (film_grain_fps, ignoring the
+    // grain speed multiplier), one px at 1440p by default: the emulsion's
+    // fizz as against the stock's grain structure, on the same film cadence.
     [branch] if (pp4.y > 0.0005) {
         float2 nc = floor(i.pos.xy / max(pp4.z, 0.25));
-        float  tq = floor(pp2.y * 144.0);
+        float  tq = floor(pp2.y * max(pp6.w, 1.0));
         float2 tj = frac(tq * float2(0.0891, 0.1237)) * 557.0;
         float  n0 = PHash21(nc + tj + 211.7);
         d = Emulsion(d, float3(n0, n0, n0), pp4.y, max(pp2.z, 1e-3));

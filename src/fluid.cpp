@@ -1055,8 +1055,10 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[29] = fminf(fmaxf(po.halation, 0.0f), 1.0f);
     c[30] = fmaxf(po.halationPx, 1.0f) * scale;
     c[31] = fminf(fmaxf(po.halationWarmth, 0.0f), 1.0f);
-    // c[27] spare. light_x / light_y / light_drift used to live here; the
-    // lamp is part of the RIG now and arrives in its own block below.
+    // GRAIN FRAME RATE (pp6.w): the grain and film_noise quantise their time
+    // to this many patterns per second. light_x / light_y / light_drift used
+    // to live in c[27]; the lamp is part of the RIG now (block below).
+    c[27] = fmaxf(po.filmGrainFps, 1.0f);
 
     // ---- THE RIG, as ONE contiguous block ---------------------------------
     // b3 -- the root-constant block the display pass uses for the mirror fold
@@ -1255,8 +1257,9 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         // the output resolution
         fmaxf(fmaxf(po.filmGrainSize, 0.25f) * ((float)(h > 0 ? h : 1) / 1440.0f), 0.25f),
         fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
-        fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationPx, 0.0f),
-        fminf(fmaxf(po.aberrationField, 0.0f), 2.0f),
+        // poP1: x spare (the lateral aberration moved to the post pass, item Z),
+        // y the grain frame rate, z spare, w vignette
+        0.0f, fmaxf(po.filmGrainFps, 1.0f), 0.0f,
         fminf(fmaxf(po.vignette, 0.0f), 1.0f),
     };
     memcpy(out, c, sizeof(c));

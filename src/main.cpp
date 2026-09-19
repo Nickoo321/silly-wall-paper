@@ -370,6 +370,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmGrain      = getF(S, L"film_grain", po.filmGrain);
         po.filmGrainSize  = getF(S, L"film_grain_size", po.filmGrainSize);
         po.filmGrainSpeed = getF(S, L"film_grain_speed", po.filmGrainSpeed);
+        po.filmGrainFps   = getF(S, L"film_grain_fps", po.filmGrainFps);
         po.filmGrainColor = getF(S, L"film_grain_color", po.filmGrainColor);
         po.aberration     = getF(S, L"aberration", po.aberration);
         po.aberrationPx   = getF(S, L"aberration_px", po.aberrationPx);
@@ -1551,6 +1552,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_grain", po.filmGrain, 3);
         putF(S, L"film_grain_size", po.filmGrainSize, 2);
         putF(S, L"film_grain_speed", po.filmGrainSpeed, 2);
+        putF(S, L"film_grain_fps", po.filmGrainFps, 1);
         putF(S, L"film_grain_color", po.filmGrainColor, 3);
         putF(S, L"aberration", po.aberration, 3);
         putF(S, L"aberration_px", po.aberrationPx, 2);

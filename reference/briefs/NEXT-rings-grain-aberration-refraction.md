@@ -326,3 +326,33 @@ PLAN (Fable, 2026-09-18 19:55, user: "think about all of them first, then 2 exec
     droplet population) -> S residue (blob_count reseed, y-respawn mass).
   Then J accent-by-size (display palette) as a third executor when a slot is free; Sonnet rote
     (md5, sheets, docs) at the end. Fable asks before every swap.
+
+## Z. Real lateral chromatic aberration in the POST pass (2026-09-18, Fable diagnosis)
+
+The user cannot see the aberration on the panel, and raising the keys does not help:
+`aberration 0.6 / aberration_px 3.0 / aberration_field 1.2` only gave a thicker WARM rim on
+every side of every droplet, no cool side anywhere (build2/shots/live/2026-09-18-aberr-0-*4x.png).
+
+Why (src/shaders.h, the `[post]` block in the display pass, ~line 2213): the current code is a
+first-order expansion, `dR = dot(grad R, +off)`, `dB = dot(grad B, -off)` with `off` along the
+LUMINANCE gradient. The luminance gradient always points toward the brighter side, so `dR` is
+positive on BOTH sides of a dark droplet and `dB` negative on both -- a symmetric red-plus,
+blue-minus outline, not a split. A lateral split needs the sign to flip across the edge, which
+a derivative about the pixel cannot do, and a 3 px shift cannot be expressed by one derivative
+at all. The display pass could not resample (the discs are computed, not stored). The post pass
+CAN: m_postTex is stored.
+
+Do (executor, in kPostSrc, AFTER the psf/glow taps, BEFORE grain/dither):
+- Transverse CA: sample R at uv + n_r * s, G at uv, B at uv - n_r * s, where n_r is the
+  direction from frame centre and s = aberration_px (px at 1440p, scaled with the frame) *
+  (aberration_field-shaped radial ramp: ~0 at centre, full at the corners; keep a small
+  floor so it exists mid-frame too). This is the classic per-frame radial split the LAPD sheet
+  shows; keep the keys `aberration` (master), `aberration_px`, `aberration_field` (same
+  names, same slider ranges 0..1 / 0..6 / 0..2).
+- Remove the derivative version from the display pass (or leave it behind `aberration_mode 0`
+  if it is cheaper than arguing; default to the new one for every ini that sets aberration).
+- The radial offset must MOVE with the rig (CameraRig on b3): the optical centre = the rig's
+  current lens centre (slight drift + the occasional readjustment), never the exact frame centre.
+- style=fluid: keys are 0 there -> post pass not entered -> md5 must hold.
+- Verify: 4x nearest-neighbour crop of a droplet at the frame edge shows red on the outer side,
+  blue/cyan on the inner side; centre droplets near-neutral. One --shot at 1440p, seed 1234.

@@ -599,6 +599,40 @@ struct LiquidAcidConfig {
     float dropletCrustR     = 1.0f;   //  0..1        droplet_crust_r
     float massRim           = 0.0f;   //  0..1             mass_rim
 
+    // --- MULTICOLOUR OIL (brief AE, the AE+AH decision) -------------------
+    // Ref oil-colour-combo-ref-1.jpg, which the user rated positive: a
+    // magenta film carrying soft CYAN patches that read like a light leak,
+    // with the black masses sitting over both and the droplets inside the
+    // black lit in the second colour. The decision block is explicit about
+    // WHY this is a dye in the film and not a film-stock overlay: an additive
+    // leak lifts the black corners, and on this panel the black has to stay
+    // black; and in the keeper the cyan sits UNDER the masses, which only a
+    // dye can do.
+    //
+    // So: a second hue lives in the thin film as a slow scalar field that the
+    // sim's own velocity advects, so the patches stretch and fold with the
+    // flow instead of sliding over it. Patch scale is a fraction of the
+    // frame; the field decays toward a base so it can never wash out to a
+    // uniform tint, and its noise phase jumps on the rig's readjustment so
+    // the patches re-lay all at once with everything else (the OLED rule).
+    //   film_hue2       degrees off the palette's own hue for the patches
+    //   film_hue2_amt   0 = today. How far the film goes toward that hue.
+    //   film_hue2_scale patch size as a fraction of the frame (1/4 .. 1/2)
+    //   film_hue2_drift how fast the patches wander on their own
+    //   film_hue2_decay how fast the field falls back to its base
+    //   film_hue3 / _amt an optional third hue off a second threshold of the
+    //                   SAME field -- no extra field, no extra per-pixel cost
+    //   crust_hue_mix   how much of the shift the droplets INSIDE a mass take
+    //                   (1 = the same as the film, which is the ref's look)
+    float filmHue2      = 0.0f;   // degrees            film_hue2
+    float filmHue2Amt   = 0.0f;   // 0..1           film_hue2_amt
+    float filmHue2Scale = 0.35f;  // frac of frame film_hue2_scale
+    float filmHue2Drift = 1.0f;   // 0..2           film_hue2_drift
+    float filmHue2Decay = 0.35f;  // 0..2           film_hue2_decay
+    float filmHue3      = 0.0f;   // degrees            film_hue3
+    float filmHue3Amt   = 0.0f;   // 0..1           film_hue3_amt
+    float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
+
     // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
     // The user, on the halation frame: "the bottom right blob isn't getting
     // more out of focus even as it approaches the edge." True, and by
@@ -1647,6 +1681,19 @@ private:
     // blob_count, as last requested. Under conserve_mass the population walks
     // toward it rather than being re-seeded in one frame.
     int    m_acidWantBlobs = -1;
+    // ---- the hue2 MIX FIELD (brief AE) -----------------------------------
+    // Deliberately tiny: the patches the reference shows are a quarter to a
+    // half of the frame across, so a 20x12 grid carries them with room to
+    // spare and the whole field fits in the acid cbuffer's slack -- no new
+    // texture, no new descriptor, nothing added to a root signature that is
+    // already at its 64-DWORD limit. Advected semi-Lagrangian on the CPU off
+    // the 64x36 velocity readback that the blob sim already keeps.
+    static const int kMixW = 20, kMixH = 12;
+    std::vector<float> m_mixField;      // kMixW*kMixH, 0..1
+    float    m_mixPhase = 0.0f;         // noise phase; jumps on a readjust
+    float    m_mixPhaseTarget = 0.0f;
+    bool     m_mixSeeded = false;
+    void StepHueField(float dt);
     // Private stream for rise_respawn draws. Seeded from the same seed as the
     // population, stepped only by respawns, so a --shot replays exactly and
     // the fluid's own rand() sequence is never touched.

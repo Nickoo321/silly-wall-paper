@@ -580,6 +580,14 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         // --- conservation of mass (brief S) ---
         a.weather            = getF(S, L"weather",          a.weather);
         a.weatherPeriodS     = getF(S, L"weather_period_s", a.weatherPeriodS);
+        a.filmHue2           = getF(S, L"film_hue2",        a.filmHue2);
+        a.filmHue2Amt        = getF(S, L"film_hue2_amt",    a.filmHue2Amt);
+        a.filmHue2Scale      = getF(S, L"film_hue2_scale",  a.filmHue2Scale);
+        a.filmHue2Drift      = getF(S, L"film_hue2_drift",  a.filmHue2Drift);
+        a.filmHue2Decay      = getF(S, L"film_hue2_decay",  a.filmHue2Decay);
+        a.filmHue3           = getF(S, L"film_hue3",        a.filmHue3);
+        a.filmHue3Amt        = getF(S, L"film_hue3_amt",    a.filmHue3Amt);
+        a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.dropletMassBias    = getF(S, L"droplet_mass_bias",     a.dropletMassBias);
         a.dropletCrustDens   = getF(S, L"droplet_crust_density", a.dropletCrustDens);
         a.dropletCrustR      = getF(S, L"droplet_crust_r",       a.dropletCrustR);
@@ -1765,6 +1773,14 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_ring_clump", a.dropletRingClump, 3);
         putF(S, L"weather", a.weather, 3);
         putF(S, L"weather_period_s", a.weatherPeriodS, 1);
+        putF(S, L"film_hue2", a.filmHue2, 1);
+        putF(S, L"film_hue2_amt", a.filmHue2Amt, 3);
+        putF(S, L"film_hue2_scale", a.filmHue2Scale, 3);
+        putF(S, L"film_hue2_drift", a.filmHue2Drift, 3);
+        putF(S, L"film_hue2_decay", a.filmHue2Decay, 3);
+        putF(S, L"film_hue3", a.filmHue3, 1);
+        putF(S, L"film_hue3_amt", a.filmHue3Amt, 3);
+        putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"droplet_mass_bias", a.dropletMassBias, 3);
         putF(S, L"droplet_crust_density", a.dropletCrustDens, 3);
         putF(S, L"droplet_crust_r", a.dropletCrustR, 3);

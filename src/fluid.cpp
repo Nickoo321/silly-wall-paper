@@ -1815,6 +1815,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         UpdateVelocityReadback();
         StepAcidBlobs(dt);
         StepAcidDroplets(dt);
+        StepHueField(dt);      // brief AE: the second dye hue's patch field
         UploadAcidConstants();
         // Oil as an obstacle to the ink: needs the blob buffer this frame's
         // display draw will read, so it runs after the upload. Returns at once
@@ -2376,8 +2377,13 @@ struct AcidParamsGPU {
     float p10[4], p11[4], p12[4], p13[4], p14[4], p15[4], p16[4], p17[4];
     float p18[4], p19[4], p20[4], p21[4], p22[4], p23[4], men[4];
     float p24[4], p25[4], p26[4], p27[4], p28[4], p29[4];
+    // brief AE: hue2 params, then the 20x12 mix field packed four cells per
+    // float4. It rides the cbuffer's slack -- no new texture, no descriptor,
+    // and nothing added to a root signature already at its 64-DWORD limit.
+    float p30[4], p31[4];
+    float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 624, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1616, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -2854,6 +2860,125 @@ void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
                     m_velCpu[((size_t)y * kVelW + x) * 2 + 0],
                     m_velCpu[((size_t)y * kVelW + x) * 2 + 1]);
     fclose(f);
+}
+
+// ===========================================================================
+// THE HUE2 MIX FIELD (brief AE)
+//
+// One scalar per cell, 0..1, saying how far the film at that point has gone
+// toward the second dye hue. Three things happen to it every frame:
+//
+//   1. ADVECTION. Semi-Lagrangian off the same 64x36 velocity readback the
+//      blobs ride: each cell looks BACK along the flow and takes what was
+//      there. That is what makes a patch stretch and fold with the sim
+//      instead of sliding over it as an overlay would, which is the whole
+//      reason the brief asks for t3 rather than a scrolling texture.
+//   2. INJECTION. Slow large-scale value noise at the patch scale, added
+//      toward its own target, so new patches keep arriving.
+//   3. DECAY toward a base of 0.5. Without it, advection plus injection
+//      drifts the whole field to one value over minutes and the second hue
+//      stops being patches and becomes a flat tint over everything.
+//
+// The noise PHASE jumps on the rig's readjustment (the focus spring), so the
+// patches re-lay at the same moment the lamp, the lid and the focus move --
+// nothing in this look is allowed to sit still on the panel.
+// ===========================================================================
+void FluidRenderer::StepHueField(float dt) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const int N = kMixW * kMixH;
+    if ((int)m_mixField.size() != N) { m_mixField.assign((size_t)N, 0.5f); m_mixSeeded = false; }
+    if (a.filmHue2Amt <= 0.0005f && a.filmHue3Amt <= 0.0005f) return;
+    if (dt <= 0.0f) return;
+
+    // A 2D value noise with a couple of octaves, cheap and smooth. Its own
+    // slow drift is the "always moving" half; m_mixPhase is the "all at once"
+    // half, eased toward its target so a readjustment re-lays the patches
+    // over a second rather than cutting to them.
+    auto vhash = [](int xi, int yi, int zi) {
+        uint32_t h = (uint32_t)(xi * 374761393) ^ (uint32_t)(yi * 668265263)
+                   ^ (uint32_t)(zi * 2246822519u);
+        h ^= h >> 13; h *= 1274126177u; h ^= h >> 16;
+        return (h >> 8) * (1.0f / 16777216.0f);
+    };
+    auto vnoise = [&](float x, float y, int z) {
+        const int xi = (int)floorf(x), yi = (int)floorf(y);
+        const float fx = x - xi, fy = y - yi;
+        const float ux = fx * fx * (3.0f - 2.0f * fx), uy = fy * fy * (3.0f - 2.0f * fy);
+        const float a00 = vhash(xi, yi, z),     a10 = vhash(xi + 1, yi, z);
+        const float a01 = vhash(xi, yi + 1, z), a11 = vhash(xi + 1, yi + 1, z);
+        return (a00 + (a10 - a00) * ux) + ((a01 + (a11 - a01) * ux)
+             - (a00 + (a10 - a00) * ux)) * uy;
+    };
+
+    // the readjustment shove: ease the phase to its target on the same clock
+    // the focus spring runs on
+    m_mixPhase += (m_mixPhaseTarget - m_mixPhase) * (1.0f - expf(-dt / 1.6f));
+
+    const float scale = fminf(fmaxf(a.filmHue2Scale, 0.08f), 0.90f);
+    const float drift = fmaxf(a.filmHue2Drift, 0.0f);
+    const float decay = fmaxf(a.filmHue2Decay, 0.0f);
+    // cells per patch: scale is a fraction of the FRAME, so a scale of 0.35
+    // is about seven cells across on a 20-wide grid.
+    const float freq  = 1.0f / fmaxf(scale, 1e-3f);
+    const float t     = m_time * 0.03f * drift + m_mixPhase;
+
+    std::vector<float> next((size_t)N, 0.0f);
+    const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    // First frame: take the noise target outright rather than relaxing toward
+    // it from a flat 0.5, or the opening minute of a cold start (and of every
+    // --shot) would show no patches at all.
+    const bool seeding = !m_mixSeeded;
+    for (int y = 0; y < kMixH; y++) {
+        for (int x = 0; x < kMixW; x++) {
+            const float u = ((float)x + 0.5f) / (float)kMixW;
+            const float v = ((float)y + 0.5f) / (float)kMixH;
+            // ---- 1. look back along the flow ----------------------------
+            float vu = 0.0f, vv = 0.0f;
+            {
+                float fx = u * kVelW - 0.5f, fy = v * kVelH - 0.5f;
+                int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+                float tx = fx - x0, ty = fy - y0;
+                auto at = [&](int xi, int yi, int c) {
+                    xi = xi < 0 ? 0 : (xi >= kVelW ? kVelW - 1 : xi);
+                    yi = yi < 0 ? 0 : (yi >= kVelH ? kVelH - 1 : yi);
+                    return m_velCpu[((size_t)yi * kVelW + xi) * 2 + c];
+                };
+                vu = (at(x0, y0, 0) * (1 - tx) + at(x0 + 1, y0, 0) * tx) * (1 - ty)
+                   + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
+                vv = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
+                   + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
+                vu /= fmaxf((float)m_simW, 1.0f);      // sim texels/s -> uv/s
+                vv /= fmaxf((float)m_simH, 1.0f);
+            }
+            // ...and the oil's own rise carries the film with it
+            const float bu = u - vu * dt;
+            const float bv = v - (vv - a.riseSpeed * 0.35f) * dt;
+            // bilinear fetch of the PREVIOUS field, clamped at the edges
+            float src;
+            {
+                float fx = bu * kMixW - 0.5f, fy = bv * kMixH - 0.5f;
+                int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+                float tx = fx - x0, ty = fy - y0;
+                auto at = [&](int xi, int yi) {
+                    xi = xi < 0 ? 0 : (xi >= kMixW ? kMixW - 1 : xi);
+                    yi = yi < 0 ? 0 : (yi >= kMixH ? kMixH - 1 : yi);
+                    return m_mixField[(size_t)yi * kMixW + xi];
+                };
+                src = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
+                    + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+            }
+            // ---- 2. inject, and 3. fall back toward the base -------------
+            const float nz = vnoise(u * aspect * freq + t * 0.7f,
+                                    v * freq - t * 0.5f, 0);
+            const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
+                                     v * freq * 2.3f + t * 0.3f, 7);
+            const float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
+            const float k = seeding ? 1.0f : (1.0f - expf(-decay * dt));
+            next[(size_t)y * kMixW + x] = src + (tgt - src) * k;
+        }
+    }
+    m_mixField.swap(next);
+    m_mixSeeded = true;
 }
 
 void FluidRenderer::StepAcidBlobs(float dt) {
@@ -4491,6 +4616,10 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_camMoveDur = fmaxf(po.focusTiltMoveS, 0.15f) * (0.8f + 0.4f * rf());
     // ...and the lid is shoved to a new resting offset by the same move.
     m_lidPrevX = m_lidTargX; m_lidPrevY = m_lidTargY; m_lidPrevR = m_lidTargR;
+    // ...and the hue2 patches re-lay on the same move (brief AE): the phase
+    // jump is eased in StepHueField, so they re-form over a second rather
+    // than cutting.
+    m_mixPhaseTarget += 3.0f + rf() * 5.0f;
     m_lidTargX = (rf() * 2.0f - 1.0f) * 0.10f;
     m_lidTargY = (rf() * 2.0f - 1.0f) * 0.08f;
     m_lidTargR = (rf() * 2.0f - 1.0f) * 0.9f;
@@ -4773,6 +4902,19 @@ void FluidRenderer::UploadAcidConstants() {
     float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
                      3.0f / 1440.0f, 0.0f, 0.0f };
     memcpy(p.p29, p29, 16);
+    // ---- brief AE: the second (and third) dye hue ------------------------
+    float p30[4] = { fminf(fmaxf(a.filmHue2Amt, 0.0f), 1.0f),
+                     a.filmHue2,
+                     fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f),
+                     a.filmHue3 };
+    float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f), 0.0f, 0.0f, 0.0f };
+    memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
+    {
+        const int N = kMixW * kMixH;
+        for (int i = 0; i < 60 * 4; i++)
+            ((float*)p.mix)[i] = (i < N && (int)m_mixField.size() == N)
+                               ? m_mixField[(size_t)i] : 0.0f;
+    }
     memcpy(m_acidParamData[fi], &p, sizeof(p));
 
     // ---- droplet particle buffers ---------------------------------------

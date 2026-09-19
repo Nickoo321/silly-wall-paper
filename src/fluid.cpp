@@ -931,6 +931,7 @@ bool FluidRenderer::PostActive() const {
                          po.fog > 0.0005f || po.bloom > 0.0005f ||
                          po.psfPx > 0.01f || po.dither > 0.0005f ||
                          po.aberration > 0.0005f ||
+                         po.shimmer > 0.0005f || po.pixelShiftPx > 0.01f ||
                          po.halation > 0.0005f ||
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
@@ -1078,11 +1079,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
     rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
     rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
+    // rg3 (12..15) -- MOTION (item V3). rg4 (16..19) is deliberately left
+    // free: the transparent lid is being built on its own branch and was told
+    // to take that slot, so the two do not have to repack each other.
+    rig[12] = fminf(fmaxf(po.shimmer, 0.0f), 1.0f);
+    rig[13] = fmaxf(po.shimmerPx, 0.0f) * scale;
+    // the orbit is authored in px at 1440p and handed over in uv
+    rig[14] = m_rig.shiftX * scale / (float)(m_width  > 0 ? m_width  : 1);
+    rig[15] = m_rig.shiftY * scale / (float)(m_height > 0 ? m_height : 1);
 
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(m_psoPost.Get());
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
     m_cmd->SetGraphicsRoot32BitConstants(6, 20, rig, 0);
+    // The sim's own low-res velocity, so the thermal shimmer is ADVECTED by
+    // the fluid rather than wobbling on its own clock: a burst that moves the
+    // oil pushes the heat ahead of it (the user's rule -- every post effect's
+    // position is an idle drift plus a term from the fluid). Only bound when
+    // the shimmer is actually on; t3 is otherwise untouched by this pass.
+    if (po.shimmer > 0.0005f && m_velLow.res)
+        m_cmd->SetGraphicsRootDescriptorTable(5, m_velLow.srv);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_postSrv);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
@@ -1243,6 +1259,9 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
     const MirrorConfig& mr = m_cfg.mirror;
     const PostConfig& po = m_cfg.post;
     const float aspect = (float)(w > 0 ? w : 1) / (float)(h > 0 ? h : 1);
+    const float vw = fminf(fmaxf(po.vignetteWander, 0.0f), 1.0f);
+    const float vignCx = fminf(fmaxf(0.5f + (m_rig.axisX - 0.5f) * 4.0f * vw, 0.18f), 0.82f);
+    const float vignCy = fminf(fmaxf(0.5f + (m_rig.axisY - 0.5f) * 4.0f * vw, 0.18f), 0.82f);
     const float c[20] = {
         (float)mr.mode, (float)mr.segments, aspect, m_time,
         mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
@@ -1255,8 +1274,12 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         // the output resolution
         fmaxf(fmaxf(po.filmGrainSize, 0.25f) * ((float)(h > 0 ? h : 1) / 1440.0f), 0.25f),
         fmaxf(po.filmGrainSpeed, 0.0f), fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f),
-        fminf(fmaxf(po.aberration, 0.0f), 1.0f), fmaxf(po.aberrationPx, 0.0f),
-        fminf(fmaxf(po.aberrationField, 0.0f), 2.0f),
+        // 16,17: the VIGNETTE's centre in uv (item V3). It follows the rig's
+        // lens, amplified, so the darkest corner rotates over minutes rather
+        // than being burnt into one corner of the panel. wander 0 puts it
+        // back at 0.5, 0.5 -- which is the constant this used to be.
+        vignCx, vignCy,
+        0.0f,                            // 18: spare (was aberration_field)
         fminf(fmaxf(po.vignette, 0.0f), 1.0f),
     };
     memcpy(out, c, sizeof(c));
@@ -4161,6 +4184,14 @@ void FluidRenderer::StepOilDrag(float dt) {
 // (the haze, the bloom, the depth of field and, later, the lid ghosts, the
 // flare and the vignette centre) reads ONE set of numbers and agrees about
 // where the rig is.
+void FluidRenderer::RigState(float out[8]) const {
+    out[0] = m_rig.lampX;  out[1] = m_rig.lampY;
+    out[2] = m_rig.axisX;  out[3] = m_rig.axisY;
+    out[4] = m_rig.tiltAngle * 57.29577951f;
+    out[5] = m_rig.focus;
+    out[6] = m_rig.shiftX; out[7] = m_rig.shiftY;
+}
+
 void FluidRenderer::StepCameraRig(float dt) {
     const PostConfig& po = m_cfg.post;
     const float DEG = 0.01745329252f;
@@ -4170,8 +4201,8 @@ void FluidRenderer::StepCameraRig(float dt) {
     };
     // ---- the lamp (was computed in kPostSrc; the numbers are its own, so
     // the haze and the bloom come out exactly as they did before) ----------
-    m_rig.lampX = po.lightX;
-    m_rig.lampY = po.lightY;
+    m_rig.lampX = po.lightX + m_camLampOX;
+    m_rig.lampY = po.lightY + m_camLampOY;
     if (po.lightDrift > 0.0005f) {
         const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
         const float t  = m_time;
@@ -4186,8 +4217,8 @@ void FluidRenderer::StepCameraRig(float dt) {
     // this whole family of effects exists to avoid. Its own slow sines, in
     // step with the lamp's idle drift but not in phase with it -- they are
     // different parts of one rig, not one part copied twice.
-    m_rig.axisX = fminf(fmaxf(po.cameraAxisX, -2.0f), 3.0f);
-    m_rig.axisY = fminf(fmaxf(po.cameraAxisY, -2.0f), 3.0f);
+    m_rig.axisX = fminf(fmaxf(po.cameraAxisX + m_camAxOX, -2.0f), 3.0f);
+    m_rig.axisY = fminf(fmaxf(po.cameraAxisY + m_camAxOY, -2.0f), 3.0f);
     if (po.lightDrift > 0.0005f) {
         const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
         const float t  = m_time;
@@ -4195,6 +4226,20 @@ void FluidRenderer::StepCameraRig(float dt) {
                       + 0.014f * sinf(t * 0.0331f + 5.1f)) * kd;
         m_rig.axisY += (0.022f * sinf(t * 0.0193f + 0.4f)
                       + 0.012f * sinf(t * 0.0447f + 3.6f)) * kd;
+    }
+    // ---- OLED PIXEL-SHIFT ORBIT (item V3) --------------------------------
+    // The safety net under everything else: whatever the picture is doing,
+    // the whole finished frame walks a slow closed orbit so no feature ever
+    // holds one pixel. Two incommensurate periods (about 7 and 11 minutes) so
+    // the path never repeats exactly, and the step per frame at 144 Hz is a
+    // few thousandths of a pixel -- far below anything the eye can follow,
+    // which is the entire trick: invisible motion that still moves.
+    {
+        const float t = m_time;
+        m_rig.shiftX = po.pixelShiftPx * (0.72f * sinf(t * 0.0150f)
+                                        + 0.28f * sinf(t * 0.0095f + 1.9f));
+        m_rig.shiftY = po.pixelShiftPx * (0.72f * cosf(t * 0.0131f + 0.7f)
+                                        + 0.28f * sinf(t * 0.0088f + 4.2f));
     }
     m_rig.tiltAmt = po.focusTilt;
 
@@ -4232,10 +4277,21 @@ void FluidRenderer::StepCameraRig(float dt) {
         e += (1.0f - e) * (t * t * (3.0f - 2.0f * t));
         m_rig.tiltAngle = m_camAngleA + (m_camAngleB - m_camAngleA) * e;
         m_rig.focus     = m_camFocusA + (m_camFocusB - m_camFocusA) * e;
+        // ...and the LAMP and the LENS CENTRE ride the same spring, so the
+        // whole rig arrives at once. This is the user's model exactly: never
+        // one effect moving alone.
+        m_camLampOX = m_camLampAX + (m_camLampBX - m_camLampAX) * e;
+        m_camLampOY = m_camLampAY + (m_camLampBY - m_camLampAY) * e;
+        m_camAxOX   = m_camAxAX + (m_camAxBX - m_camAxAX) * e;
+        m_camAxOY   = m_camAxAY + (m_camAxBY - m_camAxAY) * e;
         m_rig.movePhase = u;
         if (u >= 1.0f) {
             m_rig.tiltAngle = m_camAngleA = m_camAngleB;
             m_rig.focus     = m_camFocusA = m_camFocusB;
+            m_camLampOX = m_camLampAX = m_camLampBX;
+            m_camLampOY = m_camLampAY = m_camLampBY;
+            m_camAxOX   = m_camAxAX = m_camAxBX;
+            m_camAxOY   = m_camAxAY = m_camAxBY;
             m_camMoveT = -1.0f;
             m_camHold  = po.focusTiltPeriod * (0.55f + 0.9f * rf());
         }
@@ -4252,6 +4308,15 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_camFocusA = m_rig.focus;
     m_camAngleB = po.focusTiltAngle * DEG + (rf() * 2.0f - 1.0f) * 70.0f * DEG;
     m_camFocusB = po.cameraFocus + (rf() * 2.0f - 1.0f) * 0.22f;
+    // The lamp swings further than the lens does, because on a real rig the
+    // lamp is the thing somebody actually picks up and puts down again.
+    const float rj = fminf(fmaxf(po.rigReadjust, 0.0f), 1.0f);
+    m_camLampAX = m_camLampOX; m_camLampAY = m_camLampOY;
+    m_camAxAX   = m_camAxOX;   m_camAxAY   = m_camAxOY;
+    m_camLampBX = (rf() * 2.0f - 1.0f) * 0.28f * rj;
+    m_camLampBY = (rf() * 2.0f - 1.0f) * 0.20f * rj;
+    m_camAxBX   = (rf() * 2.0f - 1.0f) * 0.09f * rj;
+    m_camAxBY   = (rf() * 2.0f - 1.0f) * 0.09f * rj;
     m_camMoveDur = fmaxf(po.focusTiltMoveS, 0.15f) * (0.8f + 0.4f * rf());
     m_camMoveT = 0.0f;
     m_rig.movePhase = 0.0f;

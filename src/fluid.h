@@ -976,6 +976,32 @@ struct PostConfig {
     float halation       = 0.0f;   // 0..1 master                    halation
     float halationPx     = 14.0f;  // radius, px at 1440p         halation_px
     float halationWarmth = 0.75f;  // 0 white .. 1 red-orange halation_warmth
+
+    // --- MOTION (item V3) -------------------------------------------------
+    // The user's rule for this whole family: nothing may sit at a fixed
+    // screen position on an OLED, ever. And the motion model they chose is
+    // specific -- a SLIGHT, SLOW drift all the time, plus OCCASIONAL
+    // readjustments where EVERYTHING moves at once, eased, with a settle.
+    // Never constant visible motion, and never one effect moving alone.
+    //   shimmer        heat above the lamp: a very fine refractive wobble of
+    //                  a pixel or two, strongest near the lamp, and ADVECTED
+    //                  by the sim's own low-res velocity field, so a burst
+    //                  that moves the oil pushes the shimmer ahead of it.
+    //   vignette_wander  the vignette's centre follows the rig's lens, so the
+    //                  darkest corner rotates over minutes instead of being
+    //                  burnt into one corner of the panel.
+    //   pixel_shift_px the classic OLED safety net: the entire finished image
+    //                  translates on a many-minute orbit, in sub-pixel steps,
+    //                  so no feature ever holds one pixel.
+    //   rig_readjust   how far the LAMP and the LENS CENTRE re-aim when the
+    //                  focus readjusts. 0 = only the focus and the tilt move
+    //                  (the old behaviour); above 0 the whole rig moves as
+    //                  one body, which is the point of having a rig.
+    float shimmer        = 0.0f;   // 0..1 master                     shimmer
+    float shimmerPx      = 1.5f;   // warp amplitude, px at 1440p  shimmer_px
+    float vignetteWander = 0.0f;   // 0..1                   vignette_wander
+    float pixelShiftPx   = 0.0f;   // orbit radius, px at 1440p pixel_shift_px
+    float rigReadjust    = 0.0f;   // 0..1                      rig_readjust
 };
 
 struct MirrorConfig {
@@ -1143,6 +1169,12 @@ public:
     // of the requested size; CaptureOffscreen() reads it back as linear scRGB.
     void InitOffscreen(int width, int height, const FluidConfig& cfg);
     bool IsHeadless() const { return m_headless; }
+    // Where the camera rig currently is. Everything in the [post] family hangs
+    // off these eight numbers, and all of them are supposed to be MOVING --
+    // so a single still says nothing about whether the motion works. --shot
+    // prints them, which makes a short series at different t a real test.
+    // { lampX, lampY, lensX, lensY, tiltDeg, focus, shiftX, shiftY }
+    void RigState(float out[8]) const;
     // width*height*4 floats, row-major RGBA, linear scRGB (1.0 = 80 nits).
     bool CaptureOffscreen(std::vector<float>& outRgba);
 
@@ -1337,6 +1369,7 @@ private:
         float tiltAmt   = 0.0f;             // focus depth gained per unit along it
         float focus     = 0.5f;             // focus depth
         float movePhase = 1.0f;             // 0..1 through the current readjustment
+        float shiftX = 0.0f, shiftY = 0.0f; // OLED pixel-shift orbit, px at 1440p
     };
     CameraRig m_rig;
     // Steps the whole rig: the lamp's continuous idle drift (brief Q) and the
@@ -1351,6 +1384,13 @@ private:
     float m_camMoveDur = 1.0f;
     bool  m_camInit = false;
     uint32_t m_camRng = 0x9E3779B9u;
+    // A readjustment moves the WHOLE rig, not just the focus: these are the
+    // lamp's and the lens centre's endpoints for the current eased move, so
+    // they travel on the same spring and arrive together.
+    float m_camLampAX = 0.0f, m_camLampAY = 0.0f, m_camLampBX = 0.0f, m_camLampBY = 0.0f;
+    float m_camAxAX = 0.0f, m_camAxAY = 0.0f, m_camAxBX = 0.0f, m_camAxBY = 0.0f;
+    float m_camLampOX = 0.0f, m_camLampOY = 0.0f;   // current readjust offsets
+    float m_camAxOX = 0.0f, m_camAxOY = 0.0f;
     // Blob field + gradient + the local oil's own velocity at one uv point.
     // The CPU twin of the shader's metaball loop, used to keep a trapped
     // droplet inside the oil and to make it ride that oil.

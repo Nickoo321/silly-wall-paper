@@ -319,12 +319,12 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     }
     // Graphics: b0 constants, t0 table, s0 static sampler.
     // Params 2/3 are the Liquid Acid look's blob buffer (t1) and parameter
-    // block (b1) as ROOT descriptors — no descriptor-heap slots needed. The
+    // block (b1) as ROOT descriptors â€” no descriptor-heap slots needed. The
     // fluid display shader references neither, so they cost it nothing.
     // Param 4 is the shared ink-in-water parameter block (b2), read by the INK
     // PSO and by LIQUID_ACID when ink_mode=water. Same story: the fluid
     // display shader does not reference it.
-    // Param 6 is the [mirror] fold block (b3) — 12 ROOT CONSTANTS, because
+    // Param 6 is the [mirror] fold block (b3) â€” 12 ROOT CONSTANTS, because
     // unlike the blocks above this one IS read by all three display PSOs
     // (the fold is in the shared part of the shader), so it must be bound on
     // every display draw and an upload-buffer ring would buy nothing.
@@ -353,8 +353,8 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         params[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
         params[6].Constants = { 3, 0, 20 };         // b3 (MirrorCB + [post])
         params[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
-        // Params 7/8 are the droplet particle sim's two structured buffers —
-        // the particles (t2) and the uniform-grid cell table (t4) — as ROOT
+        // Params 7/8 are the droplet particle sim's two structured buffers â€”
+        // the particles (t2) and the uniform-grid cell table (t4) â€” as ROOT
         // descriptors, same deal as the blob buffer above: no heap slots, and
         // nothing at all for the shaders that never reference them.
         params[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
@@ -428,7 +428,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
         const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
         makeGfx(kDisplaySrc, m_psoLiquidAcid, defs);
     }
-    // "Ink in water": the same display source with INK defined. Same rule —
+    // "Ink in water": the same display source with INK defined. Same rule â€”
     // built only when the look is on, so style=fluid keeps its exact shader.
     if (m_cfg.ink.enabled) {
         const D3D_SHADER_MACRO defs[] = { { "INK", "1" }, { nullptr, nullptr } };
@@ -491,7 +491,7 @@ void FluidRenderer::EnsureLookResources() {
 
 // Headless render target: one FP16 texture the size of the requested shot,
 // plus a readback buffer. RTV slot 0 (the first back-buffer slot, unused when
-// there is no swap chain) — the analyzer keeps slot kFrames, the mirror
+// there is no swap chain) â€” the analyzer keeps slot kFrames, the mirror
 // kFrames+1.., so nothing collides.
 void FluidRenderer::CreateOffscreenTarget() {
     D3D12_HEAP_PROPERTIES hp = {};
@@ -693,7 +693,7 @@ void FluidRenderer::EndFrameAndPresent() {
         return;
     }
     // Present fails (not fatally) when Explorer tears our window down
-    // mid-frame — flag it so the shell can rebuild instead of dying.
+    // mid-frame â€” flag it so the shell can rebuild instead of dying.
     HRESULT phr = m_swapChain->Present(1, 0);
     if (FAILED(phr)) {
         if (!m_presentBroken)
@@ -783,7 +783,7 @@ void FluidRenderer::SimStep(float dt) {
     cb.satRestore = 1.0f - powf(1.0f - fminf(m_cfg.satRestore, 0.9999f), dt);
     bind(m_psoAdvectDye.Get(), m_velocity.read, m_dye.read, m_dye.write, 4);
     m_dye.Swap();
-    // 9. dye diffusion (optional): the D∇²c smoke-spread term
+    // 9. dye diffusion (optional): the Dâˆ‡Â²c smoke-spread term
     if (m_cfg.dyeDiffusion > 0.0001f) {
         cb.value = fminf(m_cfg.dyeDiffusion * stepsRef, 0.9f);
         bind(m_psoDiffuseDye.Get(), m_dye.read, nullptr, m_dye.write, 4);
@@ -849,7 +849,7 @@ void FluidRenderer::SplatDye(float x, float y, float r, float g, float b,
 void FluidRenderer::MultipleSplats(int amount) {
     for (int i = 0; i < amount; i++) {
         // generateColor(): hue near the global wheel (or palette); intensity
-        // is cfg.idleBrightness (wanderers paint at 0.15 — bursts were 1.5)
+        // is cfg.idleBrightness (wanderers paint at 0.15 â€” bursts were 1.5)
         RGB c;
         if (m_cfg.colorful) {
             float h = fmodf(WheelHue((RandF() - 0.5f) * 0.12f) + 1.0f, 1.0f);
@@ -1081,7 +1081,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
 }
 
 // Same display pass as RenderDisplay(), aimed at the offscreen FP16 target.
-// Identical constants, identical shader — only the render target differs, so
+// Identical constants, identical shader â€” only the render target differs, so
 // the captured pixels are exactly what the swap chain would have received.
 void FluidRenderer::RenderDisplayOffscreen() {
     Transition(*m_dye.read, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
@@ -1170,7 +1170,7 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
     D3D12_RANGE none = { 0, 0 };
     m_shotReadback->Unmap(0, &none);
 
-    // the frame ring's allocator 0 was reset out of band — resync so the next
+    // the frame ring's allocator 0 was reset out of band â€” resync so the next
     // BeginFrame() doesn't try to reset an allocator whose work is in flight
     for (UINT i = 0; i < kFrames; i++) m_fenceValues[i] = 0;
     m_frameIndex = 0;
@@ -1215,7 +1215,7 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
 }
 
 // ===========================================================================
-// [mirror] — screen mirroring / kaleidoscope.
+// [mirror] â€” screen mirroring / kaleidoscope.
 //
 // The fold itself is one uv transform at the top of the display pixel shader
 // (see MirrorFold in kDisplaySrc); everything here is its plumbing: the 12
@@ -1350,7 +1350,7 @@ void FluidRenderer::CreateAnalyzerResources() {
 
 // Re-render the display pass at analyzer resolution and queue a readback.
 // Runs at ~10 Hz; the result is the exact final scRGB output (post gamut,
-// post peak expansion) — what the display receives.
+// post peak expansion) â€” what the display receives.
 void FluidRenderer::MaybeRenderAnalyzer() {
     if (m_anaPending || m_time - m_lastAnaTime < 0.1f) return;
     if (!m_anaTex) CreateAnalyzerResources();
@@ -1720,7 +1720,22 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         // the count slider is also how you apply those live.
         int want = m_cfg.acid.blobCount;
         want = want < 1 ? 1 : (want > kAcidMaxBlobs ? kAcidMaxBlobs : want);
-        if (!m_acidSeeded || (int)m_acidBlobs.size() != want) SeedAcidBlobs();
+        if (!m_acidSeeded) {
+            SeedAcidBlobs();
+        } else if (m_cfg.acid.conserveMass > 0.5f) {
+            // Walk to the new count instead of replacing the field. Called
+            // every frame the count differs from the request: it is idempotent
+            // (it counts blobs that are not already retiring) and costs one
+            // pass over 96 blobs, so the surplus keeps shrinking and the
+            // shortfall keeps growing until the two agree.
+            if (m_acidWantBlobs != want) m_acidWantBlobs = want;
+            int live = 0;
+            for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
+                if (m_acidBlobs[bi].rTarget > 0.0f) live++;
+            if (live != want) AdjustAcidBlobCount(want);
+        } else if ((int)m_acidBlobs.size() != want) {
+            SeedAcidBlobs();
+        }
         UpdateVelocityReadback();
         StepAcidBlobs(dt);
         StepAcidDroplets(dt);
@@ -1891,7 +1906,7 @@ void FluidRenderer::Shutdown() {
     freeTex(m_oilMask);
 
     // root signatures + PSOs (shader blobs are recompiled from embedded source
-    // in CreateDevice — nothing static is cached, so re-init is idempotent)
+    // in CreateDevice â€” nothing static is cached, so re-init is idempotent)
     m_psoClearV.Reset(); m_psoClear4.Reset(); m_psoClear1.Reset();
     m_psoCurl.Reset(); m_psoVorticity.Reset(); m_psoDivergence.Reset();
     m_psoClearPressure.Reset(); m_psoPressure.Reset(); m_psoGradSub.Reset();
@@ -1981,7 +1996,7 @@ void FluidRenderer::PickSplatColor(float hueOffset, float out[3]) {
 }
 
 // Explorer restarted: the old WorkerW (and our window in it) died. The caller
-// made a fresh wallpaper window; rebuild just the swapchain onto it — device,
+// made a fresh wallpaper window; rebuild just the swapchain onto it â€” device,
 // sim textures, and the fluid state all survive.
 void FluidRenderer::Reattach(HWND hwnd) {
     if (!m_device) return;   // suspended: the resume does a full Init instead
@@ -2183,7 +2198,7 @@ void FluidRenderer::UpdateHueShift(float dt) {
         // Narrow hue bands must never be post-rotated: any rotation drags the
         // whole field out of band (the Ember green-leak bug). Color motion in
         // a banded look comes from emission-side drift (color_cycle_period),
-        // never from the shift wheel. And never snap the rotation off —
+        // never from the shift wheel. And never snap the rotation off â€”
         // glide to the next full turn.
         float rem = fmodf(m_hueAngle, 360.0f);
         if (rem > 0.5f || rem < -0.5f) {
@@ -2265,7 +2280,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 }
 
 // ===========================================================================
-// "Liquid Acid" look — oil metaballs on inked water.
+// "Liquid Acid" look â€” oil metaballs on inked water.
 //
 // The oil is a CPU blob population (positive blobs = oil, NEGATIVE blobs =
 // round holes/water bubbles eaten out of it) advected by the fluid's own
@@ -2274,7 +2289,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 // section of kDisplaySrc.
 // ===========================================================================
 
-// GPU mirrors — must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
+// GPU mirrors â€” must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
 // .c = the comb anisotropy (mouse_oil_mode 2): x = stretch amount along the
 // drag direction, yz = that direction. All zero unless the comb is running.
 struct AcidBlobGPU { float a[4]; float b[4]; float c[4]; };
@@ -2459,14 +2474,14 @@ void FluidRenderer::CreateAcidBuffers() {
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_acidParamUpload[i])));
-        // shared ink-in-water parameter block (b2) — 112 bytes, same ring
+        // shared ink-in-water parameter block (b2) â€” 112 bytes, same ring
         rd.Width = (sizeof(InkParamsGPU) + 255) & ~255u;
         HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
                                              D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                              IID_PPV_ARGS(&m_inkParamUpload[i])));
         // droplet particle sim: 128 KB of particles + 18 KB of cell table per
         // frame. Created unconditionally, like the blob ring, so the display
-        // draw can always bind root params 7/8 whichever PSO is selected —
+        // draw can always bind root params 7/8 whichever PSO is selected â€”
         // and zeroed, so with the sim off every cell reports a count of 0.
         // TWO records per droplet: [k] is the particle itself and
         // [kAcidMaxDrops + k] the RING SHAPE (see UploadAcidConstants). Split
@@ -2496,12 +2511,12 @@ void FluidRenderer::CreateAcidBuffers() {
 }
 
 // Seed the oil population. Four kinds, matching the references:
-//   disc   — big flat saturated discs      (liquid-acid-ref-1)
-//   web    — medium blobs seeded in CHAINS so they merge into veined webs
+//   disc   â€” big flat saturated discs      (liquid-acid-ref-1)
+//   web    â€” medium blobs seeded in CHAINS so they merge into veined webs
 //            with circular openings        (liquid-acid-ref-2)
-//   bubble — small round blobs, power-law sizes, some clustered
+//   bubble â€” small round blobs, power-law sizes, some clustered
 //            (liquid-acid-ref-3)
-//   hole   — NEGATIVE weight, seeded inside a disc/web parent so it eats a
+//   hole   â€” NEGATIVE weight, seeded inside a disc/web parent so it eats a
 //            round hole out of the oil. Harmless when it drifts into open
 //            ink: a negative field just stays below the isoline.
 void FluidRenderer::SeedAcidBlobs() {
@@ -2600,8 +2615,80 @@ void FluidRenderer::SeedAcidBlobs() {
     // is exactly the stagger rise_respawn needs: the column is populated from
     // the first frame and never empties, instead of one batch marching up
     // together and leaving a bare screen behind it.
+    for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
+        m_acidBlobs[bi].rTarget = m_acidBlobs[bi].baseR;   // nothing pending
     m_acidRespawnRng = rng.next() | 1u;
+    m_acidWantBlobs = n;
     m_acidSeeded = true;
+}
+
+// ---------------------------------------------------------------------------
+// blob_count, smoothly (brief S residue). Moving the slider used to call
+// SeedAcidBlobs(), which replaces the whole population in one frame: every
+// mass on screen vanishes and a new field appears. Under conserve_mass the
+// population WALKS to the new count instead -- the surplus shrinks away over
+// dissolve_s (preferring blobs that are already off-frame, so most of it is
+// never seen at all), and a shortfall is grown in from under the bottom edge,
+// through the same door rise_respawn brings a blob back through.
+// ---------------------------------------------------------------------------
+void FluidRenderer::AdjustAcidBlobCount(int want) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    auto rf = [&]() {
+        m_acidRespawnRng ^= m_acidRespawnRng << 13;
+        m_acidRespawnRng ^= m_acidRespawnRng >> 17;
+        m_acidRespawnRng ^= m_acidRespawnRng << 5;
+        return (m_acidRespawnRng >> 8) * (1.0f / 16777216.0f);
+    };
+    const float TWO_PI = 6.2831853f;
+    int live = 0;
+    for (size_t i = 0; i < m_acidBlobs.size(); i++)
+        if (m_acidBlobs[i].rTarget > 0.0f) live++;
+
+    // ---- too many: retire the least visible first ----------------------
+    while (live > want) {
+        int best = -1; float bestScore = -1e9f;
+        for (size_t i = 0; i < m_acidBlobs.size(); i++) {
+            const AcidBlob& b = m_acidBlobs[i];
+            if (b.rTarget <= 0.0f) continue;
+            // off-frame beats on-frame, and small beats large: whoever is
+            // cheapest to lose without anyone noticing.
+            const float off = fmaxf(fmaxf(-b.y, b.y - 1.0f), 0.0f);
+            const float score = off * 10.0f - b.baseR;
+            if (score > bestScore) { bestScore = score; best = (int)i; }
+        }
+        if (best < 0) break;
+        m_acidBlobs[(size_t)best].rTarget = 0.0f;
+        live--;
+    }
+
+    // ---- too few: grow one in from under the bottom edge ----------------
+    while (live < want && (int)m_acidBlobs.size() < kAcidMaxBlobs) {
+        AcidBlob b{};
+        // kind by the authored mix, the same fractions SeedAcidBlobs uses
+        const float u = rf();
+        float lo, hi, bias;
+        if      (u < a.discFrac)                 { b.kind = 0; b.wgt = 1.0f; lo = a.discMin;   hi = a.discMax;   bias = a.bigBias;  b.colIdx = 0; }
+        else if (u < a.discFrac + a.webFrac)     { b.kind = 1; b.wgt = 1.0f; lo = a.webMin;    hi = a.webMax;    bias = a.bigBias;  b.colIdx = 1; }
+        else if (u < a.discFrac + a.webFrac + a.bubbleFrac)
+                                                 { b.kind = 2; b.wgt = 1.0f; lo = a.bubbleMin; hi = a.bubbleMax; bias = a.sizeBias; b.colIdx = 3; }
+        else                                     { b.kind = 3; b.wgt = -fmaxf(a.holeWeight, 0.05f);
+                                                   lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; b.colIdx = 0; }
+        b.rTarget = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+        // Born at a size nobody can resolve and swollen over spawn_grow_s on
+        // the way in, so even a blob grown into the middle of the frame (no
+        // rise, so no bottom edge to come through) never appears at a size.
+        b.baseR = b.rTarget * 0.02f;
+        b.x = rf();
+        b.y = (a.riseSpeed > 1e-6f && a.riseRespawn)
+            ? 1.0f + b.rTarget * a.supportScale * (1.0f + a.breathAmt) * 0.86f
+            : rf();
+        b.phase = rf() * TWO_PI;
+        b.breathRate = 0.08f + rf() * 0.24f;
+        b.s1 = rf() * TWO_PI;
+        b.s2 = rf() * TWO_PI;
+        m_acidBlobs.push_back(b);
+        live++;
+    }
 }
 
 // 64x36 velocity downsample -> CPU, one frame late (same trick as
@@ -2725,6 +2812,7 @@ void FluidRenderer::StepAcidBlobs(float dt) {
     // currents. Exactly 1 for every blob when the key is 0.
     const float par  = fminf(fmaxf(a.riseParallax, 0.0f), 1.0f);
     const float rRef = fmaxf(a.discMax, 1e-4f);
+    const bool  cons0 = (a.conserveMass > 0.5f);
 
     // ---- mouse_oil_mode: the pointer's own velocity, uv/s -----------------
     // Recorded by HandleInput, differentiated here (HandleInput has no dt) and
@@ -2959,7 +3047,22 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             if      (b.kind == 0) { lo = a.discMin; hi = a.discMax; bias = a.bigBias; }
             else if (b.kind == 1) { lo = a.webMin;  hi = a.webMax;  bias = a.bigBias; }
             else if (b.kind == 3) { lo = a.holeMin; hi = a.holeMax; bias = a.sizeBias; }
-            b.baseR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+            // CONSERVATION (brief S residue): a blob that leaves the top and
+            // comes back under the bottom is the SAME blob, so under
+            // conserve_mass it keeps its radius instead of drawing a new one.
+            // The fresh x and the fresh curl phases are what stop the column
+            // reading as a loop; re-rolling the size as well was mass
+            // appearing and disappearing off-frame, which is the one thing
+            // this key exists to forbid. The draws still happen either way,
+            // so the respawn stream is identical and nobody else moves.
+            const float newR = lo + (hi - lo) * powf(rf(), fmaxf(bias, 0.05f));
+            if (!cons) b.baseR = newR;
+            // ...but a blob that is on its way OUT (blob_count went down)
+            // must stay on its way out. Restoring its target here handed it
+            // back its life every time it wrapped, and Adjust then retired
+            // somebody else instead: the population churned and the total
+            // area bled away instead of settling.
+            if (b.rTarget > 0.0f) b.rTarget = b.baseR;
             b.x = rf();
             b.y = 1.0f + b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
             b.vx = 0.0f;
@@ -3006,6 +3109,25 @@ void FluidRenderer::StepAcidBlobs(float dt) {
                                                   : fmaxf(b.accentMix - step, tgt);
             }
         }
+        // ---- blob_count, smoothly (brief S residue) ---------------------
+        // baseR walks to rTarget so a blob can be grown in or shrunk away.
+        // Outside a blob_count change the two are equal and this is a no-op;
+        // with conserve_mass off nothing ever sets them apart at all.
+        if (b.rTarget != b.baseR) {
+            const float tauB = (b.rTarget > b.baseR)
+                             ? fmaxf(a.spawnGrowS, 1.0f) : fmaxf(a.dissolveS, 1.0f);
+            b.baseR += (b.rTarget - b.baseR) * (1.0f - expf(-dt / tauB));
+        }
+    }
+    // Retire whatever has shrunk past the point of contributing anything: the
+    // Wyvill kernel's reach is baseR * support_scale, so a blob under a fifth
+    // of a pixel of it cannot move an isoline.
+    if (cons0) {
+        const float gone = 0.2f / (fmaxf((float)m_height, 1.0f)
+                                   * fmaxf(a.supportScale, 0.5f));
+        for (size_t i = m_acidBlobs.size(); i-- > 0; )
+            if (m_acidBlobs[i].rTarget <= 0.0f && m_acidBlobs[i].baseR < gone)
+                m_acidBlobs.erase(m_acidBlobs.begin() + (ptrdiff_t)i);
     }
 }
 
@@ -3070,9 +3192,60 @@ void FluidRenderer::AcidFieldAt(float x, float y, float aspect, float& outField,
     outVy = (vw > 1e-9f) ? vy / vw : 0.0f;
 }
 
+// ---- BUBBLE WEATHER (U9) -------------------------------------------------
+// One smooth signal in [-1, 1] per channel, walking between per-phase targets
+// drawn from a hash of the phase index. Each phase HOLDS its target for a
+// hashed fraction of its length and then eases to the next, so two phases in
+// a row that happen to draw similar targets read as one long season and the
+// grid of boundaries never shows. Pure function of wallpaper time: nothing to
+// carry across a pause, a resume or a --shot replay.
+static float WeatherAt(float t, float period, uint32_t salt) {
+    period = fmaxf(period, 5.0f);
+    const float tau = t / period;
+    const int   n   = (int)floorf(tau);
+    const float u   = tau - (float)n;
+    auto h = [&](int i, uint32_t extra) {
+        uint32_t x = (uint32_t)(i * 0x9E3779B9u) ^ salt ^ extra;
+        x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15;
+        x *= 0x846CA68Bu; x ^= x >> 16;
+        return (x >> 8) * (1.0f / 16777216.0f) * 2.0f - 1.0f;   // -1 .. 1
+    };
+    const float a0 = h(n, 0u), a1 = h(n + 1, 0u);
+    // hold for 25-75% of the phase, then ease across the rest
+    const float hold = 0.25f + 0.25f * (h(n, 0x5BD1u) + 1.0f);
+    float e = (u - hold) / fmaxf(1.0f - hold, 1e-4f);
+    e = e < 0.0f ? 0.0f : (e > 1.0f ? 1.0f : e);
+    e = e * e * e * (e * (e * 6.0f - 15.0f) + 10.0f);           // smootherstep
+    return a0 + (a1 - a0) * e;
+}
+
 void FluidRenderer::StepAcidDroplets(float dt) {
     const LiquidAcidConfig& a = m_cfg.acid;
-    int target = a.droplets;
+    const float wAmt = fminf(fmaxf(a.weather, 0.0f), 1.0f);
+    const bool  consM = (a.conserveMass > 0.5f);
+    // Two independent channels off the same clock: how crowded the frame is,
+    // and how much of the swarm is hollow. The density half is gated on
+    // conserve_mass, because without it a moving target re-seeds the whole
+    // population every frame instead of growing and shrinking it.
+    const float wDens = (wAmt > 1e-4f && consM)
+                      ? WeatherAt(m_time, a.weatherPeriodS, 0x00B1u) : 0.0f;
+    const float wRing = (wAmt > 1e-4f)
+                      ? WeatherAt(m_time, a.weatherPeriodS, 0x7A3Cu) : 0.0f;
+    // The ring share alone barely reads: a ring has to clear a band-width
+    // floor 3.5x the solid one to resolve at all, so only a handful of the
+    // rings alive are ever visible and a 45% swing in the share moves two or
+    // three of them. The BIG hollow bubbles are what a "spell of rings"
+    // actually looks like, so the same channel drives their share too --
+    // measured 0.1-1.2% visible rings without it, which is no season at all.
+    const float ringFracEff = fminf(fmaxf(a.dropletRingFrac
+                                          * (1.0f + wAmt * 0.90f * wRing),
+                                          0.0f), 1.0f);
+    const float ringBigEff  = fminf(fmaxf(a.dropletRingBigFrac
+                                          * (1.0f + wAmt * 1.30f * wRing),
+                                          0.0f), 1.0f);
+    int target = (int)lroundf((float)a.droplets
+                              * (1.0f + wAmt * 0.45f * wDens));
+    if (a.droplets > 0 && target < 1) target = 1;
     if (target > kAcidMaxDrops) target = kAcidMaxDrops;
     if (target <= 0) {
         // CONSERVATION: turning the population off from the settings window
@@ -3224,7 +3397,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                 h *= 3266489917u; h ^= h >> 16;
                 return (h >> 8) * (1.0f / 16777216.0f);
             };
-            out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < a.dropletRingFrac)
+            out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < ringFracEff)
                      ? 1 : 0;
             // ...and one more draw from the same place: the seed that makes
             // this ring's own out-of-round shape (ellipse axis, wobble phase,
@@ -3248,7 +3421,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // least 0.6 of its radius inside the oil, so one nucleated near a
             // film edge would be shoved out and dissolve before it had grown.
             if (out.ring && ringMul > 1.001f) {
-                if (hash01(x, y, 0xC2B2AE35u) < a.dropletRingBigFrac) {
+                if (hash01(x, y, 0xC2B2AE35u) < ringBigEff) {
                     const float hs = hash01(x, y, 0x27D4EB2Fu);
                     out.rt = rMax * (1.0f + (ringMul - 1.0f) * (0.35f + 0.65f * hs));
                     // Enough room to grow into, but not a deep-interior
@@ -4422,7 +4595,7 @@ void FluidRenderer::BindAcid() {
 }
 
 // ===========================================================================
-// "Ink in water" — the SHARED render block's constants, and the drop emitter.
+// "Ink in water" â€” the SHARED render block's constants, and the drop emitter.
 // Both are used by style=ink and (the constants) by liquid_acid ink_mode=water.
 // ===========================================================================
 
@@ -4447,7 +4620,7 @@ void FluidRenderer::UploadInkConstants() {
     // white level we already sit at" (80 * sdr_scale), which makes tonemap=1
     // a pure curve change; the presets set it explicitly.
     // With HDR OFF the swap chain clips at 1.0, so both ceilings come down to
-    // SDR white — the look must survive HDR on AND off (AGENTS.md).
+    // SDR white â€” the look must survive HDR on AND off (AGENTS.md).
     const float sdrScale = fmaxf(m_sdrScale, 0.01f);
     float whiteSc = (k.whiteNits > 0.5f) ? k.whiteNits / 80.0f : sdrScale;
     float peakSc  = (m_cfg.hdrPeakNits > 0.5f) ? m_cfg.hdrPeakNits / 80.0f
@@ -4473,7 +4646,7 @@ void FluidRenderer::UploadInkConstants() {
     // and the same smoothstepped fade (so each pair gets a long settled
     // stretch). The ink anchor drives the THIN veil and the oil anchor the
     // THICK core: the ink anchors are the darker, cooler half of every pair,
-    // which keeps veils darker than cores — the assignment the user's
+    // which keeps veils darker than cores â€” the assignment the user's
     // hand-picked duotone inis already use (teal veil / vermillion core).
     float tThin[3], tThick[3];
     memcpy(tThin,  k.tintThin,  sizeof(tThin));
@@ -4553,7 +4726,7 @@ void FluidRenderer::InjectDrop(float x, float y, float vx, float vy,
                  radiusPct, cap, true);
     }
 
-    // Splash satellites (ref 2). Not 2D physics — a fake, and a cheap one:
+    // Splash satellites (ref 2). Not 2D physics â€” a fake, and a cheap one:
     // each is a full dye-res pass, so the count is capped at 12.
     for (int i = 0; i < spatter; i++) {
         const float ang = RandF() * 6.2831853f;
@@ -4616,7 +4789,7 @@ void FluidRenderer::UpdateCoverage() {
         return;
     }
     // Headless capture: the harvest must land on a FIXED frame, not "whenever
-    // the GPU happened to finish" — otherwise the governor flips a frame or
+    // the GPU happened to finish" â€” otherwise the governor flips a frame or
     // two earlier/later between runs and the images diverge. Pin it to the
     // same 1 Hz cadence as the issue, blocking if the copy isn't done yet.
     if (m_headless && m_covPending && m_time - m_lastCovTime >= 1.0f &&

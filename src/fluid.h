@@ -408,6 +408,22 @@ struct LiquidAcidConfig {
     //   droplet_racer_wobble  lateral zigzag, as a fraction of that climb.
     //   droplet_racer_r_max   only droplets at or below this radius qualify.
     //                         0 = twice droplet_r_min.
+    // --- BUBBLE WEATHER (U9, 2026-09-18) ---------------------------------
+    // The droplet population has one steady state and settles into it: after
+    // a couple of minutes the frame's density and its ring/solid mix never
+    // change again. Weather gives it SEASONS on a minutes-long clock -- a
+    // spell of rings, then of solids, a sparse spell, a crowded one -- by
+    // walking the target count and the ring share between hashed per-phase
+    // targets. It never jumps and it never kills a population: the target
+    // moves smoothly and the conserve_mass machinery does the rest (surplus
+    // shrinks away over dissolve_s, shortfall grows in over spawn_grow_s),
+    // which is why the DENSITY half only runs when conserve_mass is on.
+    //   weather           0 = today. Amplitude of the whole effect.
+    //   weather_period_s  mean seconds per phase (the phase's hold/ramp
+    //                     split is hashed too, so they are not all alike).
+    float weather         = 0.0f;   // 0..1                          weather
+    float weatherPeriodS  = 300.0f; // s per phase          weather_period_s
+
     float dropletRacerFrac  = 0.0f;  // 0..1            droplet_racer_frac
     float dropletRacerSpeed = 2.5f;  // x                 droplet_racer_speed
     float dropletRacerWobble= 0.5f;  // 0..2             droplet_racer_wobble

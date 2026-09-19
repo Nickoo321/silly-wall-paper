@@ -3029,9 +3029,60 @@ void FluidRenderer::AcidFieldAt(float x, float y, float aspect, float& outField,
     outVy = (vw > 1e-9f) ? vy / vw : 0.0f;
 }
 
+// ---- BUBBLE WEATHER (U9) -------------------------------------------------
+// One smooth signal in [-1, 1] per channel, walking between per-phase targets
+// drawn from a hash of the phase index. Each phase HOLDS its target for a
+// hashed fraction of its length and then eases to the next, so two phases in
+// a row that happen to draw similar targets read as one long season and the
+// grid of boundaries never shows. Pure function of wallpaper time: nothing to
+// carry across a pause, a resume or a --shot replay.
+static float WeatherAt(float t, float period, uint32_t salt) {
+    period = fmaxf(period, 5.0f);
+    const float tau = t / period;
+    const int   n   = (int)floorf(tau);
+    const float u   = tau - (float)n;
+    auto h = [&](int i, uint32_t extra) {
+        uint32_t x = (uint32_t)(i * 0x9E3779B9u) ^ salt ^ extra;
+        x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15;
+        x *= 0x846CA68Bu; x ^= x >> 16;
+        return (x >> 8) * (1.0f / 16777216.0f) * 2.0f - 1.0f;   // -1 .. 1
+    };
+    const float a0 = h(n, 0u), a1 = h(n + 1, 0u);
+    // hold for 25-75% of the phase, then ease across the rest
+    const float hold = 0.25f + 0.25f * (h(n, 0x5BD1u) + 1.0f);
+    float e = (u - hold) / fmaxf(1.0f - hold, 1e-4f);
+    e = e < 0.0f ? 0.0f : (e > 1.0f ? 1.0f : e);
+    e = e * e * e * (e * (e * 6.0f - 15.0f) + 10.0f);           // smootherstep
+    return a0 + (a1 - a0) * e;
+}
+
 void FluidRenderer::StepAcidDroplets(float dt) {
     const LiquidAcidConfig& a = m_cfg.acid;
-    int target = a.droplets;
+    const float wAmt = fminf(fmaxf(a.weather, 0.0f), 1.0f);
+    const bool  consM = (a.conserveMass > 0.5f);
+    // Two independent channels off the same clock: how crowded the frame is,
+    // and how much of the swarm is hollow. The density half is gated on
+    // conserve_mass, because without it a moving target re-seeds the whole
+    // population every frame instead of growing and shrinking it.
+    const float wDens = (wAmt > 1e-4f && consM)
+                      ? WeatherAt(m_time, a.weatherPeriodS, 0x00B1u) : 0.0f;
+    const float wRing = (wAmt > 1e-4f)
+                      ? WeatherAt(m_time, a.weatherPeriodS, 0x7A3Cu) : 0.0f;
+    // The ring share alone barely reads: a ring has to clear a band-width
+    // floor 3.5x the solid one to resolve at all, so only a handful of the
+    // rings alive are ever visible and a 45% swing in the share moves two or
+    // three of them. The BIG hollow bubbles are what a "spell of rings"
+    // actually looks like, so the same channel drives their share too --
+    // measured 0.1-1.2% visible rings without it, which is no season at all.
+    const float ringFracEff = fminf(fmaxf(a.dropletRingFrac
+                                          * (1.0f + wAmt * 0.90f * wRing),
+                                          0.0f), 1.0f);
+    const float ringBigEff  = fminf(fmaxf(a.dropletRingBigFrac
+                                          * (1.0f + wAmt * 1.30f * wRing),
+                                          0.0f), 1.0f);
+    int target = (int)lroundf((float)a.droplets
+                              * (1.0f + wAmt * 0.45f * wDens));
+    if (a.droplets > 0 && target < 1) target = 1;
     if (target > kAcidMaxDrops) target = kAcidMaxDrops;
     if (target <= 0) {
         // CONSERVATION: turning the population off from the settings window
@@ -3183,7 +3234,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
                 h *= 3266489917u; h ^= h >> 16;
                 return (h >> 8) * (1.0f / 16777216.0f);
             };
-            out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < a.dropletRingFrac)
+            out.ring = (kind == 0 && hash01(x, y, 0x9E3779B9u) < ringFracEff)
                      ? 1 : 0;
             // ...and one more draw from the same place: the seed that makes
             // this ring's own out-of-round shape (ellipse axis, wobble phase,
@@ -3207,7 +3258,7 @@ void FluidRenderer::StepAcidDroplets(float dt) {
             // least 0.6 of its radius inside the oil, so one nucleated near a
             // film edge would be shoved out and dissolve before it had grown.
             if (out.ring && ringMul > 1.001f) {
-                if (hash01(x, y, 0xC2B2AE35u) < a.dropletRingBigFrac) {
+                if (hash01(x, y, 0xC2B2AE35u) < ringBigEff) {
                     const float hs = hash01(x, y, 0x27D4EB2Fu);
                     out.rt = rMax * (1.0f + (ringMul - 1.0f) * (0.35f + 0.65f * hs));
                     // Enough room to grow into, but not a deep-interior

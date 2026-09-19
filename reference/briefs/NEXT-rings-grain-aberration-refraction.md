@@ -512,3 +512,13 @@ acid-rise-12). film_hue2 is relative, so the pair rotates together. Add film_hue
 film_hue2_wobble_period (s): hue2 = film_hue2 + wobble * slow two-sine oscillation, jump on the rig
 readjust. acid-rise-12: film_hue2 180, wobble 10, period 300, hue_rotate_period slow (10-20 min).
 Executor B on branch hue2b.
+
+AJ. **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
+"whatever algo is mixing the oil boundary is insanely good", "and the way the bubbles reflect it,
+accurately", "chef's kiss". Request: "turn up the radius of effect maybe, so further particles
+also reflect it on the boundary." So: the droplets near a hue2 patch edge pick up the seam / the
+other hue in their rims and refraction; widen the distance over which a droplet samples the
+boundary colour (a key, e.g. boundary_reflect_r in px at 1440p, default = today's value so
+nothing changes until a preset raises it), so droplets farther from the seam still catch it,
+falling off smoothly. Judge live on the panel, not in stills. Do NOT start until the user asks;
+usage is at the weekly cap (2026-09-19). Keepers: reference/shots/panel/2026-09-19-hue2b-boundary-*.

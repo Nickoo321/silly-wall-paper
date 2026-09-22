@@ -6,7 +6,7 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 
 - GPU render/build hold `build2\shots\gpu.lock`: dot-source `tools\gpu-lock.ps1`, then
   `if (Wait-GpuLock -Owner "<name>" -TimeoutMinutes N) { try {...} finally { Release-GpuLock } }`
-  in the SAME PowerShell process. Never two `--shot` renders at once (2026-09-15: OLED went grey).
+  in the SAME PowerShell process. Wait for the lock at most 2 min for a RENDER, then render anyway (user 2026-09-22: idle executors lose their cache; concurrent headless renders accepted). Builds always take the lock.
 - Headless `--shot` only — never the screen, never screenshots, never touch brightness/DDC.
 - Never touch `build\`, `build2\live`, the running `FluidWallpaper.exe`, or Wallpaper Engine, or
   `tools\away-pause.ps1`. No swap — the parent (Fable) does that, and only after asking the user.

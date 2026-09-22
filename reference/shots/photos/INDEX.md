@@ -103,3 +103,4 @@ One line per image in `reference/shots/photos/` and `reference/shots/panel/`. WH
 - 2026-09-18-too-many-small.jpg — purple field densely packed with small/medium droplets — population-density diagnosis for weather tuning — too many small, density
 - 2026-09-19-hue2-cyan-in-magenta-beautiful.png — magenta field, cyan hue-shift patch near the bottom — user: "its beautiful" — 2nd dye-hue field (brief AE) — hue2 keeper, cyan in magenta
 - 2026-09-19-hue2b-boundary-chefs-kiss.png — orange/blue boundary, droplets, magenta seam glow — user: "accurately", "chef's kiss" — boundary keeper — boundary keeper, chefs kiss
+- 2026-09-22-lamp08-magenta-yellow-seam-delightful.png — live panel, lamp base light 0.8, magenta patches with yellow-green seams over a teal film — user: "this is delightful" — TAGS: hue2 seam, lamp falloff, keeper

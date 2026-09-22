@@ -625,3 +625,7 @@ chroma direction, then the complement lock clamps it to a window round the oil h
 dye's VALUE survives, which reads as brown. Fix = apply the dye after those two steps (branch dye3
 in progress). acid-rise-12 ships dye_lum 0 (black) until then. Sheets: build2/shots/live/dye-sheet.png,
 dye-hue-sheet.png (four hues byte-identical = the proof).
+AG 03:03: branch dye3 (993747f in fw-cam, NOT merged: restoring the ramp hue after ink_hue_vary and
+the complement lock changed nothing, delta 0). Hypothesis for the next session: acid-rise-12 runs
+ink_mode = water, whose dark-mass shading is a different path from the banded ink ramp; the dye must
+be applied where THAT path makes the mass colour. Read the water path end to end first, then render.

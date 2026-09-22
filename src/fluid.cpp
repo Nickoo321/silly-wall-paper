@@ -2854,6 +2854,15 @@ void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
                 (int)i, d.x, d.y, d.r, d.gate, d.vx, d.vy,
                 d.kind * 100 + d.ring * 10 + d.racer);
     }
+    // brief AE-c: the hue2 mix field, visible AND hidden rows, so the
+    // upward-provenance check can run on the field itself.
+    if (!m_mixField.empty()) {
+        const int TH = (int)(m_mixField.size() / kMixW);
+        for (int yy = 0; yy < TH; yy++)
+            for (int xx = 0; xx < kMixW; xx++)
+                fprintf(f, "mix,%d,%d,%d,%.6f,0,0,0,%d\n", yy * kMixW + xx, xx, yy,
+                        m_mixField[(size_t)yy * kMixW + xx], (yy < kMixH) ? 1 : 0);
+    }
     for (int y = 0; y < kVelH; y++)
         for (int x = 0; x < kVelW; x++)
             fprintf(f, "vel,%d,%d,%d,0,0,%.6f,%.6f,0\n", y * kVelW + x, x, y,
@@ -2885,15 +2894,25 @@ void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
 // ===========================================================================
 void FluidRenderer::StepHueField(float dt) {
     const LiquidAcidConfig& a = m_cfg.acid;
-    const int N = kMixW * kMixH;
+    // ---- OFF-SCREEN GENERATION (user's standing rule) --------------------
+    // "colours still appear out of thin air. Everything needs to be generated
+    // off screen, and within the screen needs to just move up."
+    // So the grid is TALLER than the screen: rows 0..kMixH-1 are the visible
+    // frame and the rows under them are below the bottom edge. New patch
+    // material is made ONLY in those hidden rows. A visible cell is pure
+    // advection -- it takes what was below it and nothing else -- so no patch
+    // can form, brighten or re-lay inside the frame. The readjustment does
+    // not re-lay either: it changes the phase and scale of what is being made
+    // below the edge, so the composition still turns over minutes and every
+    // bit of it walks in from underneath.
+    const int SR = (a.filmHue2SeedRows <= 0.5f) ? 0
+                 : (int)fminf(fmaxf(a.filmHue2SeedRows, 1.0f), (float)kMixMaxSeed);
+    const int TH = kMixH + SR;               // total rows, visible + hidden
+    const int N  = kMixW * TH;
     if ((int)m_mixField.size() != N) { m_mixField.assign((size_t)N, 0.5f); m_mixSeeded = false; }
     if (a.filmHue2Amt <= 0.0005f && a.filmHue3Amt <= 0.0005f) return;
     if (dt <= 0.0f) return;
 
-    // A 2D value noise with a couple of octaves, cheap and smooth. Its own
-    // slow drift is the "always moving" half; m_mixPhase is the "all at once"
-    // half, eased toward its target so a readjustment re-lays the patches
-    // over a second rather than cutting to them.
     auto vhash = [](int xi, int yi, int zi) {
         uint32_t h = (uint32_t)(xi * 374761393) ^ (uint32_t)(yi * 668265263)
                    ^ (uint32_t)(zi * 2246822519u);
@@ -2906,36 +2925,34 @@ void FluidRenderer::StepHueField(float dt) {
         const float ux = fx * fx * (3.0f - 2.0f * fx), uy = fy * fy * (3.0f - 2.0f * fy);
         const float a00 = vhash(xi, yi, z),     a10 = vhash(xi + 1, yi, z);
         const float a01 = vhash(xi, yi + 1, z), a11 = vhash(xi + 1, yi + 1, z);
-        return (a00 + (a10 - a00) * ux) + ((a01 + (a11 - a01) * ux)
-             - (a00 + (a10 - a00) * ux)) * uy;
+        const float b0 = a00 + (a10 - a00) * ux;
+        const float b1 = a01 + (a11 - a01) * ux;
+        return b0 + (b1 - b0) * uy;
     };
 
-    // the readjustment shove: ease the phase to its target on the same clock
-    // the focus spring runs on
     m_mixPhase += (m_mixPhaseTarget - m_mixPhase) * (1.0f - expf(-dt / 1.6f));
 
     const float scale = fminf(fmaxf(a.filmHue2Scale, 0.08f), 0.90f);
     const float drift = fmaxf(a.filmHue2Drift, 0.0f);
     const float decay = fmaxf(a.filmHue2Decay, 0.0f);
-    // cells per patch: scale is a fraction of the FRAME, so a scale of 0.35
-    // is about seven cells across on a 20-wide grid.
-    const float freq  = 1.0f / fmaxf(scale, 1e-3f);
+    // The readjustment also nudges the SCALE of the next material, so a new
+    // spell of patches is a different size as well as a different layout.
+    const float freq  = (1.0f / fmaxf(scale, 1e-3f))
+                      * (1.0f + 0.18f * sinf(m_mixPhase * 0.7f));
     const float t     = m_time * 0.03f * drift + m_mixPhase;
+    // extra rise, authored in screen heights per minute
+    const float riseX = fmaxf(a.filmHue2Rise, 0.0f) / 60.0f;
 
     std::vector<float> next((size_t)N, 0.0f);
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
-    // First frame: take the noise target outright rather than relaxing toward
-    // it from a flat 0.5, or the opening minute of a cold start (and of every
-    // --shot) would show no patches at all.
     const bool seeding = !m_mixSeeded;
-    for (int y = 0; y < kMixH; y++) {
+    for (int y = 0; y < TH; y++) {
         for (int x = 0; x < kMixW; x++) {
             const float u = ((float)x + 0.5f) / (float)kMixW;
-            const float v = ((float)y + 0.5f) / (float)kMixH;
-            // ---- 1. look back along the flow ----------------------------
+            const float v = ((float)y + 0.5f) / (float)kMixH;   // >1 = below the edge
             float vu = 0.0f, vv = 0.0f;
             {
-                float fx = u * kVelW - 0.5f, fy = v * kVelH - 0.5f;
+                float fx = u * kVelW - 0.5f, fy = fminf(v, 1.0f) * kVelH - 0.5f;
                 int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
                 float tx = fx - x0, ty = fy - y0;
                 auto at = [&](int xi, int yi, int c) {
@@ -2947,13 +2964,17 @@ void FluidRenderer::StepHueField(float dt) {
                    + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
                 vv = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
                    + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
-                vu /= fmaxf((float)m_simW, 1.0f);      // sim texels/s -> uv/s
+                vu /= fmaxf((float)m_simW, 1.0f);
                 vv /= fmaxf((float)m_simH, 1.0f);
             }
-            // ...and the oil's own rise carries the film with it
+            // ONLY UP. uv y is down, so the vertical velocity is clamped at or
+            // below zero: a patch can be carried up fast or slow, sideways,
+            // stretched -- but it can never travel down the screen, which is
+            // the other half of the user's rule.
+            float velV = vv - a.riseSpeed * 0.35f - riseX;
+            if (SR > 0 && velV > 0.0f) velV = 0.0f;
             const float bu = u - vu * dt;
-            const float bv = v - (vv - a.riseSpeed * 0.35f) * dt;
-            // bilinear fetch of the PREVIOUS field, clamped at the edges
+            const float bv = v - velV * dt;          // never above v: from below
             float src;
             {
                 float fx = bu * kMixW - 0.5f, fy = bv * kMixH - 0.5f;
@@ -2961,20 +2982,35 @@ void FluidRenderer::StepHueField(float dt) {
                 float tx = fx - x0, ty = fy - y0;
                 auto at = [&](int xi, int yi) {
                     xi = xi < 0 ? 0 : (xi >= kMixW ? kMixW - 1 : xi);
-                    yi = yi < 0 ? 0 : (yi >= kMixH ? kMixH - 1 : yi);
+                    yi = yi < 0 ? 0 : (yi >= TH ? TH - 1 : yi);
                     return m_mixField[(size_t)yi * kMixW + xi];
                 };
                 src = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
                     + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
             }
-            // ---- 2. inject, and 3. fall back toward the base -------------
-            const float nz = vnoise(u * aspect * freq + t * 0.7f,
-                                    v * freq - t * 0.5f, 0);
-            const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
-                                     v * freq * 2.3f + t * 0.3f, 7);
-            const float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
-            const float k = seeding ? 1.0f : (1.0f - expf(-decay * dt));
-            next[(size_t)y * kMixW + x] = src + (tgt - src) * k;
+            // Injection happens ONLY below the bottom edge (or everywhere when
+            // film_hue2_seed_rows is 0, which is the old behaviour kept for
+            // the A/B). On the first frame the whole grid is laid at once --
+            // that is the initial condition of a cold start, before anything
+            // is on screen, not something appearing in front of the user.
+            const bool makeHere = (SR == 0) || (y >= kMixH) || seeding;
+            if (makeHere) {
+                const float nz  = vnoise(u * aspect * freq + t * 0.7f,
+                                         v * freq - t * 0.5f, 0);
+                const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
+                                         v * freq * 2.3f + t * 0.3f, 7);
+                const float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
+                const float k = seeding ? 1.0f : (1.0f - expf(-decay * dt));
+                next[(size_t)y * kMixW + x] = src + (tgt - src) * k;
+            } else {
+                // Visible row: pure advection. Deliberately NO decay here --
+                // with the shipped 0.35 the relaxation time is under three
+                // seconds, so a patch that entered at the bottom would be
+                // gone before it had climbed a tenth of the screen and the
+                // feature would not exist. Decay now shapes the material
+                // while it is still being made, below the edge.
+                next[(size_t)y * kMixW + x] = src;
+            }
         }
     }
     m_mixField.swap(next);
@@ -4930,9 +4966,12 @@ void FluidRenderer::UploadAcidConstants() {
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f), 0.0f, 0.0f, 0.0f };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
     {
-        const int N = kMixW * kMixH;
+        // Only the VISIBLE rows are uploaded: the hidden seed rows under the
+        // bottom edge exist on the CPU alone, so the cbuffer layout and the
+        // shader are untouched by the off-screen generation.
+        const int NV = kMixW * kMixH;
         for (int i = 0; i < 60 * 4; i++)
-            ((float*)p.mix)[i] = (i < N && (int)m_mixField.size() == N)
+            ((float*)p.mix)[i] = (i < NV && (int)m_mixField.size() >= (size_t)NV)
                                ? m_mixField[(size_t)i] : 0.0f;
     }
     memcpy(m_acidParamData[fi], &p, sizeof(p));

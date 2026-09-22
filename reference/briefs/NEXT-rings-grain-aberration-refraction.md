@@ -618,3 +618,10 @@ need to be more of consistent steam, not like a bubble maker, but more like at l
 all the time. They need to move much stronger, like a air bubble in water but the its a cut of
 water. with a plate at 45degrees. or closer to horizontal." Reads as: small bubbles rise only, a
 constant stream of 2-5, stronger, like air under a plate at 45 degrees or flatter. Not started.
+
+AG status (2026-09-22 02:45, overnight): keys landed (7e0050b, e916547) but dye_hue does NOT reach
+the frame: the display pass rewrites the ink ramp's hue twice (ink_hue_vary rotates it by the sim's
+chroma direction, then the complement lock clamps it to a window round the oil hue), so only the
+dye's VALUE survives, which reads as brown. Fix = apply the dye after those two steps (branch dye3
+in progress). acid-rise-12 ships dye_lum 0 (black) until then. Sheets: build2/shots/live/dye-sheet.png,
+dye-hue-sheet.png (four hues byte-identical = the proof).

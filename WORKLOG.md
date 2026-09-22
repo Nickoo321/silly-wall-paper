@@ -1653,3 +1653,6 @@ no-BOM were preserved, verified with `git diff --numstat` plus a byte-level scan
 is still 0 in all 33, so the new keys are inert there too. `src/settings.cpp` already carries both
 sliders with help text under the same `[liquid_acid]` section/key names -- confirmed, no change
 needed there.
+
+## 2026-09-22 02:45 overnight (Fable)
+AG dye keys merged (7e0050b, e916547); dye_hue defeated by ink_hue_vary + complement lock in the display pass; acid-rise-12 dye_lum back to 0 (9420b10); dye3 fix attempted before the 03:00 stop; AE-c off-screen hue2 seeding merged b09e0bc; user notes filed AK-BA.

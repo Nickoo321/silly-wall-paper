@@ -1,0 +1,105 @@
+# Reference shots index
+
+One line per image in `reference/shots/photos/` and `reference/shots/panel/`. WHAT = what it shows. WHY = why it's kept (user's verdict, quoted where recorded). TAGS = search terms.
+
+## Reference photos (ideas, not targets)
+
+- aj-reflection-radius-markup.jpg — blue panel photo, 2 red lines over a magenta/orange seam — brief AJ: markup of how far seam colour should reach — reflection radius, red-line markup
+- backlit-glass-ref-volumetric.jpg — glass of cloudy amber liquid with a blob, lit from below — brief Q: "light in the water" fog + bloom ref — backlit glow, volumetric fog, lamp
+- bubbles-ref-1.jpg — macro photo of soap bubbles clustered at a water surface — brief A: "it kinda looks like this, should probably clump" — bubbles, clumping, soap foam
+- bubbles-ref-2.jpg — search page of glass-bead/hollow-drop bubble photos — brief A: paired with ref-1 for ring-clumping — bubbles, hollow drop, clumping
+- endgoal-ref-1-cinestill-halation.jpg — night street with warm halation glow around lights — brief T: CineStill 800T halation ref — halation, film stock, night lights
+- endgoal-ref-10-br2049-moodboard.jpg — Territory Studio BR2049 mood board (petri grids, UI) — brief T: "artifacted BY THE CAMERA" ref — BR2049, mood board, lab instrument
+- endgoal-ref-11-br2049-scope-cell.jpg — BR2049 article, blurry cell view through an eyepiece — brief V ref set (11-14), lid/optics task — BR2049, scope view, eyepiece
+- endgoal-ref-12-br2049-bone-scan.jpg — BR2049 article, scan-style pelvic-bone texture — brief V ref set (11-14), instrument idea — BR2049, bone scan, instrument
+- endgoal-ref-13-br2049-lapd-optics.jpg — 6-panel LAPD optics sheet: ring ghosts, rainbow fringe, flare — user: "EXACTLY the internal artifacting wanted" — LAPD optics sheet, ring ghosts, flare
+- endgoal-ref-14-br2049-brain.jpg — BR2049 article, brain-texture scan graphic — brief V ref set (11-14), instrument idea — BR2049, brain scan, instrument
+- endgoal-ref-2-film-night-longexposure.jpg — night long-exposure street photo, light trails — brief T: "very very dreamy... nice film camera" — film look, long exposure, night
+- endgoal-ref-3-scope-view.jpg — rifle-scope crosshair view over greenery — brief T "SCOPE/EYEPIECE": circular field-stop idea — scope view, eyepiece, circular mask
+- endgoal-ref-4-scope-glass-1.jpg — scope-eyepiece view over a HUD texture, red dot — brief T scope reference, field-stop framing — scope view, eyepiece, HUD
+- endgoal-ref-5-scope-glass-2.jpg — scope-eyepiece view, "INFILTRATION" HUD text visible — brief T scope reference, field-stop framing — scope view, eyepiece, HUD
+- endgoal-ref-6-br2049-petri-grid.jpg — collage: petri dish on a grid, blue cell shape, red discs — brief T: petri-dish look, aesthetic target — petri dish, red glow, lab instrument
+- endgoal-ref-7-br2049-bioluminescence.jpg — "Bioluminescence" petri dishes, starburst glowing colonies — brief T: aesthetic target — bioluminescence, petri dish, BR2049
+- endgoal-ref-8-br2049-denabase-tube.jpg — "Denabase" DNA-archive prop, a lit grid in a tube — brief T note 2: "NOT aesthetic — FOCUS ref only" — Denabase, focus reference, DOF
+- endgoal-ref-9-br2049-microscope-ui.jpg — microscope UI screenshot, crosshair markers on a scan — brief T: UI-marks idea, separate preset only — microscope UI, crosshair, instrument
+- film-lightleak-ref-1.jpg — warm/green 35mm film-leak overlay with scratches and dust — brief AH: light leaks driven by the oil — light leak, 35mm, dust scratches
+- film-overlay-ref-1-projector-hairs.jpg — retro projector overlay, scratches/specks over amber — brief Q: "do you see that light, spreads?" — film overlay, projector hairs, grain
+- film-overlay-ref-2-35mm-dust-scratches.jpg — dark green 35mm frame, fine scratches and dust — brief P: film overlay artefacts, subtle population — 35mm, dust, scratches, grain
+- film-overlay-ref-3-lightleak-specks.jpg — dark frame, soft red/pink light leak from one side — brief P: coloured leak entering an edge — light leak, coloured bleed, film overlay
+- film-overlay-ref-4-lightleak-colour.jpg — dark frame, blue-to-pink vertical leak with scratches — brief Q: cited with ref-1's "light spreads" — light leak, colour bleed, scratches
+- film-overlay-ref-5-colour-leak-stock.jpg — warm red/orange/yellow leak fading to teal fringe — brief P addendum: warm-to-cool fringe idea — colour leak, film stock, warm-cool fringe
+- ink-in-water-ref-1-black-drop-plume.jpg — black ink dropped into water, billowing plume — style=ink reference, shared ink path — ink drop, plume, black ink
+- ink-in-water-ref-2-veils-and-splash.jpg — dark ink veils, a splash of droplets fanning out — style=ink reference, veils-and-splash variant — ink veils, splash, droplets
+- lavalamp-ref-1.jpg — amber lava-lamp wax, cratered bubbly texture, backlit — brief AB: lava-lamp reference set — lava lamp, amber wax, backlit
+- lavalamp-ref-2.jpg — amber lava-lamp wax close-up, similar cratered texture — brief AB: lava-lamp reference set — lava lamp, amber wax, backlit
+- lavalamp-ref-3.jpg — lava-lamp wax mass rising, bubbly surface texture — brief AB: lava-lamp reference set — lava lamp, rising mass, bubble texture
+- lavalamp-ref-4.jpg — lava-lamp wax mass, dense fine bubbles, clear liquid — brief AB: "amber wax over orange" dye idea — lava lamp, amber wax over orange
+- lavalamp-ref-5.jpg — lava-lamp wax rising, sparkling bubbles, warm backlight — brief AB: "amber wax over orange", paired with ref-4 — lava lamp, amber wax over orange
+- lavalamp-ref-6.jpg — Instagram "Liquid Acid" clip: orange discs, teal marbling on purple — likely a liquid-acid stock clip misfiled here — liquid acid, stock footage, orange discs
+- lavalamp-ref-7.jpg — Instagram "Liquid Acid" clip: red/orange circles, teal vein — likely a liquid-acid stock clip misfiled here — liquid acid, stock footage, red discs
+- liquid-acid-ref-1-orange-discs-on-teal-ink.jpg — "Liquid Acid" cover: orange discs, teal marbling, red/purple — brief: marbling reads through discs — liquid acid, orange discs, colour combo
+- liquid-acid-ref-2-red-web-holes-on-purple.jpg — vertical crop, orange/red dots on red/black marble — Liquid Acid visual-pack source photo — liquid acid, red web holes, marbled
+- liquid-acid-ref-3-orange-bubbles-on-red-marble.jpg — "Liquid Acid" cover, orange bubbles on red/orange marble — brief: transparent oil film ref — liquid acid, orange bubbles, red marble
+- liquid-acid-ref-4-orange-discs-on-red-marble-no-outline.jpg — vertical crop, orange circles on red/black marble — brief: orange discs on red marble ref — liquid acid, orange discs, red marble
+- liquid-acid-ref-5-red-oil-mass-on-purple-soft-edge.jpg — purple bg, red oil mass bottom-left, soft edge — brief: soft-edge red oil mass reference — liquid acid, red oil mass, soft edge
+- liquid-acid-ref-6-big-holes-thin-oil-goes-red.jpg — red/orange field, one big dark circular hole — brief: "thin oil goes red over dark ink" — liquid acid, big hole, thin oil
+- liquid-acid-ref-7-red-discs-cyan-halo-on-orange-black-marble.jpg — "Liquid Acid": red circles, cyan veins, marble — brief: "marbling faintly visible inside" — liquid acid, red discs, cyan halo
+- liquid-acid-ref-lensshade.jpg — same red-discs/cyan-halo "Liquid Acid" shot as ref-7 — brief F: "oil still has a brightness gradient" — liquid acid, lens shading, gradient
+- microscope-ref-1-edge-ca.jpg — phase-contrast bacteria micrograph, colour fringing on edges — camera family: chromatic-aberration reference — microscope, bacteria, aberration
+- microscope-ref-10-requiem-cell.jpg — Instagram post scored to "Lux Aeterna" (Requiem theme), glowing cell — brief: DOF ref, one cell sharp, rings ghosted — Requiem, DOF keeper, teal cell
+- microscope-ref-2-field-edge.jpg — diatom cluster near a circular field's edge, yellow rim — camera family: field-edge softness/vignette ref — microscope, diatoms, field edge
+- microscope-ref-3-halo-double.jpg — diatom cluster, a ring visible mid-frame — camera family: double-contour halo ref (superseded) — microscope, diatoms, halo
+- microscope-ref-4-subtle-halo.jpg — chain of bacteria, phase-contrast, grey and subtle — user: "those are extreme; this is closer, subtle" — microscope, subtle halo, calibration
+- microscope-ref-5-THE-ONE.jpg — green/gold plant-cell walls under a light microscope — user: "omg I found it — this" — THE TARGET — THE ONE, plant cells, target look
+- microscope-ref-6-general-wood.jpg — wood-grain-like radiating pattern under a microscope — general texture reference for camera family — microscope, wood grain, texture
+- microscope-ref-7-general-grain.jpg — grainy black/white diagonal-line SEM-ish image — general film-grain texture reference — microscope, film grain, texture
+- microscope-ref-8-general-sem-edges.jpg — SEM image of triangular crystal/flake edges — general edge-texture ref for camera family — microscope, SEM, crystal edges
+- microscope-ref-9-requiem-strip.jpg — collage: glass vial, teal cell, powder splash, mirror shard — Requiem-for-a-Dream motif for briefs N/G — Requiem, film strip, DOF, grain
+- oil-colour-combo-ref-1.jpg — magenta/pink and green oil-and-water macro shot — brief AE: "colour-combo result the user rated positive" — colour combo, keeper palette
+- oilwater-ref-1-easton-rafts.jpg — Karyn Easton oil-water macro, bubbles chained into rafts — motion ref: WE-pour-style rafting/splitting — oil and water, bubble rafts
+- oilwater-ref-2-adaptalux-sizes.jpg — Adaptalux oil-water macro, varied bubble sizes, gradient — reference for varied droplet sizing — oil and water, bubble sizes
+- oilwater-ref-3-green-lens-shading.jpg — green/red oil-water macro, crisp rims, radial shading — brief X: droplet lens-shading target — droplet lens shading, crisp rim
+- sketch-perspective-camera.jpg — user's finger-drawn lens/cone sketch on a phone screen — brief R: "a lens at the tip of a view cone" — perspective camera, hand sketch, DOF
+- user-note-2026-09-20-colour-wheel.png — "color wheel to build a palette" infographic — brief AN: palette combos from this chart + jitter — colour wheel chart, palette combos
+- user-note-2026-09-20-panel-1.png — live panel photo, green/magenta field, holes and droplets — 1 of 3 shots filed with 2026-09-20 notes (AK-BA) — panel photo, green magenta, user notes
+- user-note-2026-09-20-panel-2.png — live panel photo, blue/red/pink field, magenta seam — 1 of 3 shots filed with 2026-09-20 notes (AK-BA) — panel photo, blue red orange, notes
+- we-2026-09-16-salmon-red-purple-a.jpg — phone-gallery still, salmon/cyan swirl on purple — WE pour motion reference (splits/merges) — WE pour, salmon, cyan swirl
+- we-2026-09-16-salmon-red-purple-b.jpg — TV photo, orange/salmon swirl, cyan/white accents on purple — WE pour motion ref, same session as -a — WE pour, salmon, cyan accent
+- we-2026-09-16-salmon-red-purple-c.jpg — TV photo, red/maroon and cream swirls, green fringe — WE pour motion ref, warmer palette — WE pour, maroon, cream swirl
+- we-old-cream-red-full-pour.jpg — TV photo, cream/red full-pour marbling, dark red centre — old WE look, cream/red pour colour ref — WE old, cream red, full pour
+- we-old-cyan-clouds-on-magenta.jpg — TV photo, cyan cloud shapes on deep magenta — old WE look, cyan-on-magenta colour ref — WE old, cyan clouds, magenta
+- we-pour-1.jpg — TV photo, cream/tan pour, maroon mass, violet-blue patch — WE pour motion reference set — WE pour, cream tan, maroon
+- we-pour-2.jpg — TV photo, yellow-cream pour, maroon/purple border, blue swirl — WE pour motion reference set — WE pour, yellow cream, motion
+- we-pour-3.jpg — TV photo, yellow-cream pour, tighter crop, blue accent — WE pour motion reference set — WE pour, yellow cream, motion
+- we-pour-4.jpg — TV photo, yellow-cream pour, magenta/purple border — WE pour motion reference set — WE pour, yellow cream, motion
+- we-pour-5.jpg — TV photo, magenta/pink pour, cream centre, blue accent — WE pour motion reference set — WE pour, magenta pink, motion
+- we-pour-6.jpg — TV photo, cream centre, hot-pink swirling border — WE pour motion reference set — WE pour, hot pink, motion
+- we-pour-7.jpg — TV photo, pink/magenta pour, cream centre, dark corners — WE pour motion reference set — WE pour, pink magenta, motion
+
+## Panel keepers (our own renders, with verdicts)
+
+- 2026-09-17-accent-crop-liked.jpg — cropped photo: black mass on magenta, small cyan accents — user: "if the whole frame looked like the crop" (brief J) — accent colour, crop liked
+- 2026-09-17-acid-rise-cyan-panel-a.jpg — live photo, cyan field with black holes/droplets — user: "stationary, this is amazing" (colours a keeper) — acid rise, cyan panel, amazing
+- 2026-09-17-acid-rise-cyan-panel-b.jpg — 2nd live photo, same cyan acid-rise phase, wider crop — same "stationary, this is amazing" verdict — acid rise, cyan panel, amazing
+- 2026-09-17-droplets-live-rings-softedge.jpg — live photo, teal field, soft-rim blobs, faint ring — early ring look, before "too perfect"/"liked" — droplets, soft edge, rings
+- 2026-09-17-edge-profile-sketch.jpg — finger-drawn red/blue lines over a magenta panel photo — annotation for the softness/penumbra briefs — edge profile, hand sketch
+- 2026-09-17-edge-profile.jpg — teal crop, close-up of a droplet edge, bright meniscus — reference crop for oil-edge/meniscus work — edge profile, meniscus rim
+- 2026-09-17-edges-too-sharp.jpg — pink field, sharply outlined black masses — user: "way too accurate and focused" — drove softness key — edges too sharp, critique
+- 2026-09-17-ink-compressed.jpg — live photo, peach/salmon and near-black ink shapes — user: "colours are compressed... more steps of brightness?" — ink compressed, HDR critique
+- 2026-09-17-old-swarm-live-blue.jpg — live photo, blue field, red-circled cluster of holes — old "stamped swarm" the user wanted replaced — old swarm, blue panel, critique
+- 2026-09-17-penumbra-diagram.jpg — phone drawing (blue outline+dots) over a magenta photo — brief I: "pigments lit less look different" — penumbra diagram, hand-drawn
+- 2026-09-17-rings-liked.jpg — magenta field, thin hollow "empty double" ring droplets — user: "I like these empty doubles, add more" — rings liked, empty doubles, keeper
+- 2026-09-17-rings-too-perfect.jpg — blue field, a few perfectly round hollow rings — user: "these are pixel perfect circles" — critique — rings too perfect, critique
+- 2026-09-17-shading-wanted-everywhere.jpg — green field, soft mass vs hard-outlined droplets — user: "shading needs to be everywhere" — critique — shading wanted, hard outline
+- 2026-09-18-big-hollow-bubble-liked.jpg — teal field, one large hollow bubble among solids — "user wants more of the big hollow bubble" — big hollow bubble, liked, keeper
+- 2026-09-18-bloom-ring-artefact.jpg — magenta field, concentric bloom rings around droplets — diagnosis: two-ring bloom artefact, later fixed — bloom rings, artefact, critique
+- 2026-09-18-bubble-in-black-liked.jpg — magenta field, pink droplets glowing in a black mass — "exactly the wanted glow" — kept as target look — bubble in black, glow kept
+- 2026-09-18-damn-near-real.jpg — green field, soft-edged diffracted black masses — user: "damn near looks real" — diffraction verdict — damn near real, diffraction
+- 2026-09-18-dof-lines-up-with-big-blob-amazing.png — teal field, tilted sharp band crossing a big droplet — user: "lines up with a bigger blob, its amazing" — DOF keeper, focus tilt
+- 2026-09-18-infocus-pixelated-ring.jpg — magenta field, one ring with a pixelated edge — user: "a thin hair... it's not out of focus per se" — pixelated ring, diffraction
+- 2026-09-18-line-down-middle.jpg — magenta field, faint scratch-like line across a mass — user: "no film has a line like that" — scratches shipped off — scratch line, critique
+- 2026-09-18-lobed-groups-of-5.jpg — blue field, red circles marking clusters of ~5 droplets — diagnosis: "lumpy groups of ~5" — fixed by coalescence — lobed groups, red markup
+- 2026-09-18-medium-clumps-blurry.jpg — purple field, a droplet with a blurry ring, not crisp — user: "ratio of blurry to focused is off" — clumps blurry, critique
+- 2026-09-18-too-many-small.jpg — purple field densely packed with small/medium droplets — population-density diagnosis for weather tuning — too many small, density
+- 2026-09-19-hue2-cyan-in-magenta-beautiful.png — magenta field, cyan hue-shift patch near the bottom — user: "its beautiful" — 2nd dye-hue field (brief AE) — hue2 keeper, cyan in magenta
+- 2026-09-19-hue2b-boundary-chefs-kiss.png — orange/blue boundary, droplets, magenta seam glow — user: "accurately", "chef's kiss" — boundary keeper — boundary keeper, chefs kiss

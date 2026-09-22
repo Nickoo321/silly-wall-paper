@@ -651,3 +651,13 @@ dish so masses glow at the edges and shadow the film toward the camera instead. 
 shadow_len (fraction of screen height), shadow_soft, light_z (behind / in front), all default 0 =
 today. Optional later: light shafts through the dish (volumetric) when the lamp is behind. Judge
 live; stills can show the shadow shape.
+
+BD. **Get rid of the high-ISO noise.** User photo of the panel (reference/shots/photos/high-iso-noise-in-mass-phone.jpg):
+inside a dark mass the picture shows per-pixel speckle on a lifted grey-brown, "it doesn't read like
+film, it looks more like high ISO artifacting". Reading: coloured (per-channel) noise on a black that
+is not black. Directions: grain luminance-only; grain weighted by a mid-tone density curve (near
+zero in dense shadow and clean highlight); the lid sheen's black lift (0.04) and any other lift
+fading to zero inside masses so the grain has nothing to sit on; then re-dial amount live with the
+user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
+rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
+discussion.

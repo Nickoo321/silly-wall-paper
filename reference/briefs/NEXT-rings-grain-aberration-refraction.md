@@ -638,3 +638,16 @@ today's baked amount so presets stay identical) and rise_bottom_temp (warm towar
 away, signed), useful ranges from a sheet; A/B live since it is a whole-field gradient. First step
 done as an ini change: rise_bottom_light 0.5 -> 0.8 for a live A/B. Banding note: a stronger
 field gradient also shortens the flat runs that band on the panel.
+
+BC. **The light should cast shadows (volumetric lighting or an implementation of it).** User
+(2026-09-22): "idk if this is a feature, volumetric lighting, or some implementation of it. The
+light should cast shadows essentially... it can be from behind, or the bottom, or the top or side."
+Today the lamp (light_x / light_y, off-frame below by default, with idle drift and the rig
+readjust) drives specular, mass_rim, penumbra, haze and bloom, but nothing casts a shadow. Spec to
+scope: every mass and droplet casts a soft shadow onto the film AWAY from the lamp (direction from
+the lamp position, length and softness from a per-droplet height / the mass thickness, darker and
+tighter near the caster, fading with distance), and a backlit mode where the light is behind the
+dish so masses glow at the edges and shadow the film toward the camera instead. Keys: shadow_amt,
+shadow_len (fraction of screen height), shadow_soft, light_z (behind / in front), all default 0 =
+today. Optional later: light shafts through the dish (volumetric) when the lamp is behind. Judge
+live; stills can show the shadow shape.

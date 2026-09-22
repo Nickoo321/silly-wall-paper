@@ -1602,3 +1602,5 @@ gained exactly two lines, zero deletions; each file's own line endings (CRLF or 
 are a mix) and no-BOM were preserved, verified with `git diff --check` plus a byte-level scan.
 `src/settings.cpp` already carries both sliders with help text under the same `[liquid_acid]`
 section/key names -- confirmed, no change needed there.
+
+## 2026-09-22 02:xx overnight: user notes filed as AK-.., hue2c in progress

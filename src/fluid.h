@@ -675,6 +675,25 @@ struct LiquidAcidConfig {
     float dyeDepthTilt = 0.0f;      // slope across the frame   dye_depth_tilt
     float dyeDepthW    = 0.25f;     // its weight in the blend     dye_depth_w
 
+    // --- DYE THE BLACK (brief AG / AM) ------------------------------------
+    // The dark masses are always near-black. The user: "add ability to dye the
+    // black ink", and note 11's example, "make the currently black oil mostly
+    // purple". The references are lava lamps -- amber wax over orange -- where
+    // the dark body is not black at all but a DEEP, translucent colour you can
+    // almost see the lamp through. So the negative masses take a colour of
+    // their own, applied to the INK RAMP's dark stops (not as a post tint, and
+    // not to the bright stops, so the crust and mass_rim still read against
+    // it). dye_sat 0 / dye_lum 0 is exactly today's black, which is why every
+    // existing preset and style=fluid are untouched to the bit.
+    //   dye_hue_follow 1 makes dye_hue an OFFSET from the film's current hue,
+    //   so the dye rotates with the pair as hue_rotate_period and the sweep
+    //   turn the film -- the two stay a designed pair instead of drifting
+    //   into whatever clash the clock lands on.
+    float dyeHue       = 0.0f;      // degrees                          dye_hue
+    float dyeSat       = 0.0f;      // 0..1, 0 = today's neutral        dye_sat
+    float dyeLum       = 0.0f;      // 0..1, 0 = today's black          dye_lum
+    int   dyeHueFollow = 0;         // 1 = offset from the film   dye_hue_follow
+
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
     // goes from green to black, then stops; it should be more S-curved".

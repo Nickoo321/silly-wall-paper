@@ -1604,3 +1604,52 @@ are a mix) and no-BOM were preserved, verified with `git diff --check` plus a by
 section/key names -- confirmed, no change needed there.
 
 ## 2026-09-22 02:xx overnight: user notes filed as AK-.., hue2c in progress
+
+Brief items AK-BA (the user's 16 notes, 2026-09-20) filed verbatim to
+`reference/briefs/NEXT-rings-grain-aberration-refraction.md`, plus panel photos and a colour-wheel
+reference (`a074c19`).
+
+**AE-c: hue2 patches are generated off screen and only rise (`6336c36`, merged `b09e0bc`).** User's
+standing rule, repeated again tonight: colours must not appear out of thin air, everything has to
+be generated off screen and only move up once inside. The mix grid is now taller than the screen --
+rows 0..kMixH-1 are the visible frame, `film_hue2_seed_rows` hidden rows sit under the bottom edge.
+New material is made ONLY in those hidden rows; a visible cell is pure advection, taking only what
+was below it, so nothing can form, brighten or re-lay inside the frame. Vertical velocity is
+clamped at or below zero (uv y is down) so a patch can be carried up fast or slow, sideways, or
+stretched, but never down. The readjustment no longer re-lays the field -- it changes the phase and
+scale of what is being seeded below the edge instead, so the composition still turns over minutes
+while everything still walks in from underneath. One deliberate deviation from the brief, which
+said decay unchanged: decay now applies only in the seed rows, because with nothing to inject in
+the visible rows the only thing left to relax toward there is the base, and at the shipped 0.35
+that is a time constant under three seconds -- a patch entering at the bottom would be gone before
+it climbed a tenth of the screen and the feature would not exist at all. Decay now shapes material
+while it is still being made, below the edge; the key and its range are unchanged. New keys
+`film_hue2_seed_rows` (default 2; 0 restores the old in-frame injection, so the two can be A/B'd
+from one binary) and `film_hue2_rise` (screen heights per minute, default 0.25); sliders, help
+text, getF/putF. Both only matter when `film_hue2_amt` > 0, so every existing preset besides
+acid-rise-12 is untouched. `acid-rise-12.ini`: seed_rows 2, rise 0.3, with comment lines.
+Provenance check on the mix field itself (the `FW_ACID_DUMP` csv, visible and hidden rows), 2 s
+apart, local window (rows [y,y+2], cols [x-3,x+3]) sized to what the flow can actually move in the
+interval: old in-frame injection 44 violations of 1680 (2.6%, worst excess 0.0358); off-screen
+generation 0 violations of 1680 (0.0%, worst excess 0.0000) -- no visible cell ever exceeds what
+was locally at or below it. (A coarser 60 s-apart check was inconclusive -- 44.3% before / 5.5%
+after -- because material legitimately arrives from the seed rows over that gap, and an at-or-below
+test across it flags those legitimate arrivals too.) style=fluid parity md5
+`10E36EBF1A74EDFE609065D757300054` held on `we-look-live.ini`, 60 s, 2560x1440, seed 1234,
+`--hdr on`. Strip `build2/shots/live/hue2c-strip.png` (t = 60/120/180/240/300, 640x360): the combos
+turn and the patches climb. Headless only this session -- no panel check yet.
+
+## 2026-09-22 -- Preset parity: film_hue2_seed_rows/film_hue2_rise at defaults into the other 33 acid files (Fable rote)
+
+`6336c36` shipped `film_hue2_seed_rows`/`film_hue2_rise` tuned (2/0.3) in `acid-rise-12.ini` only.
+Added both keys at their DEFAULTS (2 / 0.25, confirmed against `src/fluid.h`) to the same 33 files
+that got the base hue2 keys in `f840685` (`reference/configs/acid-rise-{2hue,8020,rotate}.ini`,
+`reference/presets/Liquid Acid*.ini`), right after `film_hue2_wobble_period`, none of them turned
+up. No comment lines were added: the actual `acid-rise-12.ini` diff (`6336c36`) shipped these two
+keys alongside comment lines of its own, but the wobble-key precedent (`6e4a81c`) is to add the
+bare keys only to the other 33, so none was invented here either. Each file gained exactly two
+lines, zero deletions; each file's own line endings (CRLF or LF -- the 33 files are a mix) and
+no-BOM were preserved, verified with `git diff --numstat` plus a byte-level scan. `film_hue2_amt`
+is still 0 in all 33, so the new keys are inert there too. `src/settings.cpp` already carries both
+sliders with help text under the same `[liquid_acid]` section/key names -- confirmed, no change
+needed there.

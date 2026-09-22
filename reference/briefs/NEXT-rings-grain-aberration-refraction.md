@@ -674,3 +674,24 @@ fading to zero inside masses so the grain has nothing to sit on; then re-dial am
 user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
 rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
 discussion.
+
+BE. **Named cbuffer fields (executor C's review, user: do it).** ~30 packed float4 params reached
+as laP13.x / laP27.z / laP31.y with a comment table 1000 lines away and no check that the shader
+and UploadAcidConstants agree (the AG dye failure was this). Fix: a #define (or struct) per slot
+next to the table, every use in the acid literals replaced, zero runtime cost; byte-identity of
+every preset before/after (tools/preset-identity.ps1, BF). Touches every constant use, so it
+runs ALONE after the in-flight branches (dye4, shadow, noise) have merged.
+
+BF. **Acid preset byte-identity script** = tools/preset-identity.ps1 (Sonnet, in progress):
+renders the preset list with a given exe, saves/compares md5s; required before every merge.
+
+BG. **10-bit HDR shots.** User: "can you render in 10 bit at all? It's low-key important." Both
+--shot PNGs are 8-bit (SDR-mapped and tone-mapped). Executor F adds <stem>.jxr (JPEG XR, half-float
+scRGB via WIC, the Game Bar HDR screenshot format, opens in Windows Photos in true HDR on the OLED)
+and if cheap <stem>-pq.png (16-bit PQ). Then lid on/off pairs (AF/AW) get judged from JXRs on the
+panel, opened only when the user asks.
+
+Design note from executor C (keep in mind for AF/AW lid and AJ): six terms already paint a ring on
+the droplet boundary (mass_rim, droplet_lens b and c, meniscus 0.85, bright-field halo, oil_glow,
+oil_thin_edge) with independent amplitudes; film-derived terms are a minority of the ring. "Weak
+lid" is partly a symptom of that competition, not a missing feature.

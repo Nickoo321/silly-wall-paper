@@ -619,6 +619,10 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dyeDepth         = getF(S, L"dye_depth", a.dyeDepth);
         a.dyeDepthTilt     = getF(S, L"dye_depth_tilt", a.dyeDepthTilt);
         a.dyeDepthW        = getF(S, L"dye_depth_w", a.dyeDepthW);
+        a.dyeHue           = getF(S, L"dye_hue", a.dyeHue);
+        a.dyeSat           = getF(S, L"dye_sat", a.dyeSat);
+        a.dyeLum           = getF(S, L"dye_lum", a.dyeLum);
+        a.dyeHueFollow     = getI(S, L"dye_hue_follow", a.dyeHueFollow);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1816,6 +1820,10 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"dye_depth", a.dyeDepth, 3);
         putF(S, L"dye_depth_tilt", a.dyeDepthTilt, 3);
         putF(S, L"dye_depth_w", a.dyeDepthW, 3);
+        putF(S, L"dye_hue", a.dyeHue, 1);
+        putF(S, L"dye_sat", a.dyeSat, 3);
+        putF(S, L"dye_lum", a.dyeLum, 3);
+        putI(S, L"dye_hue_follow", a.dyeHueFollow);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

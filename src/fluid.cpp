@@ -4729,6 +4729,52 @@ void FluidRenderer::UploadAcidConstants() {
         }
     }
 
+    // ---- DYE THE BLACK (brief AG / AM) -----------------------------------
+    // "Add ability to dye the black ink." The references are lava lamps: the
+    // dark body is not black, it is a DEEP translucent colour with the lamp
+    // showing through it. So the ink ramp's DARK stops take a colour of their
+    // own and the bright stops are left alone -- the crust and mass_rim are
+    // built off those, and they have to keep reading against the mass rather
+    // than dissolving into it. Done here, on the ramp the shader indexes, not
+    // as a tint over the finished frame: a post tint would colour the film and
+    // the droplets too, and the whole point is that only the negative space
+    // changes.
+    //
+    // The value climbs across the stops (lum, then about twice it) instead of
+    // being flat, which is what reads as translucency: a lava-lamp blob is
+    // darkest where it is thickest and lets light through at its edge.
+    //
+    // dye_sat 0 and dye_lum 0 leave effInk exactly as it arrived, so every
+    // existing preset -- and style=fluid, which never reaches this function --
+    // is untouched to the bit.
+    if (a.dyeSat > 1e-4f || a.dyeLum > 1e-4f) {
+        float hue = a.dyeHue;
+        if (a.dyeHueFollow) {
+            // ...as an OFFSET from the film's own current hue, so the pair
+            // turns together under hue_rotate_period and the sweep instead of
+            // drifting into whatever clash the clock happens to land on.
+            float fh, fs, fv;
+            RgbToHsv(&effOil[0], fh, fs, fv);
+            hue += fh * 360.0f;
+        }
+        float hn = fmodf(hue, 360.0f);
+        if (hn < 0.0f) hn += 360.0f;
+        hn *= (1.0f / 360.0f);
+        const float ds = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
+        const float dl = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
+        // How much of each ramp stop the dye takes: all of the darkest, most
+        // of the second, a little of the third, none of the brightest.
+        const float wgt[4] = { 1.00f, 0.72f, 0.30f, 0.0f };
+        for (int ci = 0; ci < 4; ci++) {
+            if (wgt[ci] <= 0.0f) continue;
+            const RGB d = HSVtoRGB(hn, ds, dl * (1.0f + 1.05f * (float)ci));
+            const float w = wgt[ci];
+            effInk[ci * 3 + 0] = effInk[ci * 3 + 0] * (1.0f - w) + d.r * w;
+            effInk[ci * 3 + 1] = effInk[ci * 3 + 1] * (1.0f - w) + d.g * w;
+            effInk[ci * 3 + 2] = effInk[ci * 3 + 2] * (1.0f - w) + d.b * w;
+        }
+    }
+
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
     const int n = (int)m_acidBlobs.size();
     for (int i = 0; i < n && i < kAcidMaxBlobs; i++) {

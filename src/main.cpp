@@ -589,6 +589,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.filmHue3Amt        = getF(S, L"film_hue3_amt",    a.filmHue3Amt);
         a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.filmHue2Wobble     = getF(S, L"film_hue2_wobble",        a.filmHue2Wobble);
+        a.filmHue2SeedRows   = getF(S, L"film_hue2_seed_rows",     a.filmHue2SeedRows);
+        a.filmHue2Rise       = getF(S, L"film_hue2_rise",          a.filmHue2Rise);
         a.filmHue2WobbleP    = getF(S, L"film_hue2_wobble_period", a.filmHue2WobbleP);
         a.dropletMassBias    = getF(S, L"droplet_mass_bias",     a.dropletMassBias);
         a.dropletCrustDens   = getF(S, L"droplet_crust_density", a.dropletCrustDens);
@@ -1784,6 +1786,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_hue3_amt", a.filmHue3Amt, 3);
         putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"film_hue2_wobble", a.filmHue2Wobble, 2);
+        putF(S, L"film_hue2_seed_rows", a.filmHue2SeedRows, 0);
+        putF(S, L"film_hue2_rise", a.filmHue2Rise, 3);
         putF(S, L"film_hue2_wobble_period", a.filmHue2WobbleP, 1);
         putF(S, L"droplet_mass_bias", a.dropletMassBias, 3);
         putF(S, L"droplet_crust_density", a.dropletCrustDens, 3);

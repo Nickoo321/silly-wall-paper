@@ -643,6 +643,17 @@ struct LiquidAcidConfig {
     //   film_hue2_wobble_period seconds of the slower of those two sines
     float filmHue2Wobble  = 0.0f;   // degrees      film_hue2_wobble
     float filmHue2WobbleP = 300.0f; // s     film_hue2_wobble_period
+    //   film_hue2_seed_rows  NOTHING is laid inside the frame. New patch
+    //                        material is made only in hidden rows BELOW the
+    //                        bottom edge and enters by rising -- the user's
+    //                        standing rule: "everything needs to be generated
+    //                        off screen, and within the screen needs to just
+    //                        move up". 0 restores the old in-frame injection
+    //                        and exists only so the two can be A/B'd.
+    //   film_hue2_rise       extra upward drift, screen heights per minute,
+    //                        on top of the oil's own rise.
+    float filmHue2SeedRows = 2.0f;  // hidden rows   film_hue2_seed_rows
+    float filmHue2Rise     = 0.25f; // screens/min        film_hue2_rise
 
     // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
     // The user, on the halation frame: "the bottom right blob isn't getting
@@ -1699,7 +1710,8 @@ private:
     // texture, no new descriptor, nothing added to a root signature that is
     // already at its 64-DWORD limit. Advected semi-Lagrangian on the CPU off
     // the 64x36 velocity readback that the blob sim already keeps.
-    static const int kMixW = 20, kMixH = 12;
+    static const int kMixW = 20, kMixH = 12;   // kMixH = the VISIBLE rows
+    static const int kMixMaxSeed = 8;          // hidden rows below the edge
     std::vector<float> m_mixField;      // kMixW*kMixH, 0..1
     float    m_mixPhase = 0.0f;         // noise phase; jumps on a readjust
     float    m_mixPhaseTarget = 0.0f;

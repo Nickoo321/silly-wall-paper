@@ -5009,7 +5009,12 @@ void FluidRenderer::UploadAcidConstants() {
                      hue2Eff,
                      fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f),
                      a.filmHue3 };
-    float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f), 0.0f, 0.0f, 0.0f };
+    // .y/.z: brief AJ, the boundary-reflection reach (screen heights) and how
+    // much of the seam's hue a rim takes. 0 reach = today, and the shader
+    // skips the whole probe.
+    float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
+                     fmaxf(a.boundaryReflectR, 0.0f),
+                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), 0.0f };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the

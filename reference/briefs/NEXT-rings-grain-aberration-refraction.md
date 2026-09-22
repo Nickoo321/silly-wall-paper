@@ -629,3 +629,12 @@ AG 03:03: branch dye3 (993747f in fw-cam, NOT merged: restoring the ramp hue aft
 the complement lock changed nothing, delta 0). Hypothesis for the next session: acid-rise-12 runs
 ink_mode = water, whose dark-mass shading is a different path from the banded ink ramp; the dye must
 be applied where THAT path makes the mass colour. Read the water path end to end first, then render.
+
+BB. **Lamp falloff stronger, with its own hue shift.** User (2026-09-22): "the lamp fall off should
+be stronger, and the hue shift should be stronger" (not the penumbra, which is the lit-less oil
+beside a mass). Today rise_bottom_light is one key (bright near the bottom, cools toward the top,
+shift baked in). Add rise_bottom_hue (degrees of hue shift from lamp side to far side, default =
+today's baked amount so presets stay identical) and rise_bottom_temp (warm toward the lamp / cool
+away, signed), useful ranges from a sheet; A/B live since it is a whole-field gradient. First step
+done as an ini change: rise_bottom_light 0.5 -> 0.8 for a live A/B. Banding note: a stronger
+field gradient also shortens the flat runs that band on the panel.

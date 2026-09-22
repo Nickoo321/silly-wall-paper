@@ -1,0 +1,26 @@
+1. on top of everything else add lens flare.
+2. idk if this has been calucalted before but colors still aprear out of thin air. Again everything needs to be generated off screen, and within the screen needs to justy move up.
+3. Add ability to dye the black ink.
+4. Use refrence color wheel in this folder, to create color combos. As stated before add some degrees plus/minus for variety. As of now the current tools to inject color are:
+A. Ink, 
+A1. primary
+A2. secondary(also injected)
+A3. Boundary mix
+B. Previously black ink, possibly can have multiple colors
+C. lens flare/ film coloring, again in the refrence photos those artifacts are usually yellow ish, so that should probably stay around yellowish/whitish, but smart management of it, can help. For example if the sim is primariliy blue, almost a fire yellow is good, since opposites, so shift the hue/temp of that. If the sim is like orangeish/red, shifting the temp to blue would be good.
+D. I forgot one, i will remember.
+E. not mentioned yet at all, but grading the photo with temp (blue/red) and the other one thats (green/purple) would be smart
+5. film artifacts, like the hairs, need to be much more frequent, but also way smaller, and easier to see thru.
+5.2. Possibly clustered around corners.
+6. some artifacting/post processing, should be directinal.
+7. the light souce causing shadows needs to be stronger.
+8. The focus system we have now, should actively move. Like its being focused. So at least every 10 seconds there is some movement. Having the particales move in/out of focus would be cool
+9. Grain/noise right now is too distracting and macro, do A/B with my supervisoion to get it dialed in.
+10. Generally speaking you should refine the settings, and understand ur own doings. You can't implement a feature with 3 others and let it rock with 3 settings. You need to A/B each one, ideally asking me, but if im not there you can do some ur self. for example a blur that is good between .1 piuxels and 3, cant go 0,1,2 to 50. Becuase above 3 its useless.
+11. Grayscale might be smart to use in the colored item objects, like 4. in this list. For example if you are doing primary secondary colors, green and purple, you could make the currently black oil mostly purple, with some green oil dots. With the background fluid, what's currently colored, grayscale. Not a rule to do that at all, but I'm getting at the idea that because there is (ink(2))+boundary mix(1), black mix (1+), lens flare(1), 5 possible places to inject color, and most color combos are 2-3 maybe 4, then most scenes need something to match another hue in palette or to be black white.
+12. The plastic thing on top effect is weak, investigate.
+13. When 13(plastic thing on top) moves, why not add like some global motion to indicate it?
+14. Hazing from heat is also weak, i dont really notice it, investigate.
+15. When multiple colors merge, across a large distance, it looks very nice. Try to set a curve for the mix/movement speed of that.
+16. sim moves too fast in the micro, not macro(hope thast the correct terminology). Try to add 5% to movement of bigger globs
+16.2. The small bubbles need to go up only, i see some going down. Also they need to be more of consistent steam, not like a bubble maker, but more like at least 2-5 bubbles all the time. They need to move much stronger, like a air bubble in water but the its a cut of water. with a plate at 45degrees. or closer to horizontal.

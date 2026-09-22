@@ -529,3 +529,92 @@ above the seam and one about a third of the screen height up, and wants the seam
 reach droplets up to the FAR line, fading with distance. So the sample radius is a fraction of
 screen height (order 0.3 at full strength), not a few pixels; falloff smooth so the near ones stay
 strongest.
+
+## AK-BA. User notes (2026-09-20), filed verbatim -- reference/briefs/USER-NOTES-2026-09-20.txt
+
+Source: the user's 16 numbered notes, `notes for claude.txt`, plus three screenshots filed to
+`reference/shots/photos/` as `user-note-2026-09-20-panel-1.png` (green/magenta/blue panel),
+`user-note-2026-09-20-colour-wheel.png` (colour-wheel-combos chart: analogous/complementary/
+triad/monochromatic/tetrad/split-complementary/square), `user-note-2026-09-20-panel-2.png`
+(blue/red/orange panel). Filed as rote logging only -- no diagnosis or implementation below beyond
+the one-line reading given where the mapping is obvious. Not started.
+
+AK. **Note 1** (+ note 4 tool C). User: "on top of everything else add lens flare." / tool C:
+"lens flare/ film coloring, again in the refrence photos those artifacts are usually yellow ish...
+smart management of it... if the sim is primariliy blue, almost a fire yellow is good, since
+opposites... If the sim is like orangeish/red, shifting the temp to blue would be good." Reads as
+brief AH (film light leaks / lens flare, tied to the sim) with a temperature-opposite rule: flare
+hue picked opposite the dominant sim hue. Not started.
+
+AL. **Note 2.** User: "idk if this has been calucalted before but colors still aprear out of thin
+air. Again everything needs to be generated off screen, and within the screen needs to justy move
+up." Reads as the hue2 field seeding patches in place rather than entering from off-screen; being
+fixed on branch `hue2c` tonight. Not started.
+
+AM. **Note 3.** User: "Add ability to dye the black ink." Reads as brief AG (dye that is not just
+black -- a colour for the negative/dark masses via dye_hue/dye_sat/dye_lum). Not started.
+
+AN. **Note 4** (tools A/A1/A2/A3/B/D, general). User: "Use refrence color wheel in this folder, to
+create color combos. As stated before add some degrees plus/minus for variety." Lists the current
+colour-injection tools as: A. Ink (A1 primary, A2 secondary/also injected, A3 boundary mix), B.
+"Previously black ink, possibly can have multiple colors", D. "I forgot one, i will remember."
+Reads as palette-generation work in the AE (multicolour oil) lineage, using the colour-wheel chart
+(`user-note-2026-09-20-colour-wheel.png`) as the combo source with a random-degree jitter. Not
+started.
+
+AO. **Note 4, tool E.** User: "not mentioned yet at all, but grading the photo with temp
+(blue/red) and the other one thats (green/purple) would be smart." Reads as a grading pass with
+temp and tint keys. Not started.
+
+AP. **Notes 5 and 5.2.** User: "film artifacts, like the hairs, need to be much more frequent, but
+also way smaller, and easier to see thru." / 5.2: "Possibly clustered around corners." Reads as
+film_hairs/film_dust: density up, size down, opacity down, with corner clustering. Not started.
+
+AQ. **Note 6.** User: "some artifacting/post processing, should be directinal." No existing brief
+covers this; new item, no mapping obvious yet. Not started.
+
+AR. **Note 7.** User: "the light souce causing shadows needs to be stronger." No existing brief
+covers this by name; possibly the lamp/rig direction system (rg0) already used for lid/mass_rim
+lighting, but not confirmed. Not started.
+
+AS. **Note 8.** User: "The focus system we have now, should actively move. Like its being
+focused. So at least every 10 seconds there is some movement. Having the particales move in/out
+of focus would be cool." Reads as: focus should move at least every 10 s, droplets drifting in and
+out of focus. Not started.
+
+AT. **Note 9.** User: "Grain/noise right now is too distracting and macro, do A/B with my
+supervisoion to get it dialed in." Reads as: grain A/B session with the user present. Not started.
+
+AU. **Note 10.** User: "Generally speaking you should refine the settings, and understand ur own
+doings. You can't implement a feature with 3 others and let it rock with 3 settings. You need to
+A/B each one, ideally asking me, but if im not there you can do some ur self. for example a blur
+that is good between .1 piuxels and 3, cant go 0,1,2 to 50. Becuase above 3 its useless." Reads as
+a standing policy: every slider's range must be its useful range, A/B each key, never ship one
+feature with a batch of untested settings. Not started.
+
+AV. **Note 11.** User: "Grayscale might be smart to use in the colored item objects, like 4. in
+this list... because there is (ink(2))+boundary mix(1), black mix (1+), lens flare(1), 5 possible
+places to inject color, and most color combos are 2-3 maybe 4, then most scenes need something to
+match another hue in palette or to be black white." Reads as: with five colour-injection points,
+most scenes need at least one of them mono/grayscale rather than a distinct hue. Not started.
+
+AW. **Notes 12 and 13.** User: "The plastic thing on top effect is weak, investigate." / 13: "When
+13(plastic thing on top) moves, why not add like some global motion to indicate it?" Reads as: the
+lid effect reads weak, add global motion tied to lid movement. Not started.
+
+AX. **Note 14.** User: "Hazing from heat is also weak, i dont really notice it, investigate."
+Reads as: heat haze weak. Not started.
+
+AY. **Note 15.** User: "When multiple colors merge, across a large distance, it looks very nice.
+Try to set a curve for the mix/movement speed of that." Reads as: a curve for the mix speed of
+large-distance colour merges. Not started.
+
+AZ. **Note 16.** User: "sim moves too fast in the micro, not macro(hope thast the correct
+terminology). Try to add 5% to movement of bigger globs." Reads as: +5% motion for big globs;
+micro-scale motion already reads as too fast. Not started.
+
+BA. **Note 16.2.** User: "The small bubbles need to go up only, i see some going down. Also they
+need to be more of consistent steam, not like a bubble maker, but more like at least 2-5 bubbles
+all the time. They need to move much stronger, like a air bubble in water but the its a cut of
+water. with a plate at 45degrees. or closer to horizontal." Reads as: small bubbles rise only, a
+constant stream of 2-5, stronger, like air under a plate at 45 degrees or flatter. Not started.

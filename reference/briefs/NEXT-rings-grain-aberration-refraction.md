@@ -513,7 +513,20 @@ film_hue2_wobble_period (s): hue2 = film_hue2 + wobble * slow two-sine oscillati
 readjust. acid-rise-12: film_hue2 180, wobble 10, period 300, hue_rotate_period slow (10-20 min).
 Executor B on branch hue2b.
 
-AJ. **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
+AJ. **LANDED 2026-09-22 (branch refl).** `boundary_reflect_r` (reach as a fraction of screen
+HEIGHT, 0 = today) + `boundary_reflect_amt`; acid-rise-12 ships 0.33. The term that gave a rim the
+neighbouring film's colour was just `oilC` -- the film colour at the rim's own pixel -- so a
+droplet carried the seam only while it stood inside the mix field's 0.56..0.68 transition band,
+about one droplet across. Now the rim terms (mass_rim, the droplet lens's dome / meniscus /
+specular, the bright-field halo, oil_glow, the swarm caustics) tint with `oilR`, the same colour
+rotated toward the SEAM's own hue (the band's midpoint) by a smooth falloff over the reach. The
+film, and every blur, are untouched. Probe = 8 cbuffer taps of the 20x12 field: 4 central
+differences for the direction, 4 marching it. Sheet `build2\shots\live\refl-sheet.png`; the
+effect is subtle in an SDR still because the rim terms are HDR highlights and the meniscus (0.85,
+ink-derived) dominates the ring -- judge on the panel. If it wants to be stronger, the next lever
+is letting the `oil_thin_edge` band take the seam hue too. Original request below.
+
+AJ (original). **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
 "whatever algo is mixing the oil boundary is insanely good", "and the way the bubbles reflect it,
 accurately", "chef's kiss". Request: "turn up the radius of effect maybe, so further particles
 also reflect it on the boundary." So: the droplets near a hue2 patch edge pick up the seam / the

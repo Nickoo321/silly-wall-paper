@@ -574,7 +574,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
     float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w toeTint
-    float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
+    float4 laP11;        // x lockOn     y lockSpan    z targetHue  w unused (sweep applied above)
     float4 laP12;        // x rimVary    y rimInkFollow z rimOrder  w grainShadowW
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
@@ -582,7 +582,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP16;        // x oilInkBlur y dyeDepthW z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
-    float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
+    float4 laP19;        // x dropSupport y dropPunch z dropOilW   w ringBase (kAcidMaxDrops)
     float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w diffScale(uv)
     float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w bandMin
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
@@ -591,14 +591,14 @@ cbuffer AcidCB : register(b1) {
     // --- perspective camera + depth of field + tilt (items N + R) ---------
     float4 laP24;        // x axisX(uv) y axisY(uv) z focusDepth  w dofMaxPx(1440p)
     float4 laP25;        // x fieldCurve y tilt     z cos(tiltAng) w sin(tiltAng)
-    float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
+    float4 laP26;        // x band(uv)  y 1/cocSpan (hardcoded 0.12, no key) z fovK  w diffraction
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
-    float4 laP29;        // x massRim    y rimW(uv)   z -           w -
+    float4 laP29;        // x massRim    y rimW(uv, hardcoded 3px, no key) z -  w -
     // --- multicolour oil (brief AE) ---------------------------------------
     float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
-    float4 laP31;        // x crustHueMix  y -  z -  w -
+    float4 laP31;        // x crustHueMix  y boundaryReflectR  z boundaryReflectAmt  w -
     // The 20x12 mix field, four cells per float4. Small on purpose: the
     // patches the reference shows are a quarter to a half of the frame, so
     // this carries them with room to spare and costs one cbuffer fetch and a

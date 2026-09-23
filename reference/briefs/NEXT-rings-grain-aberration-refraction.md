@@ -1029,3 +1029,21 @@ contrast drops a little everywhere near the light, yet the grid texture still re
 the DOF band (sharp/blurred crossfade) and not the veiling bloom alone: layer 4 = haze (0..1) +
 haze_radius + haze_warmth, applied full-frame with a mild bias toward the lamp side; centre stays
 sharp because the base image is never blurred, only veiled. A/B sheet 0 / 0.2 / 0.4 / 0.7.
+BN auditor pre-flight (2026-09-23 19:15), SUPERSEDES the layer specs above where they differ:
+- Test criteria: corner_warp: centre-crop MAD = 0 exactly. Veils (bloom, haze/halation): high-pass
+  the centre crop (image minus an 8 px blur), MAD <= 0.5/255, so detail is unchanged and only the
+  level may rise. Streaks: exempt, at most 2 lines, each <= 3 px wide.
+- Layer 1 corners: mostly exists. A/B FIRST camera_field_curve 0.12/0.3/0.5, aberration_field
+  1.2/2.0, vignette 0.12/0.3. New code = only the tangential stretch (corner_warp, corner_warp_r) in
+  the post pass, applied to uv before every other post tap; grain stays after it, unwarped.
+- Layer 2 bloom: the keyed bloom is the base (already follows the lamp; light_y 1.2 puts the lamp
+  below the frame like the tile). Add only bloom_warmth. ABL: at shipped values mean_lum rises
+  <= 8% and the peak does not rise (the "veils the whole field" wording is capped by this).
+- Layer 3 glass streaks: in the lid block, NOT multiplied by massDeep (or it goes inert over the
+  masses that fill most of acid-rise-12); lid = 0.45 keeps it live.
+- Layer 4 haze = halation with a lower threshold: halation is already additive, brightness-weighted,
+  leans to the lamp, warm. A/B FIRST halation 0.25/0.5 x halation_px 14/60; if not enough, ONE key
+  halation_threshold. Do not use post_glow (crossfades the base with a blur, softens it).
+- Budget: ~5 new scalars (corner_warp, corner_warp_r, bloom_warmth, glass_streaks,
+  halation_threshold) packed as four 6-bit fields each in rg1.x and rg1.y; new HLSL in new literal
+  pieces; slot-check.

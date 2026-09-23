@@ -754,3 +754,6 @@ LIGHTER BAND along a big mass's edge (thin-edge translucency: post_glow_dark / c
 mass_rim) must stay. "It has a cool effect, the ISO issue may be doing some of the work, but it's a
 separate thing and needs to stay." Only interior lifts fade to zero. Executor told to measure the
 edge band before/after.
+BD clarification (user, 22:15): the edge band is where the noise is MOST apparent; fixing the noise
+there must not change the band's level or width ("sensitive job"). Edge band = primary test region,
+measured separately from interior and open film; mechanism fixes only, no level change there.

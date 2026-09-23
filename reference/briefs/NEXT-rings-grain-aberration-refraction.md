@@ -937,3 +937,12 @@ the purple dye at lum 0.44 on every mass AND every droplet lifts all of that, an
 light (0.8) adds to it. Candidates when the user says go: dye much darker (lum ~0.15-0.2) or dye
 only the mass edges/crust while cores stay black (dye_core_black), droplets undyed (dye_droplets 0),
 rise_bottom_light back toward 0.5, more vignette. Still waiting for the user's word.
+BK, live photo 18:30 (reference/shots/photos/bk-too-bubbly-live-0923.jpg, blue film, every droplet a
+bright purple bubble, purple mass right): user "Too bubbly. Maybe the black ink needs to be very
+dim or almost maroon. Smoky. Or maybe the background darker?" Reading: the dye on EVERY droplet is
+what reads bubbly; the masses can carry colour, the droplets should stay dark. Plan (after the
+variation sheet): (1) dye_droplets key (0..1, default 1 = today; ship ~0.15 so droplets stay near
+black with a maroon cast) or dye only above a size threshold; (2) "smoky" = wider, softer dye
+thickness falloff (dye_soft key) so the colour sits in the body like smoke, not a filled disc;
+(3) maroon/dim values (hue ~345, sat 0.5-0.6, lum 0.10-0.15) as the shipped default; (4) background
+darker: rise_bottom_light 0.8 -> 0.5, vignette up. Sonnet sheet has V11-V13 for (3)+(4).

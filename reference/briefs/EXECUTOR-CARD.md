@@ -36,7 +36,10 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - Read the code path you touch END TO END before the first render (2026-09-22 dye lesson: two
   guessed edits from nearby code cost two wasted render cycles — the real fix was downstream in a
   different path than assumed).
-- Work in your own worktree. Commit ends: `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
+- Work in your own worktree. Use a scratchpad subfolder named after your worktree (e.g.
+  `build2\shots\live\<worktree-name>\`) for your own intermediate files, so concurrent executors'
+  scratch output never collides in the shared `build2\shots\live\` tree. Commit ends:
+  `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 - If part of the task is rote (renders, md5, ini edits, doc text, sheets) and a cheaper model
   could do it without loss, say so in your report or hand back a task list — you judge, the
   parent dispatches (model-tiering-policy).
@@ -69,6 +72,20 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 Build from the worktree root with `cmd /c "<repo>\tools\build-wt.cmd"` (it builds `%CD%`, i.e.
 wherever you run it from, not the main repo — a worktree-local `build-wt.cmd` at the root is
 `.git\info\exclude`d, so it never existed in a fresh worktree; the tracked copy fixes that).
+Every `--shot --hdr on` writes FOUR files, not one: `<out>.png` (8-bit SDR, the md5 file for parity/
+identity), `<out>-hdr.png`, `<out>.jxr` (lossless scRGB-half, real HDR in Windows Photos) and
+`<out>-pq.png` (16-bit Rec.2020/ST 2084). ~35 MB extra per shot into `build2\shots` (which is
+gitignored but NOT OneDrive-ignored in the main repo) — sweep old shots periodically, and use the
+`.jxr` (not the `-pq.png`) when you need to keep just one HDR file.
+
+## 3.5. Before merging a branch that touches the acid cbuffer
+
+Run `tools\slot-check` (the auditor's cross-check of `UploadAcidConstants` against every `laP*`
+read in the acid HLSL literals — read/write/order agreement, no double-meaning slots), if it has
+been committed by the time you read this. It is what caught the AG dye failure's root cause faster
+than guessing would have, and what the 2026-09-22 audits ran by hand each time. If it is not yet
+committed, do the same cross-check manually before merging (see AUDIT-2026-09-22.md section 1/10
+for the method) rather than skipping it.
 
 ## 4. Current state
 

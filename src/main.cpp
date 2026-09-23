@@ -376,9 +376,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmGrainSpeed = getF(S, L"film_grain_speed", po.filmGrainSpeed);
         po.filmGrainFps   = getF(S, L"film_grain_fps", po.filmGrainFps);
         po.filmGrainColor = getF(S, L"film_grain_color", po.filmGrainColor);
+        po.filmGrainChroma  = getF(S, L"film_grain_chroma",  po.filmGrainChroma);
+        po.filmGrainDensity = getF(S, L"film_grain_density", po.filmGrainDensity);
         po.aberration     = getF(S, L"aberration", po.aberration);
         po.aberrationPx   = getF(S, L"aberration_px", po.aberrationPx);
         po.aberrationField= getF(S, L"aberration_field", po.aberrationField);
+        po.aberrationCoc  = getF(S, L"aberration_coc", po.aberrationCoc);
         po.vignette       = getF(S, L"vignette", po.vignette);
         po.softness       = getF(S, L"softness", po.softness);
         po.halo           = getF(S, L"halo", po.halo);
@@ -398,6 +401,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmStock      = getF(S, L"film_stock", po.filmStock);
         po.fog            = getF(S, L"fog", po.fog);
         po.fogPx          = getF(S, L"fog_px", po.fogPx);
+        po.fogMassGate    = getF(S, L"fog_mass_gate", po.fogMassGate);
         po.bloom          = getF(S, L"bloom", po.bloom);
         po.bloomPx        = getF(S, L"bloom_px", po.bloomPx);
         po.lightX         = getF(S, L"light_x", po.lightX);
@@ -1599,9 +1603,12 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_grain_speed", po.filmGrainSpeed, 2);
         putF(S, L"film_grain_fps", po.filmGrainFps, 1);
         putF(S, L"film_grain_color", po.filmGrainColor, 3);
+        putF(S, L"film_grain_chroma", po.filmGrainChroma, 3);
+        putF(S, L"film_grain_density", po.filmGrainDensity, 3);
         putF(S, L"aberration", po.aberration, 3);
         putF(S, L"aberration_px", po.aberrationPx, 2);
         putF(S, L"aberration_field", po.aberrationField, 2);
+        putF(S, L"aberration_coc", po.aberrationCoc, 3);
         putF(S, L"vignette", po.vignette, 3);
         putF(S, L"softness", po.softness, 2);
         putF(S, L"halo", po.halo, 3);
@@ -1621,6 +1628,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_stock", po.filmStock, 3);
         putF(S, L"fog", po.fog, 3);
         putF(S, L"fog_px", po.fogPx, 1);
+        putF(S, L"fog_mass_gate", po.fogMassGate, 3);
         putF(S, L"bloom", po.bloom, 3);
         putF(S, L"bloom_px", po.bloomPx, 1);
         putF(S, L"light_x", po.lightX, 3);

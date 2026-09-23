@@ -1081,6 +1081,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
     rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
     rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
+    // ---- brief BD, four knobs in rg2.w -----------------------------------
+    // b0's 32 constants are full and the root signature is at the 64-DWORD
+    // limit, so these ride in the one float rg2 had spare, packed the way the
+    // lid below packs its twelve: four 6-bit fields in an exact integer at
+    // most 2^24-1, which float32 carries without loss. Six bits is 1/63 of a
+    // taste knob read once per pixel, finer than the panel resolves. The
+    // DEFAULTS are the point -- 1 / 0 / 0 / 0 quantise to 63 / 0 / 0 / 0 and
+    // unpack to exactly 1.0 / 0.0 / 0.0 / 0.0, so no preset that leaves these
+    // alone moves by a bit.
+    //   grainChroma : 6 | grainDensity : 6 | fogMassGate : 6 | aberrCoc : 6
+    {
+        auto q6 = [](float v) -> float {
+            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            return (float)(int)(u * 63.0f + 0.5f);
+        };
+        rig[11] = q6(po.filmGrainChroma)  * 262144.0f
+                + q6(po.filmGrainDensity) * 4096.0f
+                + q6(po.fogMassGate)      * 64.0f
+                + q6(po.aberrationCoc);
+    }
     // ---- THE LID (task V2) -- ALL OF IT IN rg4 ---------------------------
     // rg2 is the lens's chromatic split (item Z) and rg3 is reserved for the
     // camera executor's V3 motion, so the lid gets ONE float4. Twelve numbers
@@ -1309,7 +1329,13 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         (float)mr.mode, (float)mr.segments, aspect, m_time,
         mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
         fminf(fmaxf(mr.drift, 0.0f), 1.0f),
-        fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
+        // 10, 11: brief BD's two grain knobs for the DISPLAY pass's own copy
+        // of the film grain -- the one that runs when no image-space pass is
+        // on. 1 / 0 is the behaviour this had when these two slots were the
+        // literal zeros they replace.
+        fmaxf(mr.soft, 0.0f), (float)(mr.source & 3),
+        fminf(fmaxf(po.filmGrainChroma, 0.0f), 1.0f),
+        fminf(fmaxf(po.filmGrainDensity, 0.0f), 1.0f),
         // grain moves to the post pass on the draws it follows (see kPostSrc)
         m_postGrainDeferred ? 0.0f : fminf(fmaxf(po.filmGrain, 0.0f), 1.0f),
         // px at 1440p, scaled with the frame, so the display pass's own grain
@@ -4849,7 +4875,21 @@ void FluidRenderer::UploadAcidConstants() {
     float p2[4] = { a.meniscus, a.meniscusW, a.translucency, a.oilTexture };
     float p3[4] = { a.inkLevels, a.inkSoft, a.inkMix, a.inkHueVary };
     float p4[4] = { a.inkGain, a.inkBias, a.seamStrength, a.seamScale };
-    float p5[4] = { a.seamLo, a.seamHi, a.grainAmt, a.grainScale };
+    // brief BD: the look's own grain is DEFERRED exactly as [post] film_grain
+    // is when the image-space pass runs -- not moved there, dropped. It was a
+    // SECOND stock on top of the [post] one, unpaced, and it lived in the
+    // texture the post pass resamples, so the lateral aberration was taking a
+    // first difference of it on R and B and printing it as colour. One stock.
+    // (asked of PostActive() directly rather than of m_postGrainDeferred:
+    // this upload runs during the sim step, long before the draw sets that
+    // flag, so the flag would still read false here.)
+    // ...and only when the post pass has a grain of its OWN to replace this
+    // one. "One stock" means whichever exists, not none: the "(80-20, NO lens
+    // effects)" twin runs the post pass for dither alone with film_grain 0,
+    // and this grain is the only one it has.
+    const bool postGrain = PostActive() && m_cfg.post.filmGrain > 0.0005f;
+    float p5[4] = { a.seamLo, a.seamHi,
+                    postGrain ? 0.0f : a.grainAmt, a.grainScale };
     float p6[4] = { a.speckle, a.speckScale, m_time, aspect };
     float p7[4] = { a.oilHdr, a.rimHdr, a.meniscusOff, a.inkShading };
     // With the droplet particle sim on, the procedural swarms are forced OFF:

@@ -61,7 +61,11 @@ function Resolve-IniPath {
 }
 
 function Wait-StablePng {
-    param([string]$Path, [int]$StableSeconds = 3, [int]$TimeoutSeconds = 180)
+    # Bounded at 20 min (was 180 s, which could fire mid-render on a slow/contended
+    # GPU): a render that never lands must not hang the caller or throw an
+    # unhandled exception out of the try/finally -- it prints a clear TIMEOUT
+    # line and lets the caller move on to the next preset.
+    param([string]$Path, [int]$StableSeconds = 3, [int]$TimeoutSeconds = 1200)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $lastSize = -1
     $stableSince = $null
@@ -70,7 +74,7 @@ function Wait-StablePng {
             $size = (Get-Item $Path).Length
             if ($size -eq $lastSize -and $size -gt 0) {
                 if (-not $stableSince) { $stableSince = Get-Date }
-                if (((Get-Date) - $stableSince).TotalSeconds -ge $StableSeconds) { return }
+                if (((Get-Date) - $stableSince).TotalSeconds -ge $StableSeconds) { return $true }
             } else {
                 $lastSize = $size
                 $stableSince = $null
@@ -78,15 +82,18 @@ function Wait-StablePng {
         }
         Start-Sleep -Milliseconds 500
     }
-    throw "Timed out waiting for stable PNG: $Path"
+    return $false
 }
 
 function Get-PresetMd5 {
     param([string]$Name, [string]$IniPath, [string]$OutPng)
     if (Test-Path $OutPng) { Remove-Item $OutPng -Force -ErrorAction SilentlyContinue }
     & $exePath --shot $OutPng --ini $IniPath --hdr on --shot-delay $Delay `
-        --shot-size 2560x1440 --shot-yield 2 --seed 1234 2>&1 | Out-Null
-    Wait-StablePng -Path $OutPng
+        --shot-size 2560x1440 --shot-yield 8 --seed 1234 2>&1 | Out-Null
+    if (-not (Wait-StablePng -Path $OutPng)) {
+        Write-Output "$Name TIMEOUT (no stable PNG after 20 min): $OutPng"
+        return $null
+    }
     return (Get-FileHash -Algorithm MD5 -Path $OutPng).Hash
 }
 
@@ -101,14 +108,19 @@ try {
     # Fluid parity: always first, always reported separately.
     $fluidOut = Join-Path $ScratchDir 'we-look-live.png'
     $fluidMd5 = Get-PresetMd5 -Name 'we-look-live' -IniPath $FluidIni -OutPng $fluidOut
-    Write-Output "we-look-live $fluidMd5"
-    if ($fluidMd5 -eq $FluidParityMd5) {
-        Write-Output "PARITY: MATCH ($FluidParityMd5)"
-    } else {
-        Write-Output "PARITY: DIFFERS (expected $FluidParityMd5, got $fluidMd5)"
+    if ($null -eq $fluidMd5) {
+        Write-Output "PARITY: TIMEOUT"
         $anyDiff = $true
+    } else {
+        Write-Output "we-look-live $fluidMd5"
+        if ($fluidMd5 -eq $FluidParityMd5) {
+            Write-Output "PARITY: MATCH ($FluidParityMd5)"
+        } else {
+            Write-Output "PARITY: DIFFERS (expected $FluidParityMd5, got $fluidMd5)"
+            $anyDiff = $true
+        }
+        $results['we-look-live'] = $fluidMd5
     }
-    $results['we-look-live'] = $fluidMd5
 
     # Acid-side presets.
     foreach ($p in $Presets) {
@@ -118,6 +130,10 @@ try {
         $safeName = $name -replace '[\\/:*?"<>|]', '_'
         $outPng = Join-Path $ScratchDir "$safeName.png"
         $md5 = Get-PresetMd5 -Name $name -IniPath $iniPath -OutPng $outPng
+        if ($null -eq $md5) {
+            $anyDiff = $true
+            continue
+        }
         Write-Output "$name $md5"
         $results[$name] = $md5
     }

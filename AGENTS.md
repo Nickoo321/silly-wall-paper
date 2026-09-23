@@ -19,7 +19,7 @@ Single exe, no deps beyond Windows SDK libs.
 
 ## Hard constraints (user directives)
 
-- **Bloom: never.**
+- **Bloom: only the keyed post bloom, default 0 (acid-rise-12 ships 0.30); never the old full-screen bloom.**
 - **sim_res/dye_res live at 256/4096** (256 = the WE grid; verified 2026-09-16 that the WE motion — droplet curls, marbled cores — only appears at 256, vorticity 48). Moods/presets must never carry them.
 - Every mood recipe is finalized only via a calibration quiz with the user
   (protocol: CALIBRATION.md + cloud-quiz-round2-proposal.md).
@@ -86,7 +86,8 @@ Only ONE GPU render (any `--shot` run, any build target, any worktree) may run a
 two at once starved DWM and greyed the user's OLED. Before any render: wait until
 `build2/shots/gpu.lock` (absolute: C:\Users\abg77\OneDrive\Desktop\wall paper engine\claude code\build2\shots\gpu.lock)
 does not exist (poll every 5 s; give up after 30 min and report), then create it containing
-your agent name + time, render, and delete it in a `finally`/trap. Builds need no lock. Never
+your agent name + time, render, and delete it in a `finally`/trap. Builds AND renders take
+build2\shots\gpu.lock (tools\gpu-lock.ps1), renders one at a time with --shot-yield 8. Never
 stop the user's FluidWallpaper.exe or Wallpaper Engine.
 
 ## Pausing the live sim

@@ -1526,6 +1526,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     putF(L"color", L"curve_height", c.curveHeight, 2);
     putF(L"color", L"shadow_floor", c.shadowFloor, 3);
     putF(L"color", L"shadow_knee", c.shadowKnee, 2);
+    putF(L"sim", L"gravity", c.gravity, 3);
+    putF(L"sim", L"gravity_pow", c.gravityPow, 3);
+    putF(L"sim", L"gravity_blur", c.gravityBlur, 3);
     for (int ci = 0; ci < 5; ci++) {
         wchar_t key[32], val[64];
         swprintf_s(key, L"splat_color_%d", ci + 1);

@@ -642,6 +642,34 @@ AG 03:03: branch dye3 (993747f in fw-cam, NOT merged: restoring the ramp hue aft
 the complement lock changed nothing, delta 0). Hypothesis for the next session: acid-rise-12 runs
 ink_mode = water, whose dark-mass shading is a different path from the banded ink ramp; the dye must
 be applied where THAT path makes the mass colour. Read the water path end to end first, then render.
+AG DONE 2026-09-22 (branch dye4, merged): the dye hue now reaches the frame. The bug was never in
+the ink ramp -- the ramp is not READ in the live preset. Trace, end to end, for a dark-mass pixel:
+  * src\shaders.h, acid display literal, `float3 col = lerp(inkC, oilC, alpha);` (~line 2096):
+    inside a mass the oil field is below the threshold, alpha -> 0, so the pixel IS inkC.
+  * src\shaders.h, `if (laP10.z > 0.5) inkC = InkWater(C0, ...)` (~line 1618). laP10.z is
+    (ink_mode == water), set in src\fluid.cpp p10[2] (~line 4864); acid-rise-12 has ink_mode=water,
+    so the entire `else` bands branch under it is dead code for this preset.
+  * src\shaders.h, InkWater() (~line 919) ends in `lerp(ikPaper.rgb, tint * .., op)`. In a mass the
+    sim dye density is ~0, so op ~= 0 and the pixel is ikPaper.rgb = [ink] paper_color = 0 0 0.
+    THAT is the black the user sees.
+  * laInk[] (= effInk, what dye3 and its predecessor patched on the CPU) is read in exactly TWO
+    places in the whole shader: the bands branch (~line 1634, dead here) and the toe_tint lift
+    (~line 2589, laP10.w), and acid-rise-12 leaves toe_tint at its 0 default. So no edit to the
+    ramp, in any order, could change one bit of this preset -- which is what the byte-identical
+    four-hue sheet was actually measuring.
+Fix: the dye is applied in the display pass on inkC, right after the lamp ramp, as a translucent
+wax -- thickness = depth into the mass (-sdf), transmitted light = exp(-depth/0.055) with a 0.42
+floor, gated by (1 - cov) so the film is untouched and rolled off where the ink film is bright.
+Constants ride laP29.z/.w (amount, hue) and laP31.w (saturation); no new root params, no new keys.
+Proof: acid-rise-12, seed 1234, t=60 s, dye_sat 0.8 dye_lum 0.30 dye_hue_follow 0, dye_hue 285 vs 0
+-> max|delta| 143/255, 43% of pixels differ by more than 2 (it was 0 on dye3). dye_sat 0 renders
+byte-identical to the pre-change build (md5 CA1B5B2977964C112CEAD7D414815643 both), parity md5
+10E36EBF1A74EDFE609065D757300054 holds. Sheet: build2\shots\live\dye4-sheet.png (3 hues x 3 lums).
+Shipped in acid-rise-12: dye_hue 285, dye_sat 0.8, dye_lum 0.30, dye_hue_follow 0. dye_lum's slider
+re-ranged 0..0.50 step 0.02 from that sheet (under ~0.10 still black, past ~0.45 the mass stops
+reading as dark). Open follow-up: with dye_hue_follow 0 the wax stays purple while the 8-pair sweep
+turns the film, so when the sweep reaches its own violet pair (sweep_oil_3) the two sit close --
+wants its own A/B against dye_hue_follow 1.
 
 BB. **Lamp falloff stronger, with its own hue shift.** User (2026-09-22): "the lamp fall off should
 be stronger, and the hue shift should be stronger" (not the penumbra, which is the lit-less oil
@@ -674,6 +702,13 @@ fading to zero inside masses so the grain has nothing to sit on; then re-dial am
 user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
 rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
 discussion.
+BD status (2026-09-22, branch noise, merged): DONE, see WORKLOG. Speckle in the shadow at pixel scale:
+luma -87%, hue -80%; edge band shape kept (level -3% = the old grain's own lift). New keys film_grain_chroma,
+film_grain_density, fog_mass_gate, aberration_coc. OPEN FOR THE USER, live on the panel: (1) aberration_coc
+-- acid-rise-12 ships 1, which turns the out-of-focus droplets' crisp outlines into soft discs because those
+outlines were being DRAWN by the aberration; three full-res frames in build2/shots/live: bd-after-coc0
+(uniform 1.8, the approved look, still -85% luma / -62% hue speckle), bd-aber-18 (coc 1), bd-aber-09 (coc 1,
+0.9 px). (2) the grain amount on the open film (note 9 / item AT).
 
 BE. **Named cbuffer fields (executor C's review, user: do it).** ~30 packed float4 params reached
 as laP13.x / laP27.z / laP31.y with a comment table 1000 lines away and no check that the shader
@@ -695,3 +730,104 @@ Design note from executor C (keep in mind for AF/AW lid and AJ): six terms alrea
 the droplet boundary (mass_rim, droplet_lens b and c, meniscus 0.85, bright-field halo, oil_glow,
 oil_thin_edge) with independent amplitudes; film-derived terms are a minority of the ring. "Weak
 lid" is partly a symptom of that competition, not a missing feature.
+
+BD phase 1 (2026-09-22 21:05, max-effort executor, sheet fw-noise\build2\shots\live\bd-diag-sheet.png):
+ranked causes of the in-mass speckle: (1) lateral aberration = 72% of the chroma noise: a first
+difference of the UNBLURRED output on R and B only, resampling the grain as colour; (2) two
+independent grains ([post] film_grain 0.11 + [liquid_acid] grain 0.057 re-rolled at 240 Hz), additive
+and clamped at 0, weight floor 0.15 at true black = the opposite of film density; (3) post lifts =
+47% of the mass level (lid_sheen and lid_glint with no dark fade, film overlay dark floor 0.10, fog
+through masses, post_glow on dark edges): near-black area 1.9% shipped vs 12.7% with them off;
+(4) per-pixel jitter in halation/bloom gathers = 27% of luma noise; (5) cellulose minor; (6) dither
+INNOCENT. Phase 2 decisions (Fable): grain multiplicative (film_grain_chroma, default 1 = today,
+ships 0) + density hump (film_grain_density, default 0, ships 1); aberration mechanism fixed (averaged
+source, CoC-scaled) but amount/px UNCHANGED (user approved the look), separate A/B 1.8 vs 0.9 px for
+a live verdict; sheen/glint fade inside masses; fog_mass_gate (default 0, ships 0.7); acid grain
+deferred + 0 in acid-rise-12; overlay dark floor 0; gather jitter reduced. Amount re-dial live (AT).
+
+BG DONE (4b291c5): --shot writes .png (8-bit SDR, the md5 file), -hdr.png, .jxr (lossless JPEG XR
+64bpp half scRGB, real HDR in Photos) and -pq.png (16-bit Rec.2020/ST 2084 + cICP); tools\jxr-check.ps1
+verifies. Each shot ~35 MB extra; sweep build2\shots periodically.
+
+EXECUTOR REVIEW 2 of 3 (F, jxr): (1) the verification loop was the weak link: HDR-native post effects
+were tuned through an 8-bit window, which is why so many items read "weak / too distracting"; this
+should have existed before AF/AT/AW were filed. (2) WriteShotPair's single-owner shape made the change
+an hour's work. (3) the parity md5 rule is the best thing in the project. (4) 5-6 executors on one GPU
+and one main worktree is past diminishing returns: a 60 s render took 4x solo time, and an uncommitted
+file collision in main cost a decision; a queue would beat "render anyway". (5) the AC-BA list grows
+faster than it shrinks and much of it is the same complaint ("too weak / too strong"); with real HDR
+captures a batch of those may collapse into a couple of gain curves.
+Convergence so far with review 1 (C): backlog is symptoms not features (both); contention / process
+over-parallelism (both); C: ring budget + positional slots; F: 8-bit verification window.
+
+BH. **Focus breathing.** User (2026-09-22 21:50): "when you focus a camera, the zoom ever so
+slightly changes. Maybe add that to also move once in a while." Real lenses breathe: the field of
+view shifts a fraction of a percent as focus racks. Tie a tiny scale change (order 0.2-0.5% about
+the lens centre, rg0.zw) to the focus spring / rig readjust that already exists (V3 motion), so
+every readjust and every slow focus drift also breathes the frame; plus the occasional deliberate
+rack (note 8 / AS: focus visibly moves at least every 10 s) breathes more. Keys: focus_breath
+(scale per unit focus change, default 0 = today) and breath_readjust (extra on the readjust
+event). Judge live: a still cannot show it. Cheap: one uv scale in the post pass before the CA
+resample. User: "very subtle, but just an idea" (idea tier, not a request; default off; do it only when cheap).
+
+BI. **Compute audit + skeleton fluid.** User (2026-09-22 22:00): (1) "a possible audit of what
+features take a lot of compute"; (2) "this is running on a fluid sim right? if I turned on mouse
+movement it would appear. Is it possible to run it in skeleton mode to save compute, or would it
+interfere, or just turn it off altogether." Reading: the WE-parity fluid sim runs under the oil
+look; the oil uses its velocity (t3) to advect shimmer and the hue2 field, the water under the oil
+is its dye/ink (oil_drag rests the ink beneath islands), racers and weather push it. Audit task
+(auditor or an Opus executor with GPU timestamp queries): per-pass GPU time on the live preset at
+1440p (fluid sim steps, acid sim, acid display, post pass, display pass), which keys change it most,
+then test a skeleton fluid (half-res grid and/or every-other-frame step, with the oil reading the
+same velocity) and a fluid-off mode, each judged headless for what the oil loses (advection,
+water motion, mouse). Keys: fluid_res_scale, fluid_step_div, fluid_off (defaults = today).
+User direction (22:05): try the slow-dye haze idea once; if it does not work ("which I doubt"),
+then turn OFF as much of the fluid sim as possible: the oil keeps only what it provably uses
+(velocity for advection) at the cheapest rate that still looks the same. Not started.
+BD constraint (user, 22:10, photo reference/shots/photos/mass-edge-light-band-keep-phone.jpg): the
+LIGHTER BAND along a big mass's edge (thin-edge translucency: post_glow_dark / cellulose / penumbra /
+mass_rim) must stay. "It has a cool effect, the ISO issue may be doing some of the work, but it's a
+separate thing and needs to stay." Only interior lifts fade to zero. Executor told to measure the
+edge band before/after.
+BD clarification (user, 22:15): the edge band is where the noise is MOST apparent; fixing the noise
+there must not change the band's level or width ("sensitive job"). Edge band = primary test region,
+measured separately from interior and open film; mechanism fixes only, no level change there.
+BD follow-up idea (user, 22:20): COLOURED grain, the film kind: three dye layers (C/M/Y) each with
+its own grain field, coarse soft correlated clouds, blue-sensitive layer coarsest, multiplicative
+per layer so it cannot lift black. Key film_grain_layers (0 = mono, today; 1 = three-layer) with
+per-layer size scale. After phase 2 lands; A/B against mono on the edge band and the open film.
+User (22:30): "a subtle amount of that is probably fine": ship it low when it lands.
+BD phase 2 note (20:45): the CoC-scaled aberration (physically right: no lateral CA on a bokeh disc)
+reads quieter than the uniform split the user approved on 09-19. Decision: aberration_coc key
+(default 0 = uniform), acid-rise-12 ships 1, plus a uniform frame bd-after-coc0.png, so the live
+choice is uniform 1.8 / CoC 1.8 / 0.9 px. Averaged tap source unkeyed. Every acid preset changes
+by the mechanism fixes (expected DIFFERS in preset-identity; fluid must MATCH).
+
+AG DONE (c5e78d3, executor D): dye applied to inkC after the lamp ramp in the display pass (ink_mode
+water: the banded ink ramp was dead code for this preset, hence three failed attempts). acid-rise-12
+ships dye_hue 285 / sat 0.8 / lum 0.30 / follow 0; dye_lum slider 0..0.50. Sheet build2/shots/live/
+dye4-sheet.png, frames dye4-*-frame*.png. Open: dye_hue_follow A/B across the 8-pair sweep (wax
+and film sit close on the violet pair). preset-identity.ps1 timed out once after the reboot
+(needs a look).
+
+EXECUTOR REVIEW 3 of 3 (D, dye): (1) the look is strong: purple wax against magenta/green film is
+the lava-lamp read; (2) main risk = untraced interaction: many features share inkC / col / the rim
+terms, the dye bug was a guess about which path is live; (3) the literal cap and the full cbuffer
+are real limits: named slots or a second constant buffer; (4) parity + preset-identity are the
+most valuable tooling, make identity reliable and diff against a CURRENT baseline; (5) fixed-hue
+choices must be checked across the whole 8-pair sweep, not one frame.
+CONVERGENCE (C, F, D): all three name the same two things: (a) shared pixels / positional slots
+with no trace of what is live (C ring budget + slot table, D untraced interaction, F "same
+complaint in different clothes"); (b) the verification tooling is the thing that works (parity
+md5, identity) and must be made reliable and current. Two of three: the process over-parallelises
+(C, F). => SYSTEMATIC: do BE (named slots) and make preset-identity reliable before more features.
+
+AG-b. **Dye gradients, so the masses are not all the same.** User (2026-09-22 22:57, on the dye
+sheet): "maybe medium too, but there should probably be gradients or something, so they aren't all
+the same." Today every mass is the same wax: one hue, one lum, only the thin-edge falloff varies.
+Add variation keys, defaults 0 = today: dye_lum_vary (per-mass lum spread, seeded per mass so it is
+stable while the mass lives), dye_hue_vary (per-mass hue spread, degrees), dye_thick_hue (hue
+shift with thickness inside a mass, like real dye density: thin edges warmer/lighter, cores deeper),
+and the lamp falloff (rise_bottom_light) should already darken the far side; check it does for the
+dye. Sheet: 4 masses in one frame at vary 0 / 0.3 / 0.6. Ship "medium" overall: lum around 0.36
+with spread so some read 0.28 and some 0.44. Not started (night scope = finish in-flight only).

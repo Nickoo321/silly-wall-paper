@@ -1081,6 +1081,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
     rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
     rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
+    // ---- brief BD, four knobs in rg2.w -----------------------------------
+    // b0's 32 constants are full and the root signature is at the 64-DWORD
+    // limit, so these ride in the one float rg2 had spare, packed the way the
+    // lid below packs its twelve: four 6-bit fields in an exact integer at
+    // most 2^24-1, which float32 carries without loss. Six bits is 1/63 of a
+    // taste knob read once per pixel, finer than the panel resolves. The
+    // DEFAULTS are the point -- 1 / 0 / 0 / 0 quantise to 63 / 0 / 0 / 0 and
+    // unpack to exactly 1.0 / 0.0 / 0.0 / 0.0, so no preset that leaves these
+    // alone moves by a bit.
+    //   grainChroma : 6 | grainDensity : 6 | fogMassGate : 6 | aberrCoc : 6
+    {
+        auto q6 = [](float v) -> float {
+            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            return (float)(int)(u * 63.0f + 0.5f);
+        };
+        rig[11] = q6(po.filmGrainChroma)  * 262144.0f
+                + q6(po.filmGrainDensity) * 4096.0f
+                + q6(po.fogMassGate)      * 64.0f
+                + q6(po.aberrationCoc);
+    }
     // ---- THE LID (task V2) -- ALL OF IT IN rg4 ---------------------------
     // rg2 is the lens's chromatic split (item Z) and rg3 is reserved for the
     // camera executor's V3 motion, so the lid gets ONE float4. Twelve numbers
@@ -1309,7 +1329,13 @@ void FluidRenderer::BuildMirrorConstants(float out[20], int w, int h) const {
         (float)mr.mode, (float)mr.segments, aspect, m_time,
         mr.centerX, mr.centerY, fmaxf(mr.rotatePeriod, 0.0f),
         fminf(fmaxf(mr.drift, 0.0f), 1.0f),
-        fmaxf(mr.soft, 0.0f), (float)(mr.source & 3), 0.0f, 0.0f,
+        // 10, 11: brief BD's two grain knobs for the DISPLAY pass's own copy
+        // of the film grain -- the one that runs when no image-space pass is
+        // on. 1 / 0 is the behaviour this had when these two slots were the
+        // literal zeros they replace.
+        fmaxf(mr.soft, 0.0f), (float)(mr.source & 3),
+        fminf(fmaxf(po.filmGrainChroma, 0.0f), 1.0f),
+        fminf(fmaxf(po.filmGrainDensity, 0.0f), 1.0f),
         // grain moves to the post pass on the draws it follows (see kPostSrc)
         m_postGrainDeferred ? 0.0f : fminf(fmaxf(po.filmGrain, 0.0f), 1.0f),
         // px at 1440p, scaled with the frame, so the display pass's own grain
@@ -2381,9 +2407,12 @@ struct AcidParamsGPU {
     // float4. It rides the cbuffer's slack -- no new texture, no descriptor,
     // and nothing added to a root signature already at its 64-DWORD limit.
     float p30[4], p31[4];
+    // brief BC: the cast-shadow block. Cbuffer slack again -- the root
+    // signature is at its 64-DWORD limit and a shadow needs no texture.
+    float p32[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1616, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1632, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -4732,22 +4761,27 @@ void FluidRenderer::UploadAcidConstants() {
     // ---- DYE THE BLACK (brief AG / AM) -----------------------------------
     // "Add ability to dye the black ink." The references are lava lamps: the
     // dark body is not black, it is a DEEP translucent colour with the lamp
-    // showing through it. So the ink ramp's DARK stops take a colour of their
-    // own and the bright stops are left alone -- the crust and mass_rim are
-    // built off those, and they have to keep reading against the mass rather
-    // than dissolving into it. Done here, on the ramp the shader indexes, not
-    // as a tint over the finished frame: a post tint would colour the film and
-    // the droplets too, and the whole point is that only the negative space
-    // changes.
+    // showing through it.
     //
-    // The value climbs across the stops (lum, then about twice it) instead of
-    // being flat, which is what reads as translucency: a lava-lamp blob is
-    // darkest where it is thickest and lets light through at its edge.
+    // This used to dye the ink RAMP (effInk) here, on the theory that the dark
+    // masses are drawn from it. They are not. Measured on 2026-09-22 (branch
+    // dye4, trace written out in full at the dye block in shaders.h): the LIVE
+    // preset runs ink_mode=water, and in water mode the mass colour comes from
+    // InkWater()'s paper_color, never from laInk[] -- which this shader reads
+    // in exactly two places, the (dead) bands branch and the toe_tint lift,
+    // and acid-rise-12 leaves toe_tint at 0. That is why two rounds of edits
+    // to the ramp rendered byte-identical. So all this does now is hand the
+    // shader the dye COLOUR and amount; the wax itself is built in the display
+    // pass, where the mass's own depth (-sdf) is available and the thickness
+    // can actually read as translucency.
     //
-    // dye_sat 0 and dye_lum 0 leave effInk exactly as it arrived, so every
-    // existing preset -- and style=fluid, which never reaches this function --
-    // is untouched to the bit.
-    if (a.dyeSat > 1e-4f || a.dyeLum > 1e-4f) {
+    // dye_sat 0 or dye_lum 0 sends amount 0, the shader skips the branch, and
+    // the frame is byte-identical -- as is style=fluid, which never gets here.
+    // Hue (0..1) and saturation go over as they are and the shader builds the
+    // colour: the acid cbuffer has single scalars free, not a whole vector,
+    // and the acid PSO already carries InkHsv2Rgb from the shared ink block.
+    float dyeHueN = 0.0f, dyeSat = 0.0f, dyeAmt = 0.0f;
+    if (a.dyeSat > 1e-4f && a.dyeLum > 1e-4f) {
         float hue = a.dyeHue;
         if (a.dyeHueFollow) {
             // ...as an OFFSET from the film's own current hue, so the pair
@@ -4760,19 +4794,12 @@ void FluidRenderer::UploadAcidConstants() {
         float hn = fmodf(hue, 360.0f);
         if (hn < 0.0f) hn += 360.0f;
         hn *= (1.0f / 360.0f);
-        const float ds = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
-        const float dl = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
-        // How much of each ramp stop the dye takes: all of the darkest, most
-        // of the second, a little of the third, none of the brightest.
-        const float wgt[4] = { 1.00f, 0.72f, 0.30f, 0.0f };
-        for (int ci = 0; ci < 4; ci++) {
-            if (wgt[ci] <= 0.0f) continue;
-            const RGB d = HSVtoRGB(hn, ds, dl * (1.0f + 1.05f * (float)ci));
-            const float w = wgt[ci];
-            effInk[ci * 3 + 0] = effInk[ci * 3 + 0] * (1.0f - w) + d.r * w;
-            effInk[ci * 3 + 1] = effInk[ci * 3 + 1] * (1.0f - w) + d.g * w;
-            effInk[ci * 3 + 2] = effInk[ci * 3 + 2] * (1.0f - w) + d.b * w;
-        }
+        // The shader takes it at value 1 and scales by the amount and by the
+        // wax's own thickness, so the hue is carried at full vividness and
+        // only the light level changes with depth.
+        dyeHueN = hn;
+        dyeSat  = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
+        dyeAmt  = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
     }
 
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
@@ -4848,7 +4875,21 @@ void FluidRenderer::UploadAcidConstants() {
     float p2[4] = { a.meniscus, a.meniscusW, a.translucency, a.oilTexture };
     float p3[4] = { a.inkLevels, a.inkSoft, a.inkMix, a.inkHueVary };
     float p4[4] = { a.inkGain, a.inkBias, a.seamStrength, a.seamScale };
-    float p5[4] = { a.seamLo, a.seamHi, a.grainAmt, a.grainScale };
+    // brief BD: the look's own grain is DEFERRED exactly as [post] film_grain
+    // is when the image-space pass runs -- not moved there, dropped. It was a
+    // SECOND stock on top of the [post] one, unpaced, and it lived in the
+    // texture the post pass resamples, so the lateral aberration was taking a
+    // first difference of it on R and B and printing it as colour. One stock.
+    // (asked of PostActive() directly rather than of m_postGrainDeferred:
+    // this upload runs during the sim step, long before the draw sets that
+    // flag, so the flag would still read false here.)
+    // ...and only when the post pass has a grain of its OWN to replace this
+    // one. "One stock" means whichever exists, not none: the "(80-20, NO lens
+    // effects)" twin runs the post pass for dither alone with film_grain 0,
+    // and this grain is the only one it has.
+    const bool postGrain = PostActive() && m_cfg.post.filmGrain > 0.0005f;
+    float p5[4] = { a.seamLo, a.seamHi,
+                    postGrain ? 0.0f : a.grainAmt, a.grainScale };
     float p6[4] = { a.speckle, a.speckScale, m_time, aspect };
     float p7[4] = { a.oilHdr, a.rimHdr, a.meniscusOff, a.inkShading };
     // With the droplet particle sim on, the procedural swarms are forced OFF:
@@ -4879,8 +4920,11 @@ void FluidRenderer::UploadAcidConstants() {
                      fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
     // .y = dye_depth_w: how much the dye layer weighs against the droplets
     // in the per-pixel depth blend (item AA; 0.25 = the old constant prior).
+    // .z = meniscus_film_mix: how much of the meniscus halo's colour (and its
+    // ink-brightness gate) comes from the FILM instead of the ink. 0 = today.
     float p16[4] = { fmaxf(a.oilInkBlur, 0.0f),
-                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f), 0.0f, 0.0f };
+                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f),
+                     fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f), 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
     float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
@@ -4981,8 +5025,11 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     // mass_rim (brief AB): strength, and its width as a fraction of the frame
     // from px at 1440p -- the same convention as every other optical width.
+    // .z/.w = the mass dye's amount and hue (brief AG/AM); its saturation rides
+    // p31.w. Amount 0 = the shader skips the wax branch entirely, which is what
+    // keeps dye_sat 0 / dye_lum 0 byte-identical.
     float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
-                     3.0f / 1440.0f, 0.0f, 0.0f };
+                     3.0f / 1440.0f, dyeAmt, dyeHueN };
     memcpy(p.p29, p29, 16);
     // ---- brief AE: the second (and third) dye hue ------------------------
     // ---- the contrast hue WOBBLES (brief AE-b) ---------------------------
@@ -5012,11 +5059,23 @@ void FluidRenderer::UploadAcidConstants() {
     // .y/.z: brief AJ, the boundary-reflection reach (screen heights) and how
     // much of the seam's hue a rim takes. 0 reach = today, and the shader
     // skips the whole probe.
+    // .w: the mass dye's saturation (brief AG/AM); its hue rides p29.w and its
+    // amount p29.z, and the shader builds the colour from the three.
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
                      fmaxf(a.boundaryReflectR, 0.0f),
-                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f),
-                     fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f) };
+                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), dyeSat };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
+    // ---- CAST SHADOWS (brief BC) ----------------------------------------
+    // shadow_len is a fraction of the screen HEIGHT, which is exactly the
+    // unit the shader's p-space y carries, so it goes across untouched.
+    // light_z lives in [post] beside light_x / light_y -- it is a property
+    // of the lamp, not of the oil -- and rides over here because the only
+    // pass that can see an occluder is the acid display pass.
+    float p32[4] = { fminf(fmaxf(a.shadowAmt, 0.0f), 1.0f),
+                     fmaxf(a.shadowLen, 0.0f),
+                     fminf(fmaxf(a.shadowSoft, 0.0f), 1.0f),
+                     fminf(fmaxf(po.lightZ, -1.0f), 1.0f) };
+    memcpy(p.p32, p32, 16);
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

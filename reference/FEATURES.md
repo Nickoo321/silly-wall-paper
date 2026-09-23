@@ -221,8 +221,8 @@ Where every colour in the oil, the ink and the dark masses comes from: the curat
 | `[liquid_acid] film_hue3_amt` |   third hue amount | 0..1, step 0.05 | 0.0 | 0 | 0 = off, which is the default |
 | `[liquid_acid] crust_hue_mix` |   crust hue mix | 0..1, step 0.05 | 1.0 | 1.0 | How much of the hue shift the droplets INSIDE a dark mass take. 1 = the same as the film, which is the reference's cyan-lit specks in the black |
 | `[liquid_acid] dye_hue` | Dye hue (deg) | -180..180, step 5 | 0.0 | 285 | The colour the dark masses take. With Dye follows film on, this is an OFFSET from the film's own hue, so the two turn together; with it off it is an absolute hue. +-180 covers the circle either way |
-| `[liquid_acid] dye_sat` | Dye saturation | 0..1, step 0.05 | 0.0 | 0.8 | How coloured the dark masses are. The full 0..1 is useful here because the dye sits at a very low value: even fully saturated it reads as a deep wax, not as a bright fill. 0 = today's neutral black |
-| `[liquid_acid] dye_lum` | Dye brightness | 0..0.30, step 0.01 | 0.0 | 0 | How much light the masses let through. Stops above 0.30 because the ramp multiplies this by about 4 toward its bright end, so 0.25 already takes the top stop to full and anything higher only clips. Below ~0.02 it is black. 0 = today's black |
+| `[liquid_acid] dye_sat` | Dye saturation | 0..1, step 0.05 | 0.0 | 0.8 | How coloured the dark masses are. The full 0..1 is useful here because the dye sits at a very low value: even fully saturated it reads as a deep wax, not as a bright fill. 0 turns the dye OFF (today's neutral black), it is not a grey dye |
+| `[liquid_acid] dye_lum` | Dye brightness | 0..0.50, step 0.02 | 0.0 | 0.30 | How much lamp the THIN edge of a mass passes; the thick core keeps about 40% of it, which is what reads as translucent wax. Range from the dye4 sheet: under ~0.10 the mass is still black, 0.28-0.34 is the deep wax, and past ~0.45 the mass stops reading as dark at all. 0 = today's black |
 | `[liquid_acid] dye_hue_follow` | Dye follows film hue | 0..1, step 1 | 0 | 0 | 1 = Dye hue is an offset from the film's current hue, so the dye rotates with it under hue_rotate_period and the sweep and the pair stays designed. 0 = a fixed absolute hue |
 | `[liquid_acid] oil_hdr` | Oil HDR level (0 = follow ink) | 0..1.4, step 0.02 | 0.0 |  | Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's |
 | `[liquid_acid] ink_complement_lock` | Lock ink opposite the oil hue | on/off | true | 0 | Hold the ink's hue on the far side of the wheel from the oil |
@@ -253,7 +253,7 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] translucency` | Oil translucency | 0..1, step 0.02 | 0.16 | 0.10 | How much the ink underneath modulates the oil fill |
 | `[liquid_acid] seam_strength` | Seam strength (dark edging) | 0..1, step 0.02 | 0.70 | 0.30 | Dark seams where the dye gradient is steep (acrylic-pour edging) |
 | `[liquid_acid] seam_lo` | Seam threshold | 0..0.5, step 0.01 | 0.06 | 0.06 | Gradient magnitude a seam starts at |
-| `[liquid_acid] grain` | Film grain | 0..0.2, step 0.005 | 0.030 | 0.057 | Coarse animated grain over the whole frame |
+| `[liquid_acid] grain` | Film grain | 0..0.2, step 0.005 | 0.030 | 0 | Coarse animated grain over the whole frame. Dropped when the [post] pass runs with a `film_grain` of its own, so it is never a second stock on top of it (brief BD); kept where it is the only grain; paced to `film_grain_fps` |
 | `[liquid_acid] grain_scale` | Grain coarseness (px) | 1..6, step 0.5 | 3.0 | 3.0 | Pixels per grain cell. 1 = fine, 4 = chunky macro-film |
 | `[liquid_acid] grain_shadow_weight` | Grain into shadows | 0..1, step 0.02 | 0.0 |  | Weights the grain by (1-luminance)^2 so flat bright oil stays clean |
 | `[liquid_acid] oil_edge_mode` | Edge: 0 soft film / 1 crisp | 0..1, step 1 | 0 | 0 | 0 = the film thins out over a wide band that scales with the blob size. 1 = every surface ends on the same hard isoline the droplets do, with only a thin meniscus |
@@ -281,6 +281,9 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] oil_refract_body` | Refraction across the body | 0..0.04, step 0.002 | 0.0 | 0.006 | Displaces what is seen through the whole film, not only its edge, so the marbling wobbles as it passes under |
 | `[liquid_acid] oil_ink_blur` | Ink out of focus under the oil | 0..1, step 0.02 | 0.0 | 0.5 | Softens the ink seen through the film, strongest where the film is thickest |
 | `[liquid_acid] mass_rim` |   mass rim (lamp side) | 0..1, step 0.05 | 0.0 | 0.35 | A thin bright refracted rim on the lamp side of a mass edge, so a mass reads as a translucent body instead of a flat black cut-out |
+| `[liquid_acid] shadow_amt` | Cast shadows | 0..1, step 0.02 | 0.0 | 0.40 | The lamp finally blocks: every mass and every droplet darkens the film on the side away from it. 0 = the flat, shadowless frame this look had until now |
+| `[liquid_acid] shadow_len` |   shadow length (frac of height) | 0..0.30, step 0.01 | 0.12 | 0.12 | How far the longest shadow reaches, as a fraction of the screen height. A caster throws less than this in proportion to its own height, and Lamp z stretches it further |
+| `[liquid_acid] shadow_soft` |   shadow softness | 0..1, step 0.05 | 0.50 | 0.55 | How fast the penumbra opens up with distance. 0 keeps the shadow as sharp at its tip as at the caster; 1 has it dissolve |
 | `[liquid_acid] droplet_depth` | Droplet depth spread | 0..1, step 0.05 | 0.0 | 0.35 | How far droplets and rings are spread in front of and behind the masses' own plane. 0 = everything at one depth, which is what the camera saw before. Needs [post] dof_max_px to be visible |
 | `[liquid_acid] depth_rise` | Back layer rise bonus | 0..1, step 0.05 | 0.0 | 0.22 | The far layer climbs faster than the near one, so depth reads in the motion as well as in the blur. Symmetric, so the average rise speed is unchanged |
 | `[liquid_acid] diffraction` | Diffraction (size vs the point spread) | 0..1, step 0.05 | 0.0 | 1 | Light bends round anything narrow, so a feature smaller than the lens's point spread cannot reach full darkness: tiny droplets come out as soft grey dots, medium ones dark with soft edges, only the big masses go truly black. Never lifts the black under a mass |
@@ -312,12 +315,14 @@ The virtual lens the whole scene is shot through: focus depth, tilt and field cu
 | `[post] aberration` | Lateral aberration | 0..1, step 0.02 | 0.0 | 1 | A lens focuses red and blue at slightly different magnifications, so the channels land at different scales: red pushed out from the optical axis, blue pulled in. Nothing at the axis, a couple of pixels at the corners. Centred on the rig's lens, which drifts, so the clean spot never sits still |
 | `[post] aberration_px` | Aberration width (px at 1440p) | 0..6, step 0.1 | 0.8 | 1.8 | How far red and blue are displaced radially at the corners, in pixels at 1440p. The fringe fades out on anything defocused, exactly as a real one does |
 | `[post] aberration_field` | Aberration growth to field edge | 0..2, step 0.1 | 0.5 | 1.2 | How fast the split grows from the optical axis outward. 0 = nearly uniform across the frame, 2 = clean in the middle and all of it in the corners |
+| `[post] aberration_coc` | Aberration fades with defocus | 0..1, step 0.05 | 0.0 | 1 | 0 = the same split everywhere, in focus or not. 1 = it fades with this pixel own blur, so the fringe lives on the sharp slice and disappears on an out-of-focus shape, which is what a real lens does |
 | `[post] vignette` | Vignette | 0..1, step 0.02 | 0.0 | 0.12 | A gentle fall-off toward the corners -- a field stop, never a circle |
 | `[post] softness` | Lens softness (px at 1440p) | 0..6, step 0.1 | 0.0 | 0.5 | Defocuses the isolines themselves -- coverage band, film edge, rim and meniscus -- so no edge in the frame is razor-sharp. The grain stays sharp |
 | `[post] post_blur_px` | Camera defocus (px at 1440p) | 0..4, step 0.1 | 0.0 | 0 | Image-space disc blur of the finished frame: every feature, whatever its size, gets the same lens defocus. 0 = off |
 | `[post] light_x` | Lamp x | -1..2, step 0.02 | 0.5 | 0.5 | Where the off-view lamp sits, in screen coordinates. 0.5 = the middle, outside 0..1 = off-frame |
 | `[post] light_y` | Lamp y | -1..2, step 0.02 | 1.20 | 1.2 | 1.2 = just below the bottom edge, which is where the reference lamp is |
 | `[post] light_drift` | Lamp idle drift | 0..1, step 0.05 | 1.0 | 1 | How far the lamp wanders on its own: a sum of slow sines over seconds to a minute, so the light is never static |
+| `[post] light_z` | Lamp z (in front / behind) | -1..1, step 0.05 | 0.35 | 0.35 | How far the lamp stands off the plane of the dish. Above 0 it is in front of it and the cast shadows rake away from it, shortening as it rises; 0 is in the plane and throws the longest shadows; below 0 the lamp is behind the dish and every caster spills its shadow evenly onto the film in front of it |
 | `[post] dof_max_px` | Depth of field (max CoC px at 1440p) | 0..16, step 0.5 | 0.0 | 9 | Turns the one global defocus into a real depth of field: each element is blurred by how far its own depth is from the plane of focus, up to this radius. 0 = off, and the whole per-pixel path is skipped. liquid_acid only |
 | `[post] camera_focus` | Focus depth | 0..1, step 0.02 | 0.5 | 0.5 | Which depth is sharp. 0.5 is the plane the big masses sit on; lower favours the front droplets, higher the back ones |
 | `[post] camera_field_curve` | Field curvature | 0..2, step 0.05 | 0.0 | 0.12 | Bends the surface of focus away from the dish with distance from the optical axis, so the centre and the corners of the frame cannot both be sharp -- what a real lens does |
@@ -361,11 +366,13 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[color] post_hue` | Hue rotate (deg) | 0..360, step 1 | 0.0 | 14.4 | Rotates all colors. Warning: rotates outside the hue band |
 | `[liquid_acid] post_chroma` | Final chroma | 0.5..2, step 0.02 | 1.0 | 1.2 | Scales the finished frame's colourfulness about its own brightness. About 1.2 restores what a transparent film costs |
 | `[liquid_acid] post_lift` | Final lift | 0.5..1.6, step 0.02 | 1.0 | 1.08 | Brightness multiplier on the finished frame |
-| `[post] film_grain` | Film grain | 0..1, step 0.01 | 0.0 | 0.11 | Animated film grain over the finished frame, weighted into the mids and darks and kept off the peaks and off true black |
+| `[post] film_grain` | Film grain | 0..1, step 0.01 | 0.0 | 0.10 | Animated film grain over the finished frame, weighted into the mids and darks and kept off the peaks and off true black |
 | `[post] film_grain_size` | Film grain size (px) | 0.5..6, step 0.25 | 1.5 | 2.5 | Pixels per grain cell. 1 = per-pixel noise, larger = coarser stock |
 | `[post] film_grain_speed` | Film grain speed | 0..2, step 0.05 | 1.0 | 1 | Multiplier on the grain frame rate; 1 = the film_grain_fps rate, lower holds each pattern longer |
 | `[post] film_grain_fps` | Film grain frame rate (fps) | 1..240, step 1 | 24.0 |  | How many grain patterns per second: 24 or 30 for a film cadence (both divide 240 exactly), 240 = every refresh. Also paces film_noise |
 | `[post] film_grain_color` | Film grain colour (0 mono) | 0..1, step 0.05 | 0.0 | 0 | 0 = monochrome grain, 1 = independent RGB noise |
+| `[post] film_grain_chroma` | Film grain chroma (1 = old) | 0..1, step 0.05 | 1.0 | 0 | 1 = the grain is an equal step on all three channels, which moves saturation and clips against black. 0 = it scales the pixel instead, so hue and saturation survive and black stays black |
+| `[post] film_grain_density` | Film grain density curve | 0..1, step 0.05 | 0.0 | 1 | 0 = grain at full amplitude from just above black upward. 1 = the stock own density curve: nothing in the dense shadow, most of it in the mid-tones, nothing on a clean highlight |
 | `[post] halo` | Bright-field halo | 0..1, step 0.01 | 0.0 | 0.12 | A soft bright glow hugging the outside of every dark shape, with a faint darker echo beyond it -- the microscope double contour (liquid_acid only) |
 | `[post] halo_px` | Halo width (px at 1440p) | 1..40, step 1 | 12.0 | 12 | How wide that glow is. Wide and weak is the look; narrow and strong is a stroked line |
 | `[post] band_min` | Minimum band widths | 0..1, step 0.05 | 1.0 | 1 | Floors every band around an edge (film edge, rim, meniscus, halo, penumbra) at a few px, so a small droplet is shaded like a big mass instead of getting a solid outline. 0 = bands proportional to each element's size |
@@ -373,6 +380,7 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] post_glow_px` | Camera glare radius (px at 1440p) | 2..40, step 0.5 | 10.0 | 10 | How far the glare spreads |
 | `[post] fog` | Light in the water: haze | 0..1, step 0.02 | 0.0 | 0.22 | The water itself glows near the off-view lamp and fades with distance, added only into the dark. It falls to exactly zero far from the lamp, so black stays black. 0 = off |
 | `[post] fog_px` | Haze reach (px at 1440p) | 100..2000, step 25 | 700.0 | 700 | How far the glow of the water carries from the lamp |
+| `[post] fog_mass_gate` | Haze: keep masses black | 0..1, step 0.05 | 0.0 | 0.7 | 0 = the haze lands wherever it is dark. 1 = it is kept out of the inside of a dark mass, which floats in front of the water, and still glows in the water beside it |
 | `[post] bloom` | Bloom (wide, weak) | 0..1, step 0.02 | 0.0 | 0.30 | The bright film bleeds a very wide, very weak wash into the black. Its radius breathes and the wash drifts with the lamp |
 | `[post] bloom_px` | Bloom radius (px at 1440p) | 40..400, step 5 | 140.0 | 140 | How far that wash spreads |
 | `[post] film_dust` | Film dust | 0..1, step 0.02 | 0.0 | 0.10 | Specks of dust on the film: sparse bright points, a new scattering every film frame. Additive and weighted into the dark, so they are stars on the black and nothing on the bright film |
@@ -508,5 +516,5 @@ Keys that are present, wired up and carry a live value in `acid-rise-12.ini`, bu
 
 ## Totals
 
-**401 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **303 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **8 inert or unverified** in the current live preset.
+**405 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **307 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **8 inert or unverified** in the current live preset.
 

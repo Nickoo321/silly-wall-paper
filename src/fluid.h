@@ -618,6 +618,23 @@ struct LiquidAcidConfig {
     float dropletCrustR     = 1.0f;   //  0..1        droplet_crust_r
     float massRim           = 0.0f;   //  0..1             mass_rim
 
+    // --- CAST SHADOWS (brief BC) ------------------------------------------
+    // The user: "the light should cast shadows essentially... it can be from
+    // behind, or the bottom, or the top or side." The lamp already drives the
+    // specular, the mass rim, the penumbra, the haze and the bloom; nothing
+    // in the frame blocked any of it. Every mass and every droplet now
+    // darkens the film in the direction AWAY from the lamp, tightest and
+    // darkest at the caster and softening as it runs out. The length comes
+    // from the caster's own height (a droplet's radius, a mass's thickness)
+    // and from [post] light_z, the lamp's stand-off from the dish.
+    //   shadow_amt   0 = today, and the whole block is branched out
+    //   shadow_len   how far the longest shadow reaches, as a fraction of
+    //                the screen HEIGHT, before light_z lengthens it
+    //   shadow_soft  how fast the penumbra opens up with distance
+    float shadowAmt         = 0.0f;   //  0..1           shadow_amt
+    float shadowLen         = 0.12f;  //  frac of height shadow_len
+    float shadowSoft        = 0.50f;  //  0..1           shadow_soft
+
     // --- MULTICOLOUR OIL (brief AE, the AE+AH decision) -------------------
     // Ref oil-colour-combo-ref-1.jpg, which the user rated positive: a
     // magenta film carrying soft CYAN patches that read like a light leak,
@@ -714,9 +731,14 @@ struct LiquidAcidConfig {
     // purple". The references are lava lamps -- amber wax over orange -- where
     // the dark body is not black at all but a DEEP, translucent colour you can
     // almost see the lamp through. So the negative masses take a colour of
-    // their own, applied to the INK RAMP's dark stops (not as a post tint, and
-    // not to the bright stops, so the crust and mass_rim still read against
-    // it). dye_sat 0 / dye_lum 0 is exactly today's black, which is why every
+    // their own, applied in the DISPLAY PASS on inkC (full trace at "DYE THE
+    // DARK MASSES" in shaders.h: the ink RAMP, which this first shipped
+    // against, is not read at all in ink_mode=water, so it could never colour
+    // a mass -- two rounds of ramp edits rendered byte-identical).
+    // dye_lum is the light the THIN edge of the wax passes; the thick core
+    // keeps a floor of it, so thickness reads as translucency and the crust
+    // and mass_rim still read against the body.
+    // dye_sat 0 OR dye_lum 0 is exactly today's black, which is why every
     // existing preset and style=fluid are untouched to the bit.
     //   dye_hue_follow 1 makes dye_hue an OFFSET from the film's current hue,
     //   so the dye rotates with the pair as hue_rotate_period and the sweep
@@ -955,6 +977,24 @@ struct PostConfig {
     // and film_noise quantise their time to this.
     float filmGrainFps   = 24.0f;  // patterns per second     film_grain_fps
     float filmGrainColor = 0.0f;   // 0 mono .. 1 RGB       film_grain_color
+    // ---- brief BD: the grain must not read as high-ISO artifacting -------
+    // NOT the same key as film_grain_color, which asks for three independent
+    // noises. This one is about HOW one noise is applied. Today the grain is
+    // an ADDITIVE offset in the sRGB-encoded domain, the same number on all
+    // three channels -- which is not luminance-only: an equal encoded step on
+    // unequal channels moves the pixel's saturation, and near black it is
+    // clamped at zero, which lifts the mean as well. At 0 the grain instead
+    // SCALES the encoded pixel, so its channel ratios (hue and saturation)
+    // survive exactly, it cannot lift a black pixel, and it cannot clip.
+    // 1 = today, and every existing preset is byte-identical at that value.
+    float filmGrainChroma  = 1.0f; // 1 additive (today) .. 0 hue-preserving   film_grain_chroma
+    // ...and how the amplitude is weighted. Today's curve is full from about
+    // 0.06 encoded up and still has a 0.15 FLOOR on absolute black, so a
+    // 1-nit mass carries the same grain as a 100-nit film -- which measured
+    // at 4-6x pixel-to-pixel brightness in a dark mass against 1.2x on the
+    // open film. At 1 the weight becomes the stock's own D-log-E hump: zero
+    // in the dense shadow, peak in the mid-tones, gone on a clean highlight.
+    float filmGrainDensity = 0.0f; // 0 today's curve .. 1 density hump      film_grain_density
     // Chromatic aberration, LATERAL and per-edge (the reference's warm/cool
     // fringe): R and B displaced in opposite directions along the local edge
     // normal, G untouched, so every hard edge gets one warm and one cool side.
@@ -963,6 +1003,14 @@ struct PostConfig {
     float aberration     = 0.0f;   // 0..1 master                aberration
     float aberrationPx   = 0.8f;   // px at 1440p             aberration_px
     float aberrationField= 0.5f;   // extra toward the frame edge  aberration_field
+    // brief BD. The split is a DIFFERENCE of two resamples of the SHARP
+    // source added to a picture that has already been defocused, so at 0 it
+    // stays razor-sharp on a bokeh disc -- which no lens does. At 1 it is
+    // scaled by the pixel's own circle of confusion against the diffraction
+    // floor: full on the sharp slice, gone where the picture is soft.
+    // 0 = the uniform split the user approved on 2026-09-19, so any preset
+    // that does not name this key keeps exactly that.
+    float aberrationCoc  = 0.0f;   // 0 uniform (today) .. 1 fades with the blur  aberration_coc
     // A slight darkening toward the corners -- the field stop, never a circle.
     float vignette       = 0.0f;   // 0..1                         vignette
     // Lens defocus on the isolines themselves (the user: "these edges are way
@@ -1036,11 +1084,26 @@ struct PostConfig {
     // of slow sines gives the frame an idle animation of its own.
     float fog        = 0.0f;      // 0..1 haze master                fog
     float fogPx      = 700.0f;    // 1/e distance, px at 1440p       fog_px
+    // The haze is the WATER, and a dye mass floats in FRONT of it, so the
+    // glow has no business shining through the middle of one (brief BD: the
+    // post lifts were measured at 47% of a dark mass's level). At 0 the haze
+    // lands wherever it is dark, which is today's behaviour; turned up, a
+    // pixel that is dark AND whose wide surroundings are dark -- i.e. deep
+    // inside a mass -- keeps its black, while a dark pixel beside bright film
+    // is the water itself and still glows.
+    float fogMassGate= 0.0f;      // 0 today .. 1 no haze inside masses  fog_mass_gate
     float bloom      = 0.0f;      // 0..1 wide wash master           bloom
     float bloomPx    = 140.0f;    // its radius, px at 1440p         bloom_px
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x
     float lightY     = 1.20f;     //                                 light_y
     float lightDrift = 1.0f;      // 0..1 idle motion            light_drift
+    // Where the lamp stands relative to the PLANE of the dish (brief BC).
+    // > 0 in front of / above it, so a cast shadow rakes away from the lamp
+    // and shortens as the lamp rises; 0 = in the plane, the longest shadows;
+    // < 0 behind the dish = backlit, where the shadow has no direction left
+    // and spills evenly round each caster toward the camera. Read by the
+    // acid display pass, and inert until shadow_amt is turned up.
+    float lightZ     = 0.35f;     // -1..1                           light_z
 
     // --- PERSPECTIVE CAMERA + DEPTH OF FIELD + TILT (items N + R) ---------
     // Up to here the camera was an orthographic scanner with ONE global

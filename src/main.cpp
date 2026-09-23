@@ -12,6 +12,9 @@
 //
 // Headless capture (never shows anything, never touches the live config):
 //   --shot <out.png>   render OFFSCREEN and write <out>.png + <out>-hdr.png
+//                      (8-bit views) plus <out>.jxr (lossless JPEG XR, 64bpp
+//                      RGBA half, linear scRGB -- real HDR in Photos) and
+//                      <out>-pq.png (16-bit Rec.2020/ST 2084 with cICP)
 //   --shot-size WxH    capture size (default 2560x1440)
 //   --shot-delay N     seconds of wallpaper time to simulate first (default 40)
 //   --shot-series N:S  N captures, S seconds apart, named by elapsed seconds
@@ -44,6 +47,7 @@
 #include <cstdio>
 #include <cstdarg>
 #include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <share.h>
 #include <vector>
@@ -372,9 +376,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmGrainSpeed = getF(S, L"film_grain_speed", po.filmGrainSpeed);
         po.filmGrainFps   = getF(S, L"film_grain_fps", po.filmGrainFps);
         po.filmGrainColor = getF(S, L"film_grain_color", po.filmGrainColor);
+        po.filmGrainChroma  = getF(S, L"film_grain_chroma",  po.filmGrainChroma);
+        po.filmGrainDensity = getF(S, L"film_grain_density", po.filmGrainDensity);
         po.aberration     = getF(S, L"aberration", po.aberration);
         po.aberrationPx   = getF(S, L"aberration_px", po.aberrationPx);
         po.aberrationField= getF(S, L"aberration_field", po.aberrationField);
+        po.aberrationCoc  = getF(S, L"aberration_coc", po.aberrationCoc);
         po.vignette       = getF(S, L"vignette", po.vignette);
         po.softness       = getF(S, L"softness", po.softness);
         po.halo           = getF(S, L"halo", po.halo);
@@ -394,11 +401,13 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.filmStock      = getF(S, L"film_stock", po.filmStock);
         po.fog            = getF(S, L"fog", po.fog);
         po.fogPx          = getF(S, L"fog_px", po.fogPx);
+        po.fogMassGate    = getF(S, L"fog_mass_gate", po.fogMassGate);
         po.bloom          = getF(S, L"bloom", po.bloom);
         po.bloomPx        = getF(S, L"bloom_px", po.bloomPx);
         po.lightX         = getF(S, L"light_x", po.lightX);
         po.lightY         = getF(S, L"light_y", po.lightY);
         po.lightDrift     = getF(S, L"light_drift", po.lightDrift);
+        po.lightZ         = getF(S, L"light_z",     po.lightZ);
         po.cameraFov      = getF(S, L"camera_fov", po.cameraFov);
         po.cameraFocus    = getF(S, L"camera_focus", po.cameraFocus);
         po.cameraFieldCurve = getF(S, L"camera_field_curve", po.cameraFieldCurve);
@@ -599,6 +608,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletCrustDens   = getF(S, L"droplet_crust_density", a.dropletCrustDens);
         a.dropletCrustR      = getF(S, L"droplet_crust_r",       a.dropletCrustR);
         a.massRim            = getF(S, L"mass_rim",              a.massRim);
+        a.shadowAmt          = getF(S, L"shadow_amt",            a.shadowAmt);
+        a.shadowLen          = getF(S, L"shadow_len",            a.shadowLen);
+        a.shadowSoft         = getF(S, L"shadow_soft",           a.shadowSoft);
         a.dropletRacerFrac   = getF(S, L"droplet_racer_frac",   a.dropletRacerFrac);
         a.dropletRacerSpeed  = getF(S, L"droplet_racer_speed",  a.dropletRacerSpeed);
         a.dropletRacerWobble = getF(S, L"droplet_racer_wobble", a.dropletRacerWobble);
@@ -1592,9 +1604,12 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_grain_speed", po.filmGrainSpeed, 2);
         putF(S, L"film_grain_fps", po.filmGrainFps, 1);
         putF(S, L"film_grain_color", po.filmGrainColor, 3);
+        putF(S, L"film_grain_chroma", po.filmGrainChroma, 3);
+        putF(S, L"film_grain_density", po.filmGrainDensity, 3);
         putF(S, L"aberration", po.aberration, 3);
         putF(S, L"aberration_px", po.aberrationPx, 2);
         putF(S, L"aberration_field", po.aberrationField, 2);
+        putF(S, L"aberration_coc", po.aberrationCoc, 3);
         putF(S, L"vignette", po.vignette, 3);
         putF(S, L"softness", po.softness, 2);
         putF(S, L"halo", po.halo, 3);
@@ -1614,11 +1629,13 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_stock", po.filmStock, 3);
         putF(S, L"fog", po.fog, 3);
         putF(S, L"fog_px", po.fogPx, 1);
+        putF(S, L"fog_mass_gate", po.fogMassGate, 3);
         putF(S, L"bloom", po.bloom, 3);
         putF(S, L"bloom_px", po.bloomPx, 1);
         putF(S, L"light_x", po.lightX, 3);
         putF(S, L"light_y", po.lightY, 3);
         putF(S, L"light_drift", po.lightDrift, 3);
+        putF(S, L"light_z", po.lightZ, 3);
         putF(S, L"camera_fov", po.cameraFov, 2);
         putF(S, L"camera_focus", po.cameraFocus, 3);
         putF(S, L"camera_field_curve", po.cameraFieldCurve, 3);
@@ -1803,6 +1820,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_crust_density", a.dropletCrustDens, 3);
         putF(S, L"droplet_crust_r", a.dropletCrustR, 3);
         putF(S, L"mass_rim", a.massRim, 3);
+        putF(S, L"shadow_amt", a.shadowAmt, 3);
+        putF(S, L"shadow_len", a.shadowLen, 3);
+        putF(S, L"shadow_soft", a.shadowSoft, 3);
         putF(S, L"droplet_racer_frac", a.dropletRacerFrac, 3);
         putF(S, L"droplet_racer_speed", a.dropletRacerSpeed, 3);
         putF(S, L"droplet_racer_wobble", a.dropletRacerWobble, 3);
@@ -2072,6 +2092,201 @@ static bool WritePng(const wchar_t* path, const std::vector<uint8_t>& bgr, int w
     return SUCCEEDED(enc->Commit());
 }
 
+// ---------------------------------------------------------------------------
+// True-HDR shot output. The two 8-bit PNGs above are both lossy views of the
+// frame -- one clips at SDR white, the other tone-maps -- so a subtle post
+// effect (lid sheen, grain, banding in a slow ramp) cannot be judged in
+// either. These two carry the captured floats instead:
+//
+//   <stem>.jxr     64bpp RGBA half, LINEAR scRGB (1.0 = 80 nits), lossless.
+//                  Same convention as Windows Game Bar's HDR screenshots, so
+//                  the Photos app shows it in real HDR on an HDR display.
+//   <stem>-pq.png  48bpp RGB, Rec.2020 primaries, ST 2084 (PQ) transfer, with
+//                  a cICP chunk so a PQ-aware viewer doesn't have to guess.
+//                  Absolute nits, viewer-independent, no container quirks.
+// ---------------------------------------------------------------------------
+
+// IEEE binary32 -> binary16, round-to-nearest, sign preserved (scRGB values
+// outside the sRGB gamut are legitimately negative, so this must not clamp).
+static uint16_t FloatToHalf(float f) {
+    uint32_t x;
+    memcpy(&x, &f, sizeof(x));
+    const uint32_t sign = (x >> 16) & 0x8000u;
+    const uint32_t rawExp = (x >> 23) & 0xFFu;
+    uint32_t mant = x & 0x7FFFFFu;
+    if (rawExp == 0xFFu)                                   // Inf / NaN
+        return (uint16_t)(sign | 0x7C00u | (mant ? 0x200u : 0u));
+    const int32_t exp = (int32_t)rawExp - 127 + 15;
+    if (exp >= 31) return (uint16_t)(sign | 0x7C00u);      // overflow -> Inf
+    if (exp <= 0) {                                        // subnormal / zero
+        if (exp < -10) return (uint16_t)sign;
+        mant |= 0x800000u;
+        const uint32_t shift = (uint32_t)(14 - exp);
+        uint32_t h = mant >> shift;
+        if ((mant >> (shift - 1)) & 1u) h++;               // round to nearest
+        return (uint16_t)(sign | h);
+    }
+    uint32_t h = ((uint32_t)exp << 10) | (mant >> 13);
+    if ((mant >> 12) & 1u) h++;                            // may carry into exp
+    return (uint16_t)(sign | h);
+}
+
+// JPEG XR (WIC's WMPhoto codec), 64bpp RGBA half, lossless.
+static bool WriteJxrHalf(const wchar_t* path, const std::vector<uint16_t>& rgbaHalf,
+                         int w, int h) {
+    ComPtr<IWICImagingFactory> fac;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&fac)))) return false;
+    ComPtr<IWICStream> stream;
+    if (FAILED(fac->CreateStream(&stream))) return false;
+    if (FAILED(stream->InitializeFromFilename(path, GENERIC_WRITE))) return false;
+    ComPtr<IWICBitmapEncoder> enc;
+    if (FAILED(fac->CreateEncoder(GUID_ContainerFormatWmp, nullptr, &enc))) return false;
+    if (FAILED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache))) return false;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> props;
+    if (FAILED(enc->CreateNewFrame(&frame, &props))) return false;
+    if (props) {
+        // Lossless only takes effect with UseCodecOptions; ImageQuality 1.0 is
+        // the fallback for any codec build that ignores the pair. A failed
+        // Write here is not fatal -- it just costs quality, and we'd rather
+        // ship a slightly-compressed .jxr than none.
+        PROPBAG2 opt = {};
+        VARIANT v;
+        opt.pstrName = const_cast<LPOLESTR>(L"ImageQuality");
+        VariantInit(&v); v.vt = VT_R4;   v.fltVal  = 1.0f;          props->Write(1, &opt, &v);
+        opt.pstrName = const_cast<LPOLESTR>(L"UseCodecOptions");
+        VariantInit(&v); v.vt = VT_BOOL; v.boolVal = VARIANT_TRUE;  props->Write(1, &opt, &v);
+        opt.pstrName = const_cast<LPOLESTR>(L"Lossless");
+        VariantInit(&v); v.vt = VT_BOOL; v.boolVal = VARIANT_TRUE;  props->Write(1, &opt, &v);
+    }
+    if (FAILED(frame->Initialize(props.Get()))) return false;
+    if (FAILED(frame->SetSize((UINT)w, (UINT)h))) return false;
+    WICPixelFormatGUID want = GUID_WICPixelFormat64bppRGBAHalf, fmt = want;
+    if (FAILED(frame->SetPixelFormat(&fmt))) return false;
+    if (memcmp(&fmt, &want, sizeof(fmt)) != 0) {
+        // The encoder negotiated something else; a silent 8-bit fallback is
+        // exactly the failure this file exists to avoid, so say so and stop.
+        ShotLog("[shot] jxr: encoder refused 64bppRGBAHalf\n");
+        return false;
+    }
+    const UINT stride = (UINT)w * 8;
+    if (FAILED(frame->WritePixels((UINT)h, stride, stride * (UINT)h,
+                                  const_cast<BYTE*>((const BYTE*)rgbaHalf.data())))) return false;
+    if (FAILED(frame->Commit())) return false;
+    return SUCCEEDED(enc->Commit());
+}
+
+// WIC PNG writer, 48bpp RGB (16 bits per channel).
+static bool WritePng48(const wchar_t* path, const std::vector<uint16_t>& rgb, int w, int h) {
+    ComPtr<IWICImagingFactory> fac;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&fac)))) return false;
+    ComPtr<IWICStream> stream;
+    if (FAILED(fac->CreateStream(&stream))) return false;
+    if (FAILED(stream->InitializeFromFilename(path, GENERIC_WRITE))) return false;
+    ComPtr<IWICBitmapEncoder> enc;
+    if (FAILED(fac->CreateEncoder(GUID_ContainerFormatPng, nullptr, &enc))) return false;
+    if (FAILED(enc->Initialize(stream.Get(), WICBitmapEncoderNoCache))) return false;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    ComPtr<IPropertyBag2> props;
+    if (FAILED(enc->CreateNewFrame(&frame, &props))) return false;
+    if (FAILED(frame->Initialize(props.Get()))) return false;
+    if (FAILED(frame->SetSize((UINT)w, (UINT)h))) return false;
+    WICPixelFormatGUID want = GUID_WICPixelFormat48bppRGB, fmt = want;
+    if (FAILED(frame->SetPixelFormat(&fmt))) return false;
+    if (memcmp(&fmt, &want, sizeof(fmt)) != 0) {
+        ShotLog("[shot] pq png: encoder refused 48bppRGB\n");
+        return false;
+    }
+    const UINT stride = (UINT)w * 6;
+    if (FAILED(frame->WritePixels((UINT)h, stride, stride * (UINT)h,
+                                  const_cast<BYTE*>((const BYTE*)rgb.data())))) return false;
+    if (FAILED(frame->Commit())) return false;
+    return SUCCEEDED(enc->Commit());
+}
+
+static uint32_t Crc32Png(const uint8_t* p, size_t n) {
+    static uint32_t tab[256];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++) c = (c & 1u) ? (0xEDB88320u ^ (c >> 1)) : (c >> 1);
+            tab[i] = c;
+        }
+        init = true;
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) c = tab[(c ^ p[i]) & 0xFFu] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+// Rewrite a just-written PNG: drop any sRGB/gAMA/cHRM/iCCP the encoder added
+// and insert cICP right after IHDR -- BT.2020 primaries (9), ST 2084 transfer
+// (16), RGB matrix (0), full range (1). Without it a PQ PNG is read as sRGB
+// and looks like fog.
+static bool PngSetCicpPq(const wchar_t* path) {
+    std::vector<uint8_t> in;
+    if (FILE* f = _wfsopen(path, L"rb", _SH_DENYNO)) {
+        fseek(f, 0, SEEK_END);
+        const long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (sz > 8) {
+            in.resize((size_t)sz);
+            if (fread(in.data(), 1, in.size(), f) != in.size()) in.clear();
+        }
+        fclose(f);
+    }
+    if (in.size() < 8) return false;
+
+    std::vector<uint8_t> out;
+    out.reserve(in.size() + 16);
+    out.insert(out.end(), in.begin(), in.begin() + 8);          // signature
+    size_t i = 8;
+    bool inserted = false;
+    while (i + 12 <= in.size()) {
+        const uint32_t len = ((uint32_t)in[i] << 24) | ((uint32_t)in[i + 1] << 16) |
+                             ((uint32_t)in[i + 2] << 8) | (uint32_t)in[i + 3];
+        if (len > in.size() || i + 12 + (size_t)len > in.size()) return false;
+        const char* t = (const char*)&in[i + 4];
+        const bool drop = !memcmp(t, "sRGB", 4) || !memcmp(t, "gAMA", 4) ||
+                          !memcmp(t, "cHRM", 4) || !memcmp(t, "iCCP", 4) ||
+                          !memcmp(t, "cICP", 4);
+        if (!drop) out.insert(out.end(), in.begin() + i, in.begin() + i + 12 + len);
+        if (!inserted && !memcmp(t, "IHDR", 4)) {
+            uint8_t c[12] = { 0, 0, 0, 4, 'c', 'I', 'C', 'P', 9, 16, 0, 1 };
+            const uint32_t crc = Crc32Png(c + 4, 8);
+            out.insert(out.end(), c, c + 12);
+            out.push_back((uint8_t)(crc >> 24)); out.push_back((uint8_t)(crc >> 16));
+            out.push_back((uint8_t)(crc >> 8));  out.push_back((uint8_t)crc);
+            inserted = true;
+        }
+        i += 12 + (size_t)len;
+    }
+    if (!inserted) return false;
+    FILE* f = _wfsopen(path, L"wb", _SH_DENYNO);
+    if (!f) return false;
+    const bool ok = fwrite(out.data(), 1, out.size(), f) == out.size();
+    fclose(f);
+    return ok;
+}
+
+// Absolute nits -> ST 2084 (PQ) code value in 0..1.
+static float PqFromNits(float nits) {
+    const float m1 = 0.1593017578125f, m2 = 78.84375f;
+    const float c1 = 0.8359375f, c2 = 18.8515625f, c3 = 18.6875f;
+    float y = nits * (1.0f / 10000.0f);
+    if (!(y > 0.0f)) return 0.0f;
+    if (y > 1.0f) y = 1.0f;
+    const float yp = powf(y, m1);
+    return powf((c1 + c2 * yp) / (1.0f + c3 * yp), m2);
+}
+static uint16_t ToU16(float v) {
+    int x = (int)(v * 65535.0f + 0.5f);
+    return (uint16_t)(x < 0 ? 0 : (x > 65535 ? 65535 : x));
+}
+
 static void EnsureParentDir(const wchar_t* path) {
     wchar_t dir[MAX_PATH];
     wcscpy_s(dir, MAX_PATH, path);
@@ -2085,14 +2300,17 @@ static void EnsureParentDir(const wchar_t* path) {
     CreateDirectoryW(dir, nullptr);
 }
 
-// Encode the captured linear-scRGB frame two ways and report what's in it.
+// Encode the captured linear-scRGB frame four ways and report what's in it.
 //   <stem>.png      display-referred SDR: /sdrScale, clip at 1.0, sRGB encode
 //   <stem>-hdr.png  highlight-preserving: hue-preserving Reinhard on the max
 //                   channel, so anything above SDR white stays visible
+//   <stem>.jxr      the floats themselves: linear scRGB half, lossless JPEG XR
+//   <stem>-pq.png   the floats in absolute nits: Rec.2020 + ST 2084, 16-bit
 static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rgba,
                           int w, int h, float sdrScale, float elapsed) {
     const size_t n = (size_t)w * h;
     std::vector<uint8_t> sdr(n * 3), hdr(n * 3);
+    std::vector<uint16_t> half(n * 4), pq(n * 3);
 
     double lumSum = 0.0;
     size_t aboveWhite = 0, negative = 0;
@@ -2109,6 +2327,22 @@ static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rg
         float r = rgba[p * 4 + 0], g = rgba[p * 4 + 1], b = rgba[p * 4 + 2];
         if (r != r) r = 0; if (g != g) g = 0; if (b != b) b = 0;   // NaN guard
         if (r < 0.0f || g < 0.0f || b < 0.0f) negative++;
+
+        // scene-referred, untouched: linear scRGB half (negatives kept)
+        half[p * 4 + 0] = FloatToHalf(r);
+        half[p * 4 + 1] = FloatToHalf(g);
+        half[p * 4 + 2] = FloatToHalf(b);
+        half[p * 4 + 3] = 0x3C00;                                  // alpha 1.0
+        // absolute nits: Rec.709 -> Rec.2020 (BT.2087), scRGB 1.0 = 80 nits,
+        // then PQ. Out-of-Rec.2020 negatives clip; the .jxr keeps them.
+        {
+            const float r20 = 0.627404f * r + 0.329283f * g + 0.043313f * b;
+            const float g20 = 0.069097f * r + 0.919540f * g + 0.011362f * b;
+            const float b20 = 0.016391f * r + 0.088013f * g + 0.895595f * b;
+            pq[p * 3 + 0] = ToU16(PqFromNits(fmaxf(0.0f, r20) * 80.0f));
+            pq[p * 3 + 1] = ToU16(PqFromNits(fmaxf(0.0f, g20) * 80.0f));
+            pq[p * 3 + 2] = ToU16(PqFromNits(fmaxf(0.0f, b20) * 80.0f));
+        }
         maxScrgb = fmaxf(maxScrgb, fmaxf(r, fmaxf(g, b)));
         {
             const float nits = fmaxf(r, fmaxf(g, b)) * 80.0f;
@@ -2139,18 +2373,23 @@ static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rg
 
     std::wstring sdrPath = stem + L".png";
     std::wstring hdrPath = stem + L"-hdr.png";
+    std::wstring jxrPath = stem + L".jxr";
+    std::wstring pqPath  = stem + L"-pq.png";
     EnsureParentDir(sdrPath.c_str());
     bool okS = WritePng(sdrPath.c_str(), sdr, w, h);
     bool okH = WritePng(hdrPath.c_str(), hdr, w, h);
+    bool okJ = WriteJxrHalf(jxrPath.c_str(), half, w, h);
+    bool okP = WritePng48(pqPath.c_str(), pq, w, h) && PngSetCicpPq(pqPath.c_str());
 
     const double meanLum = lumSum / (double)n;
     ShotLog("[shot] t=%.1fs %ls %dx%d  mean_lum=%.4f scRGB (%.1f nits)  "
             "above_sdr_white=%.2f%%  max_scRGB=%.3f (%.0f nits)  negative_px=%.2f%%  "
-            "sdr=%s hdr=%s\n",
+            "sdr=%s hdr=%s jxr=%s pq=%s\n",
             elapsed, sdrPath.c_str(), w, h, meanLum, meanLum * 80.0,
             100.0 * aboveWhite / (double)n, maxScrgb, maxScrgb * 80.0f,
             100.0 * negative / (double)n,
-            okS ? "ok" : "FAILED", okH ? "ok" : "FAILED");
+            okS ? "ok" : "FAILED", okH ? "ok" : "FAILED",
+            okJ ? "ok" : "FAILED", okP ? "ok" : "FAILED");
     ShotLog("[shot] nits min=%.1f mean=%.1f max=%.0f  hist%% "
             "[<1]%.2f [1-5]%.2f [5-15]%.2f [15-40]%.2f [40-80]%.2f "
             "[80-160]%.2f [160-240]%.2f [240-400]%.2f [400-600]%.2f [600+]%.2f\n",

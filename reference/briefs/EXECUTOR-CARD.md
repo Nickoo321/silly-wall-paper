@@ -4,16 +4,24 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 
 ## 1. Hard rules
 
-- GPU render/build hold `build2\shots\gpu.lock`: dot-source `tools\gpu-lock.ps1`, then
-  `if (Wait-GpuLock -Owner "<name>" -TimeoutMinutes N) { try {...} finally { Release-GpuLock } }`
-  in the SAME PowerShell process. Never two `--shot` renders at once (2026-09-15: OLED went grey).
+- GPU lock is `build2\shots\gpu.lock` in the MAIN repo (dot-source `tools\gpu-lock.ps1`; it
+  resolves to the main repo's lock even from a worktree, never a private per-worktree file). The
+  lock rule: **renders never wait** — render at full speed, no lock wait (user 2026-09-22: idle
+  executors lose their cache; concurrent headless renders accepted). **Builds always take the
+  lock**: `if (Wait-GpuLock -Owner "<name>" -TimeoutMinutes N) { try {...} finally
+  { Release-GpuLock } }` in the SAME PowerShell process. Incident: 2026-09-15, two concurrent
+  `--shot` renders once turned the OLED grey; the user accepts that risk now (render at full
+  speed, no lock wait for renders, 2026-09-22); if the panel misbehaves, stop rendering and tell
+  the parent.
 - Headless `--shot` only — never the screen, never screenshots, never touch brightness/DDC.
 - Never touch `build\`, `build2\live`, the running `FluidWallpaper.exe`, or Wallpaper Engine, or
   `tools\away-pause.ps1`. No swap — the parent (Fable) does that, and only after asking the user.
 - Fluid parity is sacred: `reference\configs\we-look-live.ini`, 60 s, 2560x1440, seed 1234,
   `--hdr on` must give md5 `10E36EBF1A74EDFE609065D757300054` after EVERY change (parity peak
   700). New keys default to today's behaviour so existing presets stay byte-identical.
-- MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`.
+- MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`. Tightest
+  is `kDisplaySrc` at ~2.3 KB headroom (audit 2026-09-22): split before adding more than ~20 lines
+  to it, or to `kPostSrc`/`kComputeSrc` (also close to cap).
 - Root signature is at the 64-DWORD limit — cbuffer slack only, don't add root params.
 - New key's range/step comes from a real A/B sheet (3-5 values), not a guess (slider-range-policy:
   a blur useful over 0.1-3 cannot ship as a 0-50 slider — it hides the good zone).
@@ -26,8 +34,9 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - If part of the task is rote (renders, md5, ini edits, doc text, sheets) and a cheaper model
   could do it without loss, say so in your report or hand back a task list — you judge, the
   parent dispatches (model-tiering-policy).
-- Send every render/sheet you look at to the user via SendUserFile in the same turn — they follow
-  from their phone and can't see tool output (show-what-you-see).
+- Executors have no SendUserFile: copy your sheets into the MAIN repo's `build2\shots\live\` and
+  give the parent the path — the parent shows the user (show-what-you-see); they follow from
+  their phone and can't see tool output.
 
 ## 2. File map
 
@@ -51,7 +60,9 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
   --shot-delay <sec> --shot-size 2560x1440 --shot-yield 2 --seed 1234
 ```
 `--shot-series N:S` for a series. Poll the PNG until its size is stable (OneDrive lag on write).
-Build with `cmd /c build-wt.cmd` in the worktree.
+Build from the worktree root with `cmd /c "<repo>\tools\build-wt.cmd"` (it builds `%CD%`, i.e.
+wherever you run it from, not the main repo — a worktree-local `build-wt.cmd` at the root is
+`.git\info\exclude`d, so it never existed in a fresh worktree; the tracked copy fixes that).
 
 ## 4. Current state
 

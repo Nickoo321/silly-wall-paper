@@ -4748,8 +4748,10 @@ void FluidRenderer::UploadAcidConstants() {
     //
     // dye_sat 0 or dye_lum 0 sends amount 0, the shader skips the branch, and
     // the frame is byte-identical -- as is style=fluid, which never gets here.
-    float dyeCol[3] = { 0.0f, 0.0f, 0.0f };
-    float dyeAmt = 0.0f;
+    // Hue (0..1) and saturation go over as they are and the shader builds the
+    // colour: the acid cbuffer has single scalars free, not a whole vector,
+    // and the acid PSO already carries InkHsv2Rgb from the shared ink block.
+    float dyeHueN = 0.0f, dyeSat = 0.0f, dyeAmt = 0.0f;
     if (a.dyeSat > 1e-4f && a.dyeLum > 1e-4f) {
         float hue = a.dyeHue;
         if (a.dyeHueFollow) {
@@ -4763,12 +4765,12 @@ void FluidRenderer::UploadAcidConstants() {
         float hn = fmodf(hue, 360.0f);
         if (hn < 0.0f) hn += 360.0f;
         hn *= (1.0f / 360.0f);
-        // Unit-value colour: the shader scales it by the amount and by the
+        // The shader takes it at value 1 and scales by the amount and by the
         // wax's own thickness, so the hue is carried at full vividness and
         // only the light level changes with depth.
-        const RGB d = HSVtoRGB(hn, fminf(fmaxf(a.dyeSat, 0.0f), 1.0f), 1.0f);
-        dyeCol[0] = d.r; dyeCol[1] = d.g; dyeCol[2] = d.b;
-        dyeAmt = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
+        dyeHueN = hn;
+        dyeSat  = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
+        dyeAmt  = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
     }
 
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
@@ -4977,10 +4979,11 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     // mass_rim (brief AB): strength, and its width as a fraction of the frame
     // from px at 1440p -- the same convention as every other optical width.
-    // .z = the dye amount (brief AG/AM): 0 = the shader skips the wax branch
-    // entirely, which is what keeps dye_sat 0 / dye_lum 0 byte-identical.
+    // .z/.w = the mass dye's amount and hue (brief AG/AM); its saturation rides
+    // p31.w. Amount 0 = the shader skips the wax branch entirely, which is what
+    // keeps dye_sat 0 / dye_lum 0 byte-identical.
     float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
-                     3.0f / 1440.0f, dyeAmt, 0.0f };
+                     3.0f / 1440.0f, dyeAmt, dyeHueN };
     memcpy(p.p29, p29, 16);
     // ---- brief AE: the second (and third) dye hue ------------------------
     // ---- the contrast hue WOBBLES (brief AE-b) ---------------------------
@@ -5007,10 +5010,14 @@ void FluidRenderer::UploadAcidConstants() {
                      hue2Eff,
                      fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f),
                      a.filmHue3 };
-    // .yzw = the mass dye's unit-value colour (brief AG/AM), scaled in the
-    // shader by p29.z and by the wax's own thickness.
+    // .y/.z: brief AJ, the boundary-reflection reach (screen heights) and how
+    // much of the seam's hue a rim takes. 0 reach = today, and the shader
+    // skips the whole probe.
+    // .w: the mass dye's saturation (brief AG/AM); its hue rides p29.w and its
+    // amount p29.z, and the shader builds the colour from the three.
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
-                     dyeCol[0], dyeCol[1], dyeCol[2] };
+                     fmaxf(a.boundaryReflectR, 0.0f),
+                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), dyeSat };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the

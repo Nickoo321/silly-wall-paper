@@ -574,7 +574,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP8;         // x swarmHoles y swarmDrops  z density    w swarmRimDark
     float4 laP9;         // x scaleA     y scaleB      z rMin       w rMax (cell units)
     float4 laP10;        // x swarmClump y swarmDark   z inkMode (1=water) w toeTint
-    float4 laP11;        // x lockOn     y lockSpan    z targetHue  w sweepDeg
+    float4 laP11;        // x lockOn     y lockSpan    z targetHue  w unused (sweep applied above)
     float4 laP12;        // x rimVary    y rimInkFollow z rimOrder  w grainShadowW
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
@@ -582,7 +582,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP16;        // x oilInkBlur y dyeDepthW z - w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
-    float4 laP19;        // x dropSupport y dropPunch z dropOilW   w -
+    float4 laP19;        // x dropSupport y dropPunch z dropOilW   w ringBase (kAcidMaxDrops)
     float4 laP20;        // x ringWidth  y ringLift   z edgeCurve  w diffScale(uv)
     float4 laP21;        // x halo       y haloW(uv)  z softness(uv) w bandMin
     float4 laP22;        // x penumbra   y penW(uv)   z penHueDeg  w penDark
@@ -591,14 +591,14 @@ cbuffer AcidCB : register(b1) {
     // --- perspective camera + depth of field + tilt (items N + R) ---------
     float4 laP24;        // x axisX(uv) y axisY(uv) z focusDepth  w dofMaxPx(1440p)
     float4 laP25;        // x fieldCurve y tilt     z cos(tiltAng) w sin(tiltAng)
-    float4 laP26;        // x band(uv)  y 1/cocSpan z fovK        w diffraction
+    float4 laP26;        // x band(uv)  y 1/cocSpan (hardcoded 0.12, no key) z fovK  w diffraction
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
-    float4 laP29;        // x massRim    y rimW(uv)   z dyeAmt      w -
+    float4 laP29;        // x massRim  y rimW(uv, hardcoded 3px, no key)  z dyeAmt  w dyeHue(0..1)
     // --- multicolour oil (brief AE) ---------------------------------------
     float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
-    float4 laP31;        // x crustHueMix  yzw mass dye colour (unit value)
+    float4 laP31;        // x crustHueMix  y boundaryReflectR  z boundaryReflectAmt  w dyeSat
     // The 20x12 mix field, four cells per float4. Small on purpose: the
     // patches the reference shows are a quarter to a half of the frame, so
     // this carries them with room to spare and costs one cbuffer fetch and a
@@ -680,6 +680,26 @@ float3 AcidHueShift(float3 c, float deg) {
     float3 hsv = AcidRgb2Hsv(c);
     hsv.x = frac(hsv.x + deg * 0.0027777778);
     return AcidHsv2Rgb(hsv);
+}
+
+// ---- the 20x12 hue2 MIX FIELD, one bilinear fetch (brief AE / AJ) --------
+// Factored out of the display pass so the boundary-reflection reach (AJ) can
+// probe the field a few times without repeating the index arithmetic. No
+// texture and no descriptor: laMix is 240 floats already resident in the
+// cbuffer, so a "tap" here is four indexed loads and three lerps.
+// mt is smoothstepped, so the 20x12 cells never show as a quad grid.
+float AcidMixAt(float2 uv) {
+    const float MW = 20.0, MH = 12.0;
+    float2 mf = float2(uv.x * MW - 0.5, uv.y * MH - 0.5);
+    float2 mi = floor(mf), mt = mf - mi;
+    mt = mt * mt * (3.0 - 2.0 * mt);
+    int x0 = (int)clamp(mi.x, 0.0, MW - 1.0), x1 = (int)clamp(mi.x + 1.0, 0.0, MW - 1.0);
+    int y0 = (int)clamp(mi.y, 0.0, MH - 1.0), y1 = (int)clamp(mi.y + 1.0, 0.0, MH - 1.0);
+    int i00 = y0 * 20 + x0, i10 = y0 * 20 + x1;
+    int i01 = y1 * 20 + x0, i11 = y1 * 20 + x1;
+    float m00 = laMix[i00 >> 2][i00 & 3], m10 = laMix[i10 >> 2][i10 & 3];
+    float m01 = laMix[i01 >> 2][i01 & 3], m11 = laMix[i11 >> 2][i11 & 3];
+    return lerp(lerp(m00, m10, mt.x), lerp(m01, m11, mt.x), mt.y);
 }
 
 // ---- DIFFRACTION (item W) ------------------------------------------------
@@ -1672,22 +1692,12 @@ R"hlsl(
     // a patch is exactly as vivid as the palette it came from -- the W3C
     // matrix would have landed the cyan on a pastel.
     float3 oilC = oilBase;
+    // brief AJ: how far, in degrees, a droplet's RIM is rotated past the film
+    // it stands in, so that a rim can carry a seam that is not under it. 0 =
+    // today, and with boundary_reflect_r 0 it stays 0 for every pixel.
+    float rimHueD = 0.0;
     [branch] if (laP30.x > 0.0005 || laP30.z > 0.0005) {
-        // bilinear fetch of the 20x12 field
-        const float MW = 20.0, MH = 12.0;
-        float2 mf = float2(uv.x * MW - 0.5, uv.y * MH - 0.5);
-        float2 mi = floor(mf), mt = mf - mi;
-        mt = mt * mt * (3.0 - 2.0 * mt);          // smooth, so cells never show
-        float m00, m10, m01, m11;
-        {
-            int x0 = (int)clamp(mi.x, 0.0, MW - 1.0), x1 = (int)clamp(mi.x + 1.0, 0.0, MW - 1.0);
-            int y0 = (int)clamp(mi.y, 0.0, MH - 1.0), y1 = (int)clamp(mi.y + 1.0, 0.0, MH - 1.0);
-            int i00 = y0 * 20 + x0, i10 = y0 * 20 + x1;
-            int i01 = y1 * 20 + x0, i11 = y1 * 20 + x1;
-            m00 = laMix[i00 >> 2][i00 & 3];  m10 = laMix[i10 >> 2][i10 & 3];
-            m01 = laMix[i01 >> 2][i01 & 3];  m11 = laMix[i11 >> 2][i11 & 3];
-        }
-        float mixV = lerp(lerp(m00, m10, mt.x), lerp(m01, m11, mt.x), mt.y);
+        float mixV = AcidMixAt(uv);
         // A soft threshold, not the raw field: the reference's patches have
         // an edge to them, and a linear ramp over the whole field is a tint.
         // The band is deliberately narrow and sits ABOVE the field's own
@@ -1703,7 +1713,9 @@ R"hlsl(
         // quarter of the frame and the picture stopped reading as two dyes
         // meeting. 0.56..0.68 keeps the rainbow as a thin rim, which is what
         // the reference actually shows at a patch edge.
+        const float MIXSEAM = 0.62;   // the band's centre: THE seam (brief AJ)
         float k2 = smoothstep(0.56, 0.68, mixV) * saturate(laP30.x);
+        float k3 = 0.0;
         // The droplets INSIDE a mass take their own share of it (the ref's
         // cyan-lit specks in the black). 1 = the same as the film.
         if (fieldB < thresh) k2 *= saturate(laP31.x);
@@ -1718,9 +1730,81 @@ R"hlsl(
         // ...and an optional THIRD hue off the other end of the SAME field,
         // so a second colour costs no second field and no second fetch.
         [branch] if (laP30.z > 0.0005) {
-            float k3 = (1.0 - smoothstep(0.18, 0.46, mixV)) * saturate(laP30.z);
+            k3 = (1.0 - smoothstep(0.18, 0.46, mixV)) * saturate(laP30.z);
             if (fieldB < thresh) k3 *= saturate(laP31.x);
             oilC = AcidHueShift(oilC, laP30.w * k3);
+        }
+        // ---- BOUNDARY REFLECTION REACH (boundary_reflect_r, brief AJ) ----
+        // The user, on the hue2 seam live: "whatever algo is mixing the oil
+        // boundary is insanely good", "and the way the bubbles reflect it,
+        // accurately", "chef's kiss" -- then: "turn up the radius of effect
+        // maybe, so further particles also reflect it on the boundary."
+        //
+        // Today every rim term (mass_rim, the droplet lens's meniscus and
+        // specular, the bright-field halo, oil_glow, the swarm's caustics) is
+        // tinted with oilC -- the film colour AT THAT PIXEL. So a droplet
+        // carries the seam's colour only while it is standing IN the seam,
+        // i.e. inside the 0.56..0.68 band of the mix field, which at
+        // film_hue2_scale 0.35 is about one droplet across. That band's width
+        // IS today's reach, and there is no radius to turn up: the term that
+        // gives a rim the neighbouring film's colour is simply k2 at the
+        // pixel, bounded by the width of the field's own transition.
+        //
+        // So give the RIMS a second, much longer reach: find how far away the
+        // nearest seam is and rotate the rim's hue toward the seam's own hue
+        // with a smooth falloff over that distance. The film is untouched,
+        // nothing is blurred and no texture is sampled -- the probe walks the
+        // 20x12 field, which is 240 floats already resident in the cbuffer, so
+        // a "tap" is four indexed loads next to the dozens of TEXTURE taps the
+        // depth of field alone already spends. Eight of them, no long tap
+        // chains and no extra blur, so the rims stay exactly as sharp.
+        //
+        // Four of the taps are a central difference at a QUARTER of the reach
+        // -- the field's large-scale slope, which points at the nearest seam.
+        // (Not the analytic derivative of the bilinear: its x term vanishes on
+        // every vertical cell line, which would print the 20x12 grid.) The
+        // other four MARCH that direction in equal steps and take the first
+        // segment whose ends straddle the seam. Marching, rather than testing
+        // only the far end of one long ray, is what makes the reach monotonic:
+        // a single ray that runs past a patch and out the other side comes
+        // back with the SAME sign and reports no seam at all, so raising the
+        // radius was losing droplets that a shorter radius had found.
+        [branch] if (laP31.y > 0.0005) {
+            float  R  = max(laP31.y, 1e-4);
+            float  s0 = mixV - MIXSEAM;
+            float  e  = R * 0.25;
+            float2 ex = float2(e / aspect, 0.0), ey = float2(0.0, e);
+            float2 g  = float2(AcidMixAt(uv + ex) - AcidMixAt(uv - ex),
+                               AcidMixAt(uv + ey) - AcidMixAt(uv - ey));
+            // toward the seam: down the slope from above it, up from below
+            float2 dir = (g / max(length(g), 1e-6)) * -sign(s0);
+            float dN = 1.0, sp = s0;
+            [unroll] for (int mi = 1; mi <= 4; mi++) {
+                float t  = (float)mi * 0.25;
+                float2 o = dir * (R * t);
+                float  sn = AcidMixAt(uv + float2(o.x / aspect, o.y)) - MIXSEAM;
+                if (dN >= 1.0 && sp * sn < 0.0)
+                    dN = t - 0.25 * (1.0 - saturate(-sp / (sn - sp)));
+                sp = sn;
+            }
+            // near = full, far = 0, smootherstep so the nearest stay strongest
+            // and the reach dies out with no edge of its own.
+            float w = saturate(laP31.z) * (1.0 - smoothstep(0.0, 1.0, dN));
+            // The seam's own colour is the band's MIDPOINT -- half the
+            // rotation, which off a blue film at film_hue2 180 is the magenta
+            // the user photographed. Rotating by the DELTA (k at the seam
+            // minus k here) means a rim already standing in the seam changes
+            // by nothing, so the near droplets the user already loves keep
+            // exactly the colour they have.
+            float k2s = 0.5 * saturate(laP30.x);
+            if (fieldB < thresh) k2s *= saturate(laP31.x);
+            rimHueD = laP30.y * (k2s - k2);
+            [branch] if (laP30.z > 0.0005) {
+                float k3s = (1.0 - smoothstep(0.18, 0.46, MIXSEAM)) * saturate(laP30.z);
+                if (fieldB < thresh) k3s *= saturate(laP31.x);
+                rimHueD += laP30.w * (k3s - k3);
+            }
+            rimHueD *= w;
         }
     }
     // rise_bottom_light: a lava lamp is lit and heated from BELOW, so the wax
@@ -1732,23 +1816,26 @@ R"hlsl(
         lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(laP17.x));
         oilC *= lampG;
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- DYE THE DARK MASSES (brief AG / AM) -----------------------------
     // TRACE (2026-09-22, branch dye4) -- where a dark-mass pixel gets its
     // final colour in ink_mode=water, end to end:
-    //   1. src\shaders.h, acid display literal, ~line 1990:
+    //   1. src\shaders.h, acid display literal, ~line 2091:
     //      `float3 col = lerp(inkC, oilC, alpha);`  -- inside a mass the oil
     //      field is BELOW the threshold, so alpha -> 0 and the pixel IS inkC.
-    //   2. same file, ~line 1595:  `if (laP10.z > 0.5) inkC = InkWater(C0,..)`
-    //      laP10.z = (ink_mode == water) (src\fluid.cpp p10[2], ~line 4859).
+    //   2. same file, ~line 1616:  `if (laP10.z > 0.5) inkC = InkWater(C0,..)`
+    //      laP10.z = (ink_mode == water) (src\fluid.cpp p10[2], ~line 4861).
     //      acid-rise-12 sets ink_mode=water, so the whole `else` bands branch
     //      under it is dead code for this preset.
-    //   3. InkWater (~line 900) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
+    //   3. InkWater (~line 917) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
     //      mass the sim dye density is ~0, so op ~= 0 and the pixel is
     //      ikPaper.rgb = [ink] paper_color = 0 0 0. THAT is the black.
     //   4. laInk[] (= effInk, the ramp the first two attempts dyed on the CPU)
     //      is read in exactly TWO places in this whole shader: the bands
-    //      branch at ~line 1612 (dead here) and the toe_tint lift at ~line
-    //      2319, gated on laP10.w = toe_tint, which acid-rise-12 leaves at its
+    //      branch at ~line 1632 (dead here) and the toe_tint lift at ~line
+    //      2421, gated on laP10.w = toe_tint, which acid-rise-12 leaves at its
     //      0 default. So dyeing effInk could not change one bit of this preset
     //      -- which is what the byte-identical four-hue sheet was measuring,
     //      and why both earlier fixes read delta 0.
@@ -1762,11 +1849,14 @@ R"hlsl(
     // further down and still read against it.
     // laP29.z = 0 (dye_sat 0 or dye_lum 0) skips the branch: byte-identical.
     [branch] if (laP29.z > 0.0005) {
+        // value 1: the amount and the thickness carry the level, so the hue is
+        // as vivid deep in the mass as it is at the rim.
+        float3 dyeC = InkHsv2Rgb(float3(laP29.w, laP31.w, 1.0));
         float dIn  = max(-sdf, 0.0);                 // p-units into the mass
         float Tw   = exp(-dIn / 0.055);              // light left after the wax
         float inkL = max(inkC.r, max(inkC.g, inkC.b));
         float wD   = (1.0 - cov) * (1.0 - smoothstep(0.0, 0.55, inkL));
-        inkC += laP31.yzw * (laP29.z * lerp(0.42, 1.0, Tw) * lampG * wD);
+        inkC += dyeC * (laP29.z * lerp(0.42, 1.0, Tw) * lampG * wD);
     }
     oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(laP6.z * 0.010,
                                                               -laP6.z * 0.007)),
@@ -1968,6 +2058,20 @@ R"hlsl(
     // edge has already taken over most of its job.
     float rimK = saturate(laP1.z) * haloInk * (1.0 - 0.65 * saturate(laP13.x));
     oilC *= 1.0 - rimK * rimB;
+    // ---- the colour a RIM reflects (boundary_reflect_r, brief AJ) --------
+    // Everything below that paints a droplet's boundary -- the bright-field
+    // halo, mass_rim, the droplet lens's dome / meniscus / specular, oil_glow
+    // and the swarm's caustics -- tints with oilR instead of oilC, and with
+    // oilThinR instead of oilThinC. With boundary_reflect_r 0 rimHueD is 0 and
+    // these are the same values, so every existing preset is byte-identical.
+    // The film itself (the `col = lerp(inkC, oilC, alpha)` below) always keeps
+    // its own colour: only the boundaries reach out.
+    float3 oilR     = oilC;
+    float3 oilThinR = oilThinC;
+    [branch] if (abs(rimHueD) > 1e-4) {
+        oilR     = AcidHueShift(oilC,     rimHueD);
+        oilThinR = AcidHueShift(oilThinC, rimHueD);
+    }
 
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -2029,7 +2133,7 @@ R"hlsl(
         float br = exp(-u * u);                     // the glow, hugging the edge
         float ec = exp(-(u - 2.6) * (u - 2.6));     // the faint echo beyond it
         float k  = saturate(laP21.x) * smoothstep(0.5, 1.5, gl) * isoOk;
-        float3 bright = (sgnB > 0.0) ? oilC : inkC;
+        float3 bright = (sgnB > 0.0) ? oilR : inkC;
         col += lerp(bright, float3(1.0, 1.0, 1.0), 0.35) * (k * br * 0.60);
         col *= 1.0 - k * ec * 0.35;
     }
@@ -2052,8 +2156,8 @@ R"hlsl(
         lit = lit * lit;
         // Peak channel, never luminance: the film is a saturated magenta
         // whose luminance is a third of its red.
-        float  src = max(oilC.r, max(oilC.g, oilC.b));
-        float3 tint = lerp(oilC / max(src, 1e-4), float3(1.0, 1.0, 1.0), 0.45);
+        float  src = max(oilR.r, max(oilR.g, oilR.b));
+        float3 tint = lerp(oilR / max(src, 1e-4), float3(1.0, 1.0, 1.0), 0.45);
         col += tint * (saturate(laP29.x) * band * lit * 0.28
                        * smoothstep(0.5, 1.5, gl) * isoOk * src);
     }
@@ -2100,7 +2204,7 @@ R"hlsl(
             // a hole is a lens too: its middle passes more of the film's own
             // light than its shoulder does, so it lifts toward the film
             // colour. An oil droplet lifts toward the backlight instead.
-            float3 tgt = (sIn > 0.0) ? lerp(col, float3(1.0, 1.0, 1.0), 0.55) : oilC;
+            float3 tgt = (sIn > 0.0) ? lerp(col, float3(1.0, 1.0, 1.0), 0.55) : oilR;
             col = lerp(col, tgt, k0 * saturate(laP27.y) * dome * lg * 0.55);
         }
         float bw = max(laP27.z, bmin * 1.5 * PX1440);
@@ -2116,7 +2220,7 @@ R"hlsl(
         // crisp rim a mass does instead of a sub-pixel smear.
         float xm  = (sdf + bw * 0.55) / (bw * 0.85);
         float men = exp(-xm * xm);
-        col += lerp(oilC, float3(1.0, 1.0, 1.0), 0.45) * (k0 * 0.30 * men * lg);
+        col += lerp(oilR, float3(1.0, 1.0, 1.0), 0.45) * (k0 * 0.30 * men * lg);
         // (d) the specular. nOut is the outward direction of whichever body
         // this pixel is inside, so one expression lights a droplet and a hole
         // alike, and both turn to face the lamp when the rig moves it.
@@ -2128,7 +2232,7 @@ R"hlsl(
             float  f2 = f * f; f2 = f2 * f2;              // ^4: a small hotspot
             float  w  = (u - 0.58) / 0.30;
             float  sp = f2 * exp(-w * w);
-            col += lerp(oilC, float3(1.0, 1.0, 1.0), 0.80)
+            col += lerp(oilR, float3(1.0, 1.0, 1.0), 0.80)
                  * (k0 * saturate(laP27.w) * sp * lg * 0.50);
         }
     }
@@ -2137,7 +2241,7 @@ R"hlsl(
     if (laP14.z > 0.0005) {
         float dOut = max(-sdf, 0.0) / max(edgeW * 1.3, 1e-5);
         float go   = exp(-dOut * dOut) * (1.0 - alpha) * smoothstep(0.5, 1.5, gl);
-        col += oilThinC * (go * 0.45 * saturate(laP14.z));
+        col += oilThinR * (go * 0.45 * saturate(laP14.z));
     }
 
 )hlsl"
@@ -2188,7 +2292,7 @@ R"hlsl(
             float  mask = smoothstep(0.004, 0.030, sdf) * laP8.x;   // inside the oil only
             if (lensK > 0.0005) {   // thin-oil fringe just OUTSIDE the droplet
                 float fx = max(sd, 0.0) / max(sw * 1.8, 1e-5);
-                col = lerp(col, oilThinC,
+                col = lerp(col, oilThinR,
                            exp(-fx * fx) * (1.0 - scov) * mask * lensK * 0.75);
             }
             // a trapped water droplet shows the INK through the oil film
@@ -2198,7 +2302,7 @@ R"hlsl(
                 float2 vc = sn * (sd + sr);
                 float  hd = length(vc - float2(-0.707, -0.707) * (0.42 * sr))
                           / max(sr * 0.30, 1e-5);
-                col += oilC * (exp(-hd * hd) * scov * mask * lensK * 0.30);
+                col += oilR * (exp(-hd * hd) * scov * mask * lensK * 0.30);
             }
         }
         if (laP8.y > 0.002) {

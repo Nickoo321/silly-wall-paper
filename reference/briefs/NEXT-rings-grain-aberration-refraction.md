@@ -513,7 +513,20 @@ film_hue2_wobble_period (s): hue2 = film_hue2 + wobble * slow two-sine oscillati
 readjust. acid-rise-12: film_hue2 180, wobble 10, period 300, hue_rotate_period slow (10-20 min).
 Executor B on branch hue2b.
 
-AJ. **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
+AJ. **LANDED 2026-09-22 (branch refl).** `boundary_reflect_r` (reach as a fraction of screen
+HEIGHT, 0 = today) + `boundary_reflect_amt`; acid-rise-12 ships 0.33. The term that gave a rim the
+neighbouring film's colour was just `oilC` -- the film colour at the rim's own pixel -- so a
+droplet carried the seam only while it stood inside the mix field's 0.56..0.68 transition band,
+about one droplet across. Now the rim terms (mass_rim, the droplet lens's dome / meniscus /
+specular, the bright-field halo, oil_glow, the swarm caustics) tint with `oilR`, the same colour
+rotated toward the SEAM's own hue (the band's midpoint) by a smooth falloff over the reach. The
+film, and every blur, are untouched. Probe = 8 cbuffer taps of the 20x12 field: 4 central
+differences for the direction, 4 marching it. Sheet `build2\shots\live\refl-sheet.png`; the
+effect is subtle in an SDR still because the rim terms are HDR highlights and the meniscus (0.85,
+ink-derived) dominates the ring -- judge on the panel. If it wants to be stronger, the next lever
+is letting the `oil_thin_edge` band take the seam hue too. Original request below.
+
+AJ (original). **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
 "whatever algo is mixing the oil boundary is insanely good", "and the way the bubbles reflect it,
 accurately", "chef's kiss". Request: "turn up the radius of effect maybe, so further particles
 also reflect it on the boundary." So: the droplets near a hue2 patch edge pick up the seam / the
@@ -631,23 +644,23 @@ ink_mode = water, whose dark-mass shading is a different path from the banded in
 be applied where THAT path makes the mass colour. Read the water path end to end first, then render.
 AG DONE 2026-09-22 (branch dye4, merged): the dye hue now reaches the frame. The bug was never in
 the ink ramp -- the ramp is not READ in the live preset. Trace, end to end, for a dark-mass pixel:
-  * src\shaders.h, acid display literal, `float3 col = lerp(inkC, oilC, alpha);` (~line 1989):
+  * src\shaders.h, acid display literal, `float3 col = lerp(inkC, oilC, alpha);` (~line 2091):
     inside a mass the oil field is below the threshold, alpha -> 0, so the pixel IS inkC.
-  * src\shaders.h, `if (laP10.z > 0.5) inkC = InkWater(C0, ...)` (~line 1595). laP10.z is
-    (ink_mode == water), set in src\fluid.cpp p10[2] (~line 4859); acid-rise-12 has ink_mode=water,
+  * src\shaders.h, `if (laP10.z > 0.5) inkC = InkWater(C0, ...)` (~line 1616). laP10.z is
+    (ink_mode == water), set in src\fluid.cpp p10[2] (~line 4861); acid-rise-12 has ink_mode=water,
     so the entire `else` bands branch under it is dead code for this preset.
-  * src\shaders.h, InkWater() (~line 897) ends in `lerp(ikPaper.rgb, tint * .., op)`. In a mass the
+  * src\shaders.h, InkWater() (~line 917) ends in `lerp(ikPaper.rgb, tint * .., op)`. In a mass the
     sim dye density is ~0, so op ~= 0 and the pixel is ikPaper.rgb = [ink] paper_color = 0 0 0.
     THAT is the black the user sees.
   * laInk[] (= effInk, what dye3 and its predecessor patched on the CPU) is read in exactly TWO
-    places in the whole shader: the bands branch (~line 1612, dead here) and the toe_tint lift
-    (~line 2319, laP10.w), and acid-rise-12 leaves toe_tint at its 0 default. So no edit to the
+    places in the whole shader: the bands branch (~line 1632, dead here) and the toe_tint lift
+    (~line 2421, laP10.w), and acid-rise-12 leaves toe_tint at its 0 default. So no edit to the
     ramp, in any order, could change one bit of this preset -- which is what the byte-identical
     four-hue sheet was actually measuring.
 Fix: the dye is applied in the display pass on inkC, right after the lamp ramp, as a translucent
 wax -- thickness = depth into the mass (-sdf), transmitted light = exp(-depth/0.055) with a 0.42
 floor, gated by (1 - cov) so the film is untouched and rolled off where the ink film is bright.
-Constants ride laP29.z (amount) and laP31.yzw (unit colour); no new root params, no new keys.
+Constants ride laP29.z/.w (amount, hue) and laP31.w (saturation); no new root params, no new keys.
 Proof: acid-rise-12, seed 1234, t=60 s, dye_sat 0.8 dye_lum 0.30 dye_hue_follow 0, dye_hue 285 vs 0
 -> max|delta| 143/255, 43% of pixels differ by more than 2 (it was 0 on dye3). dye_sat 0 renders
 byte-identical to the pre-change build (md5 CA1B5B2977964C112CEAD7D414815643 both), parity md5
@@ -657,3 +670,56 @@ re-ranged 0..0.50 step 0.02 from that sheet (under ~0.10 still black, past ~0.45
 reading as dark). Open follow-up: with dye_hue_follow 0 the wax stays purple while the 8-pair sweep
 turns the film, so when the sweep reaches its own violet pair (sweep_oil_3) the two sit close --
 wants its own A/B against dye_hue_follow 1.
+
+BB. **Lamp falloff stronger, with its own hue shift.** User (2026-09-22): "the lamp fall off should
+be stronger, and the hue shift should be stronger" (not the penumbra, which is the lit-less oil
+beside a mass). Today rise_bottom_light is one key (bright near the bottom, cools toward the top,
+shift baked in). Add rise_bottom_hue (degrees of hue shift from lamp side to far side, default =
+today's baked amount so presets stay identical) and rise_bottom_temp (warm toward the lamp / cool
+away, signed), useful ranges from a sheet; A/B live since it is a whole-field gradient. First step
+done as an ini change: rise_bottom_light 0.5 -> 0.8 for a live A/B. Banding note: a stronger
+field gradient also shortens the flat runs that band on the panel.
+
+BC. **The light should cast shadows (volumetric lighting or an implementation of it).** User
+(2026-09-22): "idk if this is a feature, volumetric lighting, or some implementation of it. The
+light should cast shadows essentially... it can be from behind, or the bottom, or the top or side."
+Today the lamp (light_x / light_y, off-frame below by default, with idle drift and the rig
+readjust) drives specular, mass_rim, penumbra, haze and bloom, but nothing casts a shadow. Spec to
+scope: every mass and droplet casts a soft shadow onto the film AWAY from the lamp (direction from
+the lamp position, length and softness from a per-droplet height / the mass thickness, darker and
+tighter near the caster, fading with distance), and a backlit mode where the light is behind the
+dish so masses glow at the edges and shadow the film toward the camera instead. Keys: shadow_amt,
+shadow_len (fraction of screen height), shadow_soft, light_z (behind / in front), all default 0 =
+today. Optional later: light shafts through the dish (volumetric) when the lamp is behind. Judge
+live; stills can show the shadow shape.
+
+BD. **Get rid of the high-ISO noise.** User photo of the panel (reference/shots/photos/high-iso-noise-in-mass-phone.jpg):
+inside a dark mass the picture shows per-pixel speckle on a lifted grey-brown, "it doesn't read like
+film, it looks more like high ISO artifacting". Reading: coloured (per-channel) noise on a black that
+is not black. Directions: grain luminance-only; grain weighted by a mid-tone density curve (near
+zero in dense shadow and clean highlight); the lid sheen's black lift (0.04) and any other lift
+fading to zero inside masses so the grain has nothing to sit on; then re-dial amount live with the
+user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
+rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
+discussion.
+
+BE. **Named cbuffer fields (executor C's review, user: do it).** ~30 packed float4 params reached
+as laP13.x / laP27.z / laP31.y with a comment table 1000 lines away and no check that the shader
+and UploadAcidConstants agree (the AG dye failure was this). Fix: a #define (or struct) per slot
+next to the table, every use in the acid literals replaced, zero runtime cost; byte-identity of
+every preset before/after (tools/preset-identity.ps1, BF). Touches every constant use, so it
+runs ALONE after the in-flight branches (dye4, shadow, noise) have merged.
+
+BF. **Acid preset byte-identity script** = tools/preset-identity.ps1 (Sonnet, in progress):
+renders the preset list with a given exe, saves/compares md5s; required before every merge.
+
+BG. **10-bit HDR shots.** User: "can you render in 10 bit at all? It's low-key important." Both
+--shot PNGs are 8-bit (SDR-mapped and tone-mapped). Executor F adds <stem>.jxr (JPEG XR, half-float
+scRGB via WIC, the Game Bar HDR screenshot format, opens in Windows Photos in true HDR on the OLED)
+and if cheap <stem>-pq.png (16-bit PQ). Then lid on/off pairs (AF/AW) get judged from JXRs on the
+panel, opened only when the user asks.
+
+Design note from executor C (keep in mind for AF/AW lid and AJ): six terms already paint a ring on
+the droplet boundary (mass_rim, droplet_lens b and c, meniscus 0.85, bright-field halo, oil_glow,
+oil_thin_edge) with independent amplitudes; film-derived terms are a minority of the ring. "Weak
+lid" is partly a symptom of that competition, not a missing feature.

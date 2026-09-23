@@ -36,6 +36,16 @@ $root = Split-Path -Parent $PSScriptRoot
 $FluidIni = Join-Path $root 'reference\configs\we-look-live.ini'
 $FluidParityMd5 = '10E36EBF1A74EDFE609065D757300054'
 
+# -Presets was passed explicitly but resolved to zero files (e.g. a glob that matched
+# nothing) -- that used to fall through to the hardcoded default list below, silently
+# testing the WRONG presets instead of telling the caller their list was empty. Only
+# the "supplied but empty" case is an error; omitting -Presets entirely still means
+# "use the default list" (checked via $PSBoundParameters, not just .Count).
+if ($PSBoundParameters.ContainsKey('Presets') -and $Presets.Count -eq 0) {
+    Write-Error "preset-identity.ps1: -Presets was supplied but resolved to zero files. Pass at least one preset path, or omit -Presets entirely to use the default list."
+    exit 1
+}
+
 if ($Presets.Count -eq 0) {
     $Presets = @(
         'reference\configs\acid-rise-12.ini',

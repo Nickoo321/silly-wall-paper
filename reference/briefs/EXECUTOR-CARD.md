@@ -91,6 +91,15 @@ a stale comment table, or a literal piece over 16000 bytes; it also prints the f
 the three largest literals. New key: add a row, `slot(...)` it, read it, then
 `tools\slot-check.ps1 -Fix` regenerates the cbuffer comment table in `shaders.h`.
 
+## 3.6. Per-key inert test / shader bytecode diff
+
+`tools\key-effect.ps1 -Exe <exe> -Ini <preset.ini> [-Keys a,b,c] [-Sections liquid_acid,post]
+[-Size 1280x720] [-Delay 10] [-Out <dir>]` (brief BJ) renders a preset's baseline, then per key
+whose live value differs from its fluid.h/settings.cpp default, renders it back at default and
+reports md5 (INERT) + whole-frame MAD; holds the GPU lock once for the whole run.
+`python tools\dxbc-cmp.py <old_shaders.h> <new_shaders.h> <acid_slots.h>` compiles both copies'
+kDisplaySrc with d3dcompiler_47.dll (no build) and prints IDENTICAL/DIFFERS per PSO/stage — no GPU.
+
 ## 4. Current state
 
 Live = `acid-rise-12` on main @ `fd81f49`. Looks = tray presets (`style=fluid|liquid_acid|ink`).

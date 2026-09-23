@@ -14,7 +14,10 @@ preset actually running right now — the one this document's "Live" column is r
 
 This file is generated from the slider/checkbox tables in `src/settings.cpp`, cross-checked
 against every `getF`/`getI`/`getB` read in `src/main.cpp` and the field initialisers in
-`src/fluid.h` (and `src/moods.h` for mood settings), on **2026-09-22** at `main` `afdeed1`.
+`src/fluid.h` (and `src/moods.h` for mood settings), on **2026-09-22** at `main` `afdeed1`,
+updated **2026-09-23** at `main` `9999eba` to fold in the day's remaining landings (AJ boundary
+reflect, BC shadows, AG/AM dye, BD noise/aberration, meniscus_film_mix) and the two 2026-09-22
+audits' inert-key findings.
 A blank Live cell means the key is absent from `acid-rise-12.ini` (the code falls back to its
 fluid.h default). Rows marked *(no slider)* have no control in the settings window at all —
 they were found only by grepping `main.cpp`'s ini reads, and can only be set by hand-editing
@@ -273,6 +276,7 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] oil_iridescence` | Oil iridescence | 0..1, step 0.02 | 0.0 | 0.20 | Thin-film hue shimmer indexed by film thickness, strongest at the thin edges |
 | `[liquid_acid] swarm_lens` | Droplets as lenses | 0..1, step 0.02 | 0.0 | 0.80 | Trapped droplets become soft-edged holes in the film with a thin-oil fringe and a small highlight, not flat black discs |
 | `[liquid_acid] meniscus_from_ink` | Emergent halo (from the ink) | 0..1, step 0.02 | 0.0 | 1.0 | The halo takes the colour and the brightness of the ink just outside the edge, and disappears (with the dark hairline) over dark ink |
+| `[liquid_acid] meniscus_film_mix` |   halo colour from the film | 0..1, step 0.05 | 0.0 | 0 | The bright halo is the widest, strongest thing painted on a droplet's boundary, and its colour comes from the INK -- so no film-hue feature (a second hue, a seam reflect, the sweep) ever reaches it. Raised, the halo takes its colour from the FILM at that droplet instead, the same colour its lit rim already uses, so a hue2 seam colours the halos around it too, and the ink-brightness gate that hides the halo over black ink opens by the same amount. 0 = as shipped: `acid-rise-12` leaves this ink outside the oil black everywhere, so the gate is 0 and `meniscus`/`rim_dark` paint nothing regardless of this key (see the inert-keys section) |
 | `[liquid_acid] oil_glow` | Oil glow outside | 0..1, step 0.02 | 0.0 | 0.45 | Diffuse spill of the oil's own colour into the ink around it |
 | `[liquid_acid] refraction_width` | Refraction band width | 0..40.0, step 1.0 | 0.0 | 22 | Rim-width multiplier for the band where the ink is seen bending under the oil (0 = the shipped 7) |
 | `[liquid_acid] oil_transparency` | Transparent film | 0..1, step 0.02 | 0.0 | 0.5 | The oil stops being a fill and becomes a coloured film: the ink's marbling reads through it, tinted by the oil's own hue |
@@ -280,6 +284,8 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] oil_film_bump` | Film thickness variation | 0..1, step 0.02 | 0.35 | 0.35 | Slow noise on the film's thickness, so it has islands of thick and thin instead of one even pane |
 | `[liquid_acid] oil_refract_body` | Refraction across the body | 0..0.04, step 0.002 | 0.0 | 0.006 | Displaces what is seen through the whole film, not only its edge, so the marbling wobbles as it passes under |
 | `[liquid_acid] oil_ink_blur` | Ink out of focus under the oil | 0..1, step 0.02 | 0.0 | 0.5 | Softens the ink seen through the film, strongest where the film is thickest |
+| `[liquid_acid] boundary_reflect_r` |   seam reflect reach | 0..0.60, step 0.01 | 0.0 | 0.33 | How far a hue2 SEAM reaches into the droplets around it, as a fraction of the screen HEIGHT. 0 = as before: a droplet carries the seam's colour only while it is standing in the seam, about one droplet across. Raised, the lit rims, lens highlights and glow of droplets this far away rotate toward the seam's own hue, fading smoothly so the nearest stay strongest. The film itself never changes and nothing is blurred |
+| `[liquid_acid] boundary_reflect_amt` |   seam reflect amount | 0..1, step 0.05 | 1.0 | 1.0 | How much of the seam's own hue a rim right beside it takes. 1 = the full seam colour. Only does anything where the reach above is above 0 |
 | `[liquid_acid] mass_rim` |   mass rim (lamp side) | 0..1, step 0.05 | 0.0 | 0.35 | A thin bright refracted rim on the lamp side of a mass edge, so a mass reads as a translucent body instead of a flat black cut-out |
 | `[liquid_acid] shadow_amt` | Cast shadows | 0..1, step 0.02 | 0.0 | 0.40 | The lamp finally blocks: every mass and every droplet darkens the film on the side away from it. 0 = the flat, shadowless frame this look had until now |
 | `[liquid_acid] shadow_len` |   shadow length (frac of height) | 0..0.30, step 0.01 | 0.12 | 0.12 | How far the longest shadow reaches, as a fraction of the screen height. A caster throws less than this in proportion to its own height, and Lamp z stretches it further |
@@ -505,16 +511,24 @@ Keys that are present, wired up and carry a live value in `acid-rise-12.ini`, bu
 
 | Key | Live | Why it's listed |
 |---|---|---|
-| `[liquid_acid] dye_hue` | 285 | Hue does not reach the frame yet: the display pass defeats it before the dark masses are coloured. Confirmed by measurement, not guessed (see `reference/briefs/` AG entries); fix in progress on branch `dye3`, not merged to main. |
+| `[liquid_acid] meniscus` | 0.85 | INERT in acid-rise-12: `haloInk = lerp(1, smoothstep(0.03,0.40,ilo), meniscus_from_ink)` reads the ink brightness just outside the oil, which is black everywhere in this preset, so the gate is 0 at every pixel and `meniscus = 0` renders byte-identical to `meniscus = 0.85`. Confirmed by measurement (audit 2026-09-22 (3), executor G's A/B); live only via `meniscus_film_mix`, shipped 0. |
+| `[liquid_acid] rim_dark` | 0.80 | INERT in acid-rise-12 for the same reason as `meniscus` above: `rimK` is gated by the same `haloInk` ink-brightness read, which is 0 everywhere on this preset's black ink surround. |
+| `[liquid_acid] swarm_lens` | 0.80 | INERT in acid-rise-12 by code, not by gate: the swarm-lens shading only runs inside the screen-space swarm blocks, which are forced to 0 (`swarm_holes`/`swarm_drops`) whenever the droplet particle sim is active — and this preset runs 950 droplets. |
 | `[post] shimmer` | 0.35 | Invisible in headless stills at the shipped value — the heat-haze wobble only reads in motion. Verdict deferred to a live on-panel tour (`--tour`, brief item AI), not yet confirmed either way. |
-| `[post] lid` | 0.45 | The cover-glass reflections are on at a value the user did not notice at the subtle preset (brief item AF: "weak lid reflections, raise ghost/rings/glint/iris"). Live, just under-strength. |
+| `[post] lid` | 0.45 | The cover-glass reflections are on at a value the user did not notice at the subtle preset (brief item AF: "weak lid reflections, raise ghost/rings/glint/iris"). Live, just under-strength; also gated indirectly by brief BD's unkeyed `massDeep` fade on the sheen/iridescence halo along mass interiors. |
 | `[sim] baroclinic` | 0.000 | Default 0 = off per its own help text, and `acid-rise-12.ini` ships it at exactly that default — the dye-front torque is not acting in the live preset. |
 | `[sim] gravity` | 0 | Default 0 = off per its own help text, and the live preset leaves it at 0 — dye is not weighted up or down in the live preset. |
 | `[color] hue_linger` | 0 | Default 0 = off ("fraction of each half-lap spent resting on one hue"), and the live preset leaves it at 0 — the base fluid look's hue never lingers on a band edge. |
 | `[liquid_acid] film_hue3_amt` | 0 | Its own help text says "0 = off, which is the default", and the live preset does not override it — the optional third hue field is defined (`film_hue3` = angle) but contributes nothing. |
 | `[post] post_blur_px` | 0 | Default 0 = off ("the whole per-pixel path is skipped"), and the live preset leaves it there — no extra whole-frame camera defocus beyond what depth of field already applies. |
 
+`[liquid_acid] dye_hue` (285 in acid-rise-12) is REMOVED from this list as of `c5e78d3`: the dye is
+now applied directly to `inkC` in the display pass (a translucent wax reading against the lamp),
+which does reach the frame — confirmed by a hue-vs-hue delta sheet (max|delta| 143/255, 43% of
+pixels differ by more than 2), not merely re-asserted. It was listed here because the two earlier
+attempts patched a part of the ink ramp that is dead code under this preset's `ink_mode = water`.
+
 ## Totals
 
-**405 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **307 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **8 inert or unverified** in the current live preset.
+**412 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **340 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **10 inert or unverified** in the current live preset.
 

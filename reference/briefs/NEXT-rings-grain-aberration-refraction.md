@@ -733,4 +733,4 @@ every readjust and every slow focus drift also breathes the frame; plus the occa
 rack (note 8 / AS: focus visibly moves at least every 10 s) breathes more. Keys: focus_breath
 (scale per unit focus change, default 0 = today) and breath_readjust (extra on the readjust
 event). Judge live: a still cannot show it. Cheap: one uv scale in the post pass before the CA
-resample. Not started.
+resample. User: "very subtle, but just an idea" (idea tier, not a request; default off; do it only when cheap).

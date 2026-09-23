@@ -988,3 +988,76 @@ long lines. Over the dark masses they should read like the acrylic photo (visibl
 lit); over the bright film barely. Judge live; a headless sheet at 3 densities x corner weight
 0 / 0.7 first. Relates to note 5 / AP (hairs frequent, small, see-through, clustered around
 corners) and AW (lid weak): AP's film hairs stay a separate stock artefact. Not started.
+
+## BN. Instrument optics: distorted corners, lamp flare, razor-sharp centre (user, 2026-09-23 18:55)
+
+User: "This needs to still look artifacty. Like the corners need to almost look oddly distorted,
+like a real microscope, like the LAPD microscopes and that reader thing; maybe some lens flare or
+something from the light across the screen; but underneath it should still look pretty clear,
+specifically in the center, like it's not out of focus." References: endgoal-ref-13-br2049-lapd-optics
+(six-up: the field edges smear and colour-fringe, a hot lamp bloom, thin bright streaks across the
+glass, the centre content stays readable) and endgoal-ref-8-br2049-denabase-tube (reader: the frame
+edges refract/blur green-blue, the centre stays legible). Ideas, not targets.
+
+Three keyed layers, all default 0 (identity holds), post pass, each with its own A/B sheet:
+1. corner_warp (0..1) + corner_warp_r (start radius 0.4..0.9) + corner_smear (0..1): radial field
+   curvature: outside the radius the image stretches tangentially and blurs along the radius, with a
+   small colour split growing toward the corner (reuse the lateral-CA machinery, rg2). Centre pixels
+   untouched by construction. Not a rim: no visible instrument edge (standing rule).
+2. lamp_flare (0..1) + lamp_flare_len + lamp_flare_hue: an anamorphic streak plus soft bloom from the
+   lamp position (rig rg0 lamp centre, [post] light_z) across the screen, low amplitude, slow drift
+   with the existing V3 motion so it never sits still on the OLED. Occluded a little by the masses.
+3. glass_streaks (0..1): one or two thin bright wavy lines across the frame like the LAPD sheet (light
+   reflecting off the glass lid), tied to the lid layer so they move with the lid tilt.
+Constraints: centre sharpness unchanged (measure a centre crop MAD = 0 at all keys), subtle at
+shipped values, gradable; ABL: keep the flare small in area. Queue after BK (roles) and BL (neon);
+same executor rules. Slots: post rig block is nearly full (rg1.xy free after BM), plan a packed float.
+BN addendum (user, 19:00, crop reference/shots/photos/bn-lapd-bloom-tile.png = the bottom-middle
+LAPD tile alone): "The one alone, it should kinda be like that. Plus some of the microscoping
+effects. Like you see here this bloom thing." What the tile has: a warm field lit from below-right
+that goes hot (yellow-white) toward the lamp side and cools to red/magenta away from it; the BLOOM is
+a broad soft glow that veils the whole field near the light, wraps the field edge and lifts the
+darks there, not a small highlight halo; a fine grid/halftone texture stays visible through it (the
+subject stays sharp); the far corner falls to black with a soft, slightly ragged field edge. So
+layer 2 (lamp_flare) is primarily this veiling bloom from the lamp side, keyed for amount, reach,
+warmth; the streak is secondary. The existing keyed post bloom (acid-rise-12 ships 0.30) is the
+starting point: A/B it first at 0.3 / 0.6 / 1.0 with a warm hue before adding code.
+BN addendum 2 (user, 19:03): "and the sort of hazy focus, again referring to the photo that's alone."
+The tile is HAZY but not out of focus: a diffusion / pro-mist look. The sharp image stays, and a wide,
+low-amplitude, brightness-weighted blur of it is ADDED on top, so highlights bleed into a soft haze,
+contrast drops a little everywhere near the light, yet the grid texture still resolves. This is not
+the DOF band (sharp/blurred crossfade) and not the veiling bloom alone: layer 4 = haze (0..1) +
+haze_radius + haze_warmth, applied full-frame with a mild bias toward the lamp side; centre stays
+sharp because the base image is never blurred, only veiled. A/B sheet 0 / 0.2 / 0.4 / 0.7.
+BN auditor pre-flight (2026-09-23 19:15), SUPERSEDES the layer specs above where they differ:
+- Test criteria: corner_warp: centre-crop MAD = 0 exactly. Veils (bloom, haze/halation): high-pass
+  the centre crop (image minus an 8 px blur), MAD <= 0.5/255, so detail is unchanged and only the
+  level may rise. Streaks: exempt, at most 2 lines, each <= 3 px wide.
+- Layer 1 corners: mostly exists. A/B FIRST camera_field_curve 0.12/0.3/0.5, aberration_field
+  1.2/2.0, vignette 0.12/0.3. New code = only the tangential stretch (corner_warp, corner_warp_r) in
+  the post pass, applied to uv before every other post tap; grain stays after it, unwarped.
+- Layer 2 bloom: the keyed bloom is the base (already follows the lamp; light_y 1.2 puts the lamp
+  below the frame like the tile). Add only bloom_warmth. ABL: at shipped values mean_lum rises
+  <= 8% and the peak does not rise (the "veils the whole field" wording is capped by this).
+- Layer 3 glass streaks: in the lid block, NOT multiplied by massDeep (or it goes inert over the
+  masses that fill most of acid-rise-12); lid = 0.45 keeps it live.
+- Layer 4 haze = halation with a lower threshold: halation is already additive, brightness-weighted,
+  leans to the lamp, warm. A/B FIRST halation 0.25/0.5 x halation_px 14/60; if not enough, ONE key
+  halation_threshold. Do not use post_glow (crossfades the base with a blur, softens it).
+- Budget: ~5 new scalars (corner_warp, corner_warp_r, bloom_warmth, glass_streaks,
+  halation_threshold) packed as four 6-bit fields each in rg1.x and rg1.y; new HLSL in new literal
+  pieces; slot-check.
+
+## BO. Black-mass artefacts must be luminance/colour dependent (user, 2026-09-23 19:35)
+
+User, on the 1440p dye frames: "the black one still has too much artificial looking artifacting on
+the black blob. The colors look more natural, so might have to be brightness / color dependent."
+Read: the grain / aberration / lid sheen / edge band that BD left on the masses reads as fake on a
+PURE BLACK mass and as natural on a dyed (coloured, brighter) mass. So the artefact amplitude inside
+a mass should follow the mass's own luminance and saturation: near-black => almost none, coloured
+=> today's amount. Spec: one key artefact_lum_gate (0..1, default 0 = today), in the post pass where
+BD's density/mass gates already live (fog_mass_gate, the in-mass fade), scaling film_grain,
+aberration and lid sheen/glint by smoothstep(0, gate_width, localLum) with a saturation lift, so
+dyed masses keep their texture. Proof block: crop pairs of a black mass and a dyed mass at
+0 / 0.5 / 1; measure noise std in the black-mass crop (target: falls to the film's level) and in
+the dyed crop (target: unchanged within 10%). Night-shift item; auditor pre-flight first.

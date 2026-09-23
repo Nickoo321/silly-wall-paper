@@ -102,13 +102,23 @@ kDisplaySrc with d3dcompiler_47.dll (no build) and prints IDENTICAL/DIFFERS per 
 
 ## 4. Current state
 
-Live = `acid-rise-12` on main @ `fd81f49`. Looks = tray presets (`style=fluid|liquid_acid|ink`).
+Live = `acid-rise-12` on main @ `1553a7f`, `dye_lum` reverted to 0 ("black masses back for now" —
+the user's call after BK's "too bubbly" feedback tonight; it ran 0.44 earlier in the day). Looks =
+tray presets (`style=fluid|liquid_acid|ink`).
 Oil look's stack, one line each: sim (racers, coalescence, big rings, conserve_mass, weather,
 residue, crust) · per-droplet depth + tilted focus surface + DOF · real lateral CA · halation ·
 fog/bloom · lid (ghosts/rings/sheen/iris/glint) · V3 motion (shimmer advected by t3, vignette
 wander, pixel-shift orbit, rig readjust) · film grain at 24 fps · hue2 field (second hue, rotation
 not blend, pair rotates, wobble, seeded off screen below the edge and rising) · dyed masses (the
 negative space is a translucent purple wax, not black — dye_hue/sat/lum in the display pass, AG).
+
+Render throttle (supersedes section 1's flat "renders never wait" framing): `--shot-yield 30`
+while the user is at the PC, `8` once idle 25 min, `2` once asleep.
+
+In flight, no code landed yet: `fw-scratch` (branch `scratch`) for BM's scratched-acrylic lid;
+`fw-bk` (branch `bk`) for BK's darkness levers (candidate keys `dye_droplets`/`dye_smoke`, so
+droplets stay dark while masses keep colour). Queued ahead of both: a dye colour-variation sheet
+(hue/sat/lum grid + `dye_hue_follow` + a dark variant), which the brief wants done first.
 
 ## 5. Open items AC-BA (`reference\briefs\NEXT-rings-grain-aberration-refraction.md`)
 
@@ -126,7 +136,19 @@ AV some colour slots should go grayscale · AW weak lid effect, add global motio
 weak heat haze · AY curve mix speed for large-distance colour merges · AZ +5% motion for big
 globs · BA small bubbles: rise-only, constant stream of 2-5, stronger (plate ~45 deg or flatter).
 
-## 6. Report format (5 lines)
+## 6. Report format (5 lines + the proof block)
 
 1. Hash + one-line summary. 2. Parity md5 (or "N/A — style=fluid untouched"). 3. Sheet path(s) in
 `build2\shots\live\`. 4. Values shipped and why (the A/B result). 5. Rote list, or "none".
+
+PROOF BLOCK (user rule, 2026-09-23 19:05: "don't just implement a feature: check that it works,
+note the difference, what setting actually adds to the effect"). For EVERY new key, before you
+report done:
+- WORKS: tools\key-effect.ps1 style evidence that the key is not inert at its test value on the
+  live preset: MAD / max-diff numbers vs the key at default. A key that reads INERT is not done.
+- DIFFERENCE: a difference image or a 2x crop pair (default vs test value) and ONE sentence in
+  plain words of what changed on screen (where, how much, what it looks like).
+- WHAT ADDS: per key, which values move the look and which do nothing (e.g. "0..0.3 nothing
+  visible, 0.3..0.7 the effect, above 0.7 only brightness"); if two keys do the same thing, say
+  so and propose dropping one. Slider range = the useful range (policy).
+No proof block, no merge.

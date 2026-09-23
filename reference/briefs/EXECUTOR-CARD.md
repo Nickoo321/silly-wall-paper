@@ -19,6 +19,12 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - Fluid parity is sacred: `reference\configs\we-look-live.ini`, 60 s, 2560x1440, seed 1234,
   `--hdr on` must give md5 `10E36EBF1A74EDFE609065D757300054` after EVERY change (parity peak
   700). New keys default to today's behaviour so existing presets stay byte-identical.
+- Acid-side equivalent of the above: `tools\preset-identity.ps1 -Exe <exe> [-Baseline <file>]
+  [-Save <file>]` renders `we-look-live.ini` (checked first, must equal the md5 above) plus the
+  `acid-rise-*` presets, prints `name md5` each; `-Save` writes a baseline, `-Baseline` prints
+  MATCH/DIFFERS per preset and exits 1 on any diff. Before merging: `tools\preset-identity.ps1
+  -Exe <your build> -Baseline <latest baseline>` must print MATCH for every preset whose keys you
+  did not intentionally change.
 - MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`. Tightest
   is `kDisplaySrc` at ~2.3 KB headroom (audit 2026-09-22): split before adding more than ~20 lines
   to it, or to `kPostSrc`/`kComputeSrc` (also close to cap).

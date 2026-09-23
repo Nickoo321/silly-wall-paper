@@ -831,3 +831,19 @@ shift with thickness inside a mass, like real dye density: thin edges warmer/lig
 and the lamp falloff (rise_bottom_light) should already darken the far side; check it does for the
 dye. Sheet: 4 masses in one frame at vary 0 / 0.3 / 0.6. Ship "medium" overall: lum around 0.36
 with spread so some read 0.28 and some 0.44. Not started (night scope = finish in-flight only).
+
+BD DONE (42ae2eb, max-effort executor): grain multiplicative (film_grain_chroma 0) + density hump
+(film_grain_density 1), [liquid_acid] grain 0 and deferred, aberration taps from a 1.5 px averaged
+source, aberration_coc key (acid-rise-12 back to 0: the uniform split draws the approved crisp
+droplet outlines; coc 1 made out-of-focus droplets soft discs), lid sheen/glint + fog gated by a
+SPATIAL deep-in-mass test (the edge band keeps its level: 1.94 -> 1.88 nits, width unchanged),
+overlay dark floor 0, gather jitter reduced. Interior speckle -87% luma / -80% chroma; edge band
+noise -90%. 25 rising presets lose the second grain stock by design. Frames + JXRs bd-*.{png,jxr},
+sheets bd-sheet-4x.png, bd-aber-4x.png, bd-range-*.png. Parity held. Rote: 4 new keys at defaults
+into the 33 acid files (Sonnet). Live re-dial of grain amount and aberration_px 1.8 vs 0.9 with
+the user (AT).
+EXECUTOR REVIEW 4 (noise): effects stack and look fine one at a time; this speckle came from
+interactions (aberration x grain x dither) no single sheet showed; "the approved crisp droplets
+were an artefact, tuning by eye keeps approving artefacts". First change: a standing ablation
+harness (every post effect on/off, noise per tone band). Second: taste knobs out of hand-packed bit
+fields; rg2.w is full, root-signature budget rethink due. => joins the convergence (slots, tooling).

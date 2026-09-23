@@ -916,3 +916,5 @@ fog_mass_gate, psf_px, oil_texture, lid_refract_px, rise_respawn, post_glow_dark
 oil_penumbra). Time/motion keys are labelled separately. => AP (hairs/dust) must first make
 film_hairs/film_dust/film_leak actually paint; the seam_* and rim_* inert keys explain why several
 past tunings "did nothing". Fold into the ring table and FEATURES.md inert list (Sonnet, next day).
+BD verdict (user, 2026-09-23 18:10, live on the panel): "noise fix is fire." Keep: multiplicative
+density-weighted grain, averaged aberration source, spatial in-mass fades, aberration_coc 0.

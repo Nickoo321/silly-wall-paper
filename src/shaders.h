@@ -595,10 +595,10 @@ cbuffer AcidCB : register(b1) {
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
-    float4 laP29;        // x massRim    y rimW(uv)   z -           w -
+    float4 laP29;        // x massRim    y rimW(uv)   z dyeAmt      w -
     // --- multicolour oil (brief AE) ---------------------------------------
     float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
-    float4 laP31;        // x crustHueMix  y -  z -  w -
+    float4 laP31;        // x crustHueMix  yzw mass dye colour (unit value)
     // The 20x12 mix field, four cells per float4. Small on purpose: the
     // patches the reference shows are a quarter to a half of the frame, so
     // this carries them with room to spare and costs one cbuffer fetch and a
@@ -1731,6 +1731,42 @@ R"hlsl(
     if (laP17.x > 0.0005) {
         lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(laP17.x));
         oilC *= lampG;
+    }
+    // ---- DYE THE DARK MASSES (brief AG / AM) -----------------------------
+    // TRACE (2026-09-22, branch dye4) -- where a dark-mass pixel gets its
+    // final colour in ink_mode=water, end to end:
+    //   1. src\shaders.h, acid display literal, ~line 1990:
+    //      `float3 col = lerp(inkC, oilC, alpha);`  -- inside a mass the oil
+    //      field is BELOW the threshold, so alpha -> 0 and the pixel IS inkC.
+    //   2. same file, ~line 1595:  `if (laP10.z > 0.5) inkC = InkWater(C0,..)`
+    //      laP10.z = (ink_mode == water) (src\fluid.cpp p10[2], ~line 4859).
+    //      acid-rise-12 sets ink_mode=water, so the whole `else` bands branch
+    //      under it is dead code for this preset.
+    //   3. InkWater (~line 900) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
+    //      mass the sim dye density is ~0, so op ~= 0 and the pixel is
+    //      ikPaper.rgb = [ink] paper_color = 0 0 0. THAT is the black.
+    //   4. laInk[] (= effInk, the ramp the first two attempts dyed on the CPU)
+    //      is read in exactly TWO places in this whole shader: the bands
+    //      branch at ~line 1612 (dead here) and the toe_tint lift at ~line
+    //      2319, gated on laP10.w = toe_tint, which acid-rise-12 leaves at its
+    //      0 default. So dyeing effInk could not change one bit of this preset
+    //      -- which is what the byte-identical four-hue sheet was measuring,
+    //      and why both earlier fixes read delta 0.
+    // So the dye is applied HERE, on inkC, as a deep translucent wax:
+    // thickness = depth into the mass (-sdf), light left = exp(-depth/w), so
+    // the thin edge passes most of the lamp and the thick core keeps a floor
+    // of the same hue instead of crushing to black. Gated by (1 - cov) so the
+    // film is untouched, by the lamp ramp so the wax is lit from below like
+    // the oil is, and rolled off where the ink film is actually BRIGHT -- this
+    // dyes the black, nothing else. crust and mass_rim are added to `col`
+    // further down and still read against it.
+    // laP29.z = 0 (dye_sat 0 or dye_lum 0) skips the branch: byte-identical.
+    [branch] if (laP29.z > 0.0005) {
+        float dIn  = max(-sdf, 0.0);                 // p-units into the mass
+        float Tw   = exp(-dIn / 0.055);              // light left after the wax
+        float inkL = max(inkC.r, max(inkC.g, inkC.b));
+        float wD   = (1.0 - cov) * (1.0 - smoothstep(0.0, 0.55, inkL));
+        inkC += laP31.yzw * (laP29.z * lerp(0.42, 1.0, Tw) * lampG * wD);
     }
     oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(laP6.z * 0.010,
                                                               -laP6.z * 0.007)),

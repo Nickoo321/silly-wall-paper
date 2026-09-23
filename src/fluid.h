@@ -681,9 +681,14 @@ struct LiquidAcidConfig {
     // purple". The references are lava lamps -- amber wax over orange -- where
     // the dark body is not black at all but a DEEP, translucent colour you can
     // almost see the lamp through. So the negative masses take a colour of
-    // their own, applied to the INK RAMP's dark stops (not as a post tint, and
-    // not to the bright stops, so the crust and mass_rim still read against
-    // it). dye_sat 0 / dye_lum 0 is exactly today's black, which is why every
+    // their own, applied in the DISPLAY PASS on inkC (full trace at "DYE THE
+    // DARK MASSES" in shaders.h: the ink RAMP, which this first shipped
+    // against, is not read at all in ink_mode=water, so it could never colour
+    // a mass -- two rounds of ramp edits rendered byte-identical).
+    // dye_lum is the light the THIN edge of the wax passes; the thick core
+    // keeps a floor of it, so thickness reads as translucency and the crust
+    // and mass_rim still read against the body.
+    // dye_sat 0 OR dye_lum 0 is exactly today's black, which is why every
     // existing preset and style=fluid are untouched to the bit.
     //   dye_hue_follow 1 makes dye_hue an OFFSET from the film's current hue,
     //   so the dye rotates with the pair as hue_rotate_period and the sweep

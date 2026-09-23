@@ -905,3 +905,14 @@ EXECUTOR REVIEW 7 (H): strongest = the checking tools; weakest = ~140 KB of HLSL
 (literal cap, splits, no includes): move to .hlsl files compiled/embedded at build = first change;
 BJ next most valuable; docs heavy and repetitive, turn more into merge-time checks.
 BJ IN PROGRESS (Sonnet, 00:50): tools/key-effect.ps1 + a report on acid-rise-12.
+
+BJ DONE (3968d5e, f0ec839): tools/key-effect.ps1; report reference/reports/key-effect-acid-rise-12-
+1d2786a.md. 248 keys in scope, 146 tested. THIRTY keys are INERT on the live preset's frame (plus
+meniscus and rim_dark by hand): every ink_* ramp/duotone key (dead in ink_mode=water), every swarm_*
+key (dead when droplets > 0), and notably film_hairs, film_leak, lid_sheen_px, seam_strength,
+seam_hi, rim_vary, rim_inset, rim_ink_follow, oil_dye_block, oil_ink_blur, grain, rig_readjust
+(motion: a still cannot show it). Ten more keys have MAD < 0.05 (film_dust, droplet_ring_lift,
+fog_mass_gate, psf_px, oil_texture, lid_refract_px, rise_respawn, post_glow_dark, speckle,
+oil_penumbra). Time/motion keys are labelled separately. => AP (hairs/dust) must first make
+film_hairs/film_dust/film_leak actually paint; the seam_* and rim_* inert keys explain why several
+past tunings "did nothing". Fold into the ring table and FEATURES.md inert list (Sonnet, next day).

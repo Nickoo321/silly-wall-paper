@@ -642,6 +642,34 @@ AG 03:03: branch dye3 (993747f in fw-cam, NOT merged: restoring the ramp hue aft
 the complement lock changed nothing, delta 0). Hypothesis for the next session: acid-rise-12 runs
 ink_mode = water, whose dark-mass shading is a different path from the banded ink ramp; the dye must
 be applied where THAT path makes the mass colour. Read the water path end to end first, then render.
+AG DONE 2026-09-22 (branch dye4, merged): the dye hue now reaches the frame. The bug was never in
+the ink ramp -- the ramp is not READ in the live preset. Trace, end to end, for a dark-mass pixel:
+  * src\shaders.h, acid display literal, `float3 col = lerp(inkC, oilC, alpha);` (~line 2096):
+    inside a mass the oil field is below the threshold, alpha -> 0, so the pixel IS inkC.
+  * src\shaders.h, `if (laP10.z > 0.5) inkC = InkWater(C0, ...)` (~line 1618). laP10.z is
+    (ink_mode == water), set in src\fluid.cpp p10[2] (~line 4864); acid-rise-12 has ink_mode=water,
+    so the entire `else` bands branch under it is dead code for this preset.
+  * src\shaders.h, InkWater() (~line 919) ends in `lerp(ikPaper.rgb, tint * .., op)`. In a mass the
+    sim dye density is ~0, so op ~= 0 and the pixel is ikPaper.rgb = [ink] paper_color = 0 0 0.
+    THAT is the black the user sees.
+  * laInk[] (= effInk, what dye3 and its predecessor patched on the CPU) is read in exactly TWO
+    places in the whole shader: the bands branch (~line 1634, dead here) and the toe_tint lift
+    (~line 2589, laP10.w), and acid-rise-12 leaves toe_tint at its 0 default. So no edit to the
+    ramp, in any order, could change one bit of this preset -- which is what the byte-identical
+    four-hue sheet was actually measuring.
+Fix: the dye is applied in the display pass on inkC, right after the lamp ramp, as a translucent
+wax -- thickness = depth into the mass (-sdf), transmitted light = exp(-depth/0.055) with a 0.42
+floor, gated by (1 - cov) so the film is untouched and rolled off where the ink film is bright.
+Constants ride laP29.z/.w (amount, hue) and laP31.w (saturation); no new root params, no new keys.
+Proof: acid-rise-12, seed 1234, t=60 s, dye_sat 0.8 dye_lum 0.30 dye_hue_follow 0, dye_hue 285 vs 0
+-> max|delta| 143/255, 43% of pixels differ by more than 2 (it was 0 on dye3). dye_sat 0 renders
+byte-identical to the pre-change build (md5 CA1B5B2977964C112CEAD7D414815643 both), parity md5
+10E36EBF1A74EDFE609065D757300054 holds. Sheet: build2\shots\live\dye4-sheet.png (3 hues x 3 lums).
+Shipped in acid-rise-12: dye_hue 285, dye_sat 0.8, dye_lum 0.30, dye_hue_follow 0. dye_lum's slider
+re-ranged 0..0.50 step 0.02 from that sheet (under ~0.10 still black, past ~0.45 the mass stops
+reading as dark). Open follow-up: with dye_hue_follow 0 the wax stays purple while the 8-pair sweep
+turns the film, so when the sweep reaches its own violet pair (sweep_oil_3) the two sit close --
+wants its own A/B against dye_hue_follow 1.
 
 BB. **Lamp falloff stronger, with its own hue shift.** User (2026-09-22): "the lamp fall off should
 be stronger, and the hue shift should be stronger" (not the penumbra, which is the lit-less oil

@@ -4735,22 +4735,27 @@ void FluidRenderer::UploadAcidConstants() {
     // ---- DYE THE BLACK (brief AG / AM) -----------------------------------
     // "Add ability to dye the black ink." The references are lava lamps: the
     // dark body is not black, it is a DEEP translucent colour with the lamp
-    // showing through it. So the ink ramp's DARK stops take a colour of their
-    // own and the bright stops are left alone -- the crust and mass_rim are
-    // built off those, and they have to keep reading against the mass rather
-    // than dissolving into it. Done here, on the ramp the shader indexes, not
-    // as a tint over the finished frame: a post tint would colour the film and
-    // the droplets too, and the whole point is that only the negative space
-    // changes.
+    // showing through it.
     //
-    // The value climbs across the stops (lum, then about twice it) instead of
-    // being flat, which is what reads as translucency: a lava-lamp blob is
-    // darkest where it is thickest and lets light through at its edge.
+    // This used to dye the ink RAMP (effInk) here, on the theory that the dark
+    // masses are drawn from it. They are not. Measured on 2026-09-22 (branch
+    // dye4, trace written out in full at the dye block in shaders.h): the LIVE
+    // preset runs ink_mode=water, and in water mode the mass colour comes from
+    // InkWater()'s paper_color, never from laInk[] -- which this shader reads
+    // in exactly two places, the (dead) bands branch and the toe_tint lift,
+    // and acid-rise-12 leaves toe_tint at 0. That is why two rounds of edits
+    // to the ramp rendered byte-identical. So all this does now is hand the
+    // shader the dye COLOUR and amount; the wax itself is built in the display
+    // pass, where the mass's own depth (-sdf) is available and the thickness
+    // can actually read as translucency.
     //
-    // dye_sat 0 and dye_lum 0 leave effInk exactly as it arrived, so every
-    // existing preset -- and style=fluid, which never reaches this function --
-    // is untouched to the bit.
-    if (a.dyeSat > 1e-4f || a.dyeLum > 1e-4f) {
+    // dye_sat 0 or dye_lum 0 sends amount 0, the shader skips the branch, and
+    // the frame is byte-identical -- as is style=fluid, which never gets here.
+    // Hue (0..1) and saturation go over as they are and the shader builds the
+    // colour: the acid cbuffer has single scalars free, not a whole vector,
+    // and the acid PSO already carries InkHsv2Rgb from the shared ink block.
+    float dyeHueN = 0.0f, dyeSat = 0.0f, dyeAmt = 0.0f;
+    if (a.dyeSat > 1e-4f && a.dyeLum > 1e-4f) {
         float hue = a.dyeHue;
         if (a.dyeHueFollow) {
             // ...as an OFFSET from the film's own current hue, so the pair
@@ -4763,19 +4768,12 @@ void FluidRenderer::UploadAcidConstants() {
         float hn = fmodf(hue, 360.0f);
         if (hn < 0.0f) hn += 360.0f;
         hn *= (1.0f / 360.0f);
-        const float ds = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
-        const float dl = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
-        // How much of each ramp stop the dye takes: all of the darkest, most
-        // of the second, a little of the third, none of the brightest.
-        const float wgt[4] = { 1.00f, 0.72f, 0.30f, 0.0f };
-        for (int ci = 0; ci < 4; ci++) {
-            if (wgt[ci] <= 0.0f) continue;
-            const RGB d = HSVtoRGB(hn, ds, dl * (1.0f + 1.05f * (float)ci));
-            const float w = wgt[ci];
-            effInk[ci * 3 + 0] = effInk[ci * 3 + 0] * (1.0f - w) + d.r * w;
-            effInk[ci * 3 + 1] = effInk[ci * 3 + 1] * (1.0f - w) + d.g * w;
-            effInk[ci * 3 + 2] = effInk[ci * 3 + 2] * (1.0f - w) + d.b * w;
-        }
+        // The shader takes it at value 1 and scales by the amount and by the
+        // wax's own thickness, so the hue is carried at full vividness and
+        // only the light level changes with depth.
+        dyeHueN = hn;
+        dyeSat  = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
+        dyeAmt  = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
     }
 
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
@@ -4984,8 +4982,11 @@ void FluidRenderer::UploadAcidConstants() {
     memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
     // mass_rim (brief AB): strength, and its width as a fraction of the frame
     // from px at 1440p -- the same convention as every other optical width.
+    // .z/.w = the mass dye's amount and hue (brief AG/AM); its saturation rides
+    // p31.w. Amount 0 = the shader skips the wax branch entirely, which is what
+    // keeps dye_sat 0 / dye_lum 0 byte-identical.
     float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
-                     3.0f / 1440.0f, 0.0f, 0.0f };
+                     3.0f / 1440.0f, dyeAmt, dyeHueN };
     memcpy(p.p29, p29, 16);
     // ---- brief AE: the second (and third) dye hue ------------------------
     // ---- the contrast hue WOBBLES (brief AE-b) ---------------------------
@@ -5015,9 +5016,11 @@ void FluidRenderer::UploadAcidConstants() {
     // .y/.z: brief AJ, the boundary-reflection reach (screen heights) and how
     // much of the seam's hue a rim takes. 0 reach = today, and the shader
     // skips the whole probe.
+    // .w: the mass dye's saturation (brief AG/AM); its hue rides p29.w and its
+    // amount p29.z, and the shader builds the colour from the three.
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
                      fmaxf(a.boundaryReflectR, 0.0f),
-                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), 0.0f };
+                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), dyeSat };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
     // ---- CAST SHADOWS (brief BC) ----------------------------------------
     // shadow_len is a fraction of the screen HEIGHT, which is exactly the

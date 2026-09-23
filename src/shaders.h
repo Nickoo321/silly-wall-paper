@@ -595,10 +595,10 @@ cbuffer AcidCB : register(b1) {
     // --- droplet lens shading (item X) ------------------------------------
     float4 laP27;        // x lens  y centre  z bandW(uv)  w spec
     float4 laP28;        // x lampX(uv) y lampY(uv)  z dyeDepth w dyeTilt
-    float4 laP29;        // x massRim    y rimW(uv, hardcoded 3px, no key) z -  w -
+    float4 laP29;        // x massRim  y rimW(uv, hardcoded 3px, no key)  z dyeAmt  w dyeHue(0..1)
     // --- multicolour oil (brief AE) ---------------------------------------
     float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
-    float4 laP31;        // x crustHueMix  y boundaryReflectR  z boundaryReflectAmt  w -
+    float4 laP31;        // x crustHueMix  y boundaryReflectR  z boundaryReflectAmt  w dyeSat
     // --- CAST SHADOWS (brief BC) ------------------------------------------
     float4 laP32;        // x shadowAmt y shadowLen(p-units) z shadowSoft w lightZ
     // The 20x12 mix field, four cells per float4. Small on purpose: the
@@ -1817,6 +1817,48 @@ R"hlsl(
     if (laP17.x > 0.0005) {
         lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(laP17.x));
         oilC *= lampG;
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- DYE THE DARK MASSES (brief AG / AM) -----------------------------
+    // TRACE (2026-09-22, branch dye4) -- where a dark-mass pixel gets its
+    // final colour in ink_mode=water, end to end:
+    //   1. src\shaders.h, acid display literal, ~line 2096:
+    //      `float3 col = lerp(inkC, oilC, alpha);`  -- inside a mass the oil
+    //      field is BELOW the threshold, so alpha -> 0 and the pixel IS inkC.
+    //   2. same file, ~line 1618:  `if (laP10.z > 0.5) inkC = InkWater(C0,..)`
+    //      laP10.z = (ink_mode == water) (src\fluid.cpp p10[2], ~line 4864).
+    //      acid-rise-12 sets ink_mode=water, so the whole `else` bands branch
+    //      under it is dead code for this preset.
+    //   3. InkWater (~line 919) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
+    //      mass the sim dye density is ~0, so op ~= 0 and the pixel is
+    //      ikPaper.rgb = [ink] paper_color = 0 0 0. THAT is the black.
+    //   4. laInk[] (= effInk, the ramp the first two attempts dyed on the CPU)
+    //      is read in exactly TWO places in this whole shader: the bands
+    //      branch at ~line 1634 (dead here) and the toe_tint lift at ~line
+    //      2589, gated on laP10.w = toe_tint, which acid-rise-12 leaves at its
+    //      0 default. So dyeing effInk could not change one bit of this preset
+    //      -- which is what the byte-identical four-hue sheet was measuring,
+    //      and why both earlier fixes read delta 0.
+    // So the dye is applied HERE, on inkC, as a deep translucent wax:
+    // thickness = depth into the mass (-sdf), light left = exp(-depth/w), so
+    // the thin edge passes most of the lamp and the thick core keeps a floor
+    // of the same hue instead of crushing to black. Gated by (1 - cov) so the
+    // film is untouched, by the lamp ramp so the wax is lit from below like
+    // the oil is, and rolled off where the ink film is actually BRIGHT -- this
+    // dyes the black, nothing else. crust and mass_rim are added to `col`
+    // further down and still read against it.
+    // laP29.z = 0 (dye_sat 0 or dye_lum 0) skips the branch: byte-identical.
+    [branch] if (laP29.z > 0.0005) {
+        // value 1: the amount and the thickness carry the level, so the hue is
+        // as vivid deep in the mass as it is at the rim.
+        float3 dyeC = InkHsv2Rgb(float3(laP29.w, laP31.w, 1.0));
+        float dIn  = max(-sdf, 0.0);                 // p-units into the mass
+        float Tw   = exp(-dIn / 0.055);              // light left after the wax
+        float inkL = max(inkC.r, max(inkC.g, inkC.b));
+        float wD   = (1.0 - cov) * (1.0 - smoothstep(0.0, 0.55, inkL));
+        inkC += dyeC * (laP29.z * lerp(0.42, 1.0, Tw) * lampG * wD);
     }
     oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(laP6.z * 0.010,
                                                               -laP6.z * 0.007)),

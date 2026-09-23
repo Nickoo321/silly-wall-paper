@@ -77,14 +77,14 @@ Oil look's stack, one line each: sim (racers, coalescence, big rings, conserve_m
 residue, crust) · per-droplet depth + tilted focus surface + DOF · real lateral CA · halation ·
 fog/bloom · lid (ghosts/rings/sheen/iris/glint) · V3 motion (shimmer advected by t3, vignette
 wander, pixel-shift orbit, rig readjust) · film grain at 24 fps · hue2 field (second hue, rotation
-not blend, pair rotates, wobble, seeded off screen below the edge and rising) · dye keys (hue
-inert — see AG, fix in progress on branch dye3, not merged).
+not blend, pair rotates, wobble, seeded off screen below the edge and rising) · dyed masses (the
+negative space is a translucent purple wax, not black — dye_hue/sat/lum in the display pass, AG).
 
 ## 5. Open items AC-BA (`reference\briefs\NEXT-rings-grain-aberration-refraction.md`)
 
 AC presets don't switch style · AD menus confusing (deferred) · AE multicolour oil (waiting on
-photos) · AF weak lid reflections, raise ghost/rings/glint/iris · AG dye not just black (hue
-inert, branch dye3) · AH film leaks/artefacts driven by oil movement · AI on-panel feature tour
+photos) · AF weak lid reflections, raise ghost/rings/glint/iris · AG dye not just black (DONE,
+dye4; follow-up = dye_hue_follow A/B) · AH film leaks/artefacts driven by oil movement · AI on-panel feature tour
 (--tour) · AE-b global hue rotate + ~170-190 deg contrast wobble (landed, hue2b) · AJ FUTURE widen
 boundary-reflect radius (do not start) · AK lens flare, hue opposite dominant sim colour · AL
 colours must enter off-screen only (branch hue2c) · AM dye the black ink (=AG) · AN palette combos

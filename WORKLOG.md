@@ -2009,3 +2009,47 @@ the caller moves on instead of hanging or crashing with a bare stack trace. Conf
 change needed): `tools/gpu-lock.ps1` has resolved to the main repo's hardcoded absolute path
 since `ddf8500`, so `preset-identity.ps1`'s dot-source already gets the shared lock regardless of
 which worktree it runs from.
+
+## 2026-09-23 -- BE lands: the packed acid cbuffer has named fields + tools/slot-check.ps1 (Opus executor H, branch slots)
+
+Pure refactor, zero visual change. Every packed acid scalar (129 of them, laP0..laP32) now has a
+NAME in one table, `src/acid_slots.h` (an X-macro: `X(NAME, vec, comp, "ini key / source")`).
+Everything else is derived from it:
+
+- C++: `enum AcidSlot { LA_<NAME> = vec*4 + comp }`. `UploadAcidConstants` no longer builds
+  `float pN[4]` arrays and memcpy's them: it writes `slot(LA_<NAME>, value)`, once per scalar,
+  through a `V[kAcidSlotVecs]` pointer table onto the unchanged `AcidParamsGPU` (layout still
+  1632 bytes, static_assert kept).
+- HLSL: `kAcidSlotMacros` (fluid.cpp) is the LIQUID_ACID PSO's D3D_SHADER_MACRO list:
+  `LIQUID_ACID=1` plus `LA_<NAME>=laP<vec>.<c>` for every row. All 259 laP reads in the acid
+  literals became `LA_<NAME>` (plus 10 comment mentions). A D3DCompile define rather than a text
+  prelude, so it costs the literals nothing and the fluid/ink PSOs never see it.
+- Docs: the `cbuffer AcidCB` declaration + comment table in shaders.h sits between GENERATED
+  markers and is written by `tools/slot-check.ps1 -Fix` from the table and the C++ struct.
+
+`tools/slot-check.ps1` (no GPU, <1 s) fails on: a row written 0 or 2+ times, written but never
+read, read but not written, an unknown name, two names on one component, any raw `laP<n>.<c>`
+left in shaders.h (comments included), a raw `p.p<n>` write in the upload, C++/HLSL member order
+mismatch, a static_assert that disagrees, a stale generated table, `LA_` in a literal other than
+kDisplaySrc, or any literal piece over 16000 bytes. Negative-tested on a scratch copy (raw laP,
+duplicate write, two names on one slot, reordered cbuffer, orphan row): each fails with a clear
+line. The card's section 3.5 now says to run it before merging.
+
+Dead slot `laP11.w` (written 0, read 0x, audit section 1) is no longer written; free components:
+laP11.w, laP16.w, laP17.w. The hardcoded `laP29.y` (3/1440) and `laP26.y` (1/0.12) are named
+MASS_RIM_W / COC_SPAN_INV and marked HARDCODED in the table. The CAST SHADOWS chunk of kDisplaySrc
+(15522 bytes, ~858 headroom, audit 3 section 11) is split at "the droplets, analytically";
+largest piece is now 14211 (kDisplaySrc @ 1092).
+
+Verification, strongest first: (1) the acid, fluid and ink PSOs were compiled old-vs-new with
+d3dcompiler_47 (python ctypes, VS+PS): DXBC byte-identical for all six blobs; (2) every old
+`pN[c]` expression compared textually against the new `slot()` expression for the same slot:
+129/129 identical, the 3 free slots were literal 0.0f and are now the `= {}` zero; (3) renders, one at a time,
+yield 8: fluid parity `10E36EBF1A74EDFE609065D757300054` MATCH; `tools/preset-identity.ps1`
+against `preset-identity-baseline-941cd4d.txt`: we-look-live, acid-rise-12, -2hue, -8020, -rotate
+all MATCH (495 s).
+
+Gotchas found on the way: `preset-identity.ps1 -Presets a,b` does NOT survive `powershell -File`
+(the array arrives as one string, no preset resolves, and the script silently renders only the
+fluid row and exits 0) -- call it in-process with `& tools\preset-identity.ps1 -Presets $arr`.
+The 941cd4d baseline has no `Liquid Acid - rising` row, so a default-list run prints SKIPPED for it.

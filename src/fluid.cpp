@@ -1,5 +1,6 @@
 #include "fluid.h"
 #include "shaders.h"
+#include "acid_slots.h"
 #include <d3dcompiler.h>
 #include <cstdio>
 #include <cstring>
@@ -78,6 +79,19 @@ static ComPtr<ID3DBlob> Compile(const char* src, const char* entry, const char* 
     }
     return blob;
 }
+
+// brief BE: the Liquid Acid PSO's defines. LIQUID_ACID switches the look on
+// in kDisplaySrc; every row of ACID_SLOTS (src\acid_slots.h) adds
+// "#define LA_<NAME> laP<vec>.<c>", so the acid literals read each packed
+// scalar by the same name UploadAcidConstants writes it under. Macros only:
+// the preprocessed HLSL is token-for-token what the literal said before.
+#define ACID_SLOT_MACRO(name, vec, comp, doc) { "LA_" #name, "laP" #vec "." #comp },
+static const D3D_SHADER_MACRO kAcidSlotMacros[] = {
+    { "LIQUID_ACID", "1" },
+    ACID_SLOTS(ACID_SLOT_MACRO)
+    { nullptr, nullptr }
+};
+#undef ACID_SLOT_MACRO
 
 // Aspect-corrected resolution, same as reference getResolution().
 static void GetResolution(int base, int screenW, int screenH, int* outW, int* outH) {
@@ -425,8 +439,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     // Built only when the look is on, so the normal path pays no compile cost
     // and, more importantly, its own shader has none of this code in it.
     if (m_cfg.acid.enabled) {
-        const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
-        makeGfx(kDisplaySrc, m_psoLiquidAcid, defs);
+        makeGfx(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
     }
     // "Ink in water": the same display source with INK defined. Same rule â€”
     // built only when the look is on, so style=fluid keeps its exact shader.
@@ -477,8 +490,7 @@ void FluidRenderer::EnsureLookResources() {
     if (!needAcid && !needInk) return;
     WaitForGpuIdle();
     if (needAcid) {
-        const D3D_SHADER_MACRO defs[] = { { "LIQUID_ACID", "1" }, { nullptr, nullptr } };
-        MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, defs);
+        MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
         m_acidSeeded = false;          // Frame() reseeds under the current keys
         printf("look: liquid_acid PSO compiled on demand\n");
     }
@@ -4868,13 +4880,40 @@ void FluidRenderer::UploadAcidConstants() {
         p.ink[i][1] = effInk[i * 3 + 1];
         p.ink[i][2] = effInk[i * 3 + 2];
     }
+    // ---- the packed scalars, BY NAME (brief BE) --------------------------
+    // Every laP<n>.<c> is written here, once, through its name in
+    // src\acid_slots.h -- the same table the shader's LA_<NAME> defines come
+    // from. tools\slot-check.ps1 fails the build review if a name is written
+    // twice, never written, or written and never read. Components nobody
+    // writes stay 0 from the = {} above (the free slots the checker lists).
+    float* const V[kAcidSlotVecs] = {
+        p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
+        p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
+        p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
+        p.p30, p.p31, p.p32 };
+    auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
+
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
-    float p0[4] = { (float)(n < kAcidMaxBlobs ? n : kAcidMaxBlobs),
-                    a.threshold, a.supportScale, a.aaScale };
-    float p1[4] = { a.rimWidth, a.rimInset, a.rimDark, a.refraction };
-    float p2[4] = { a.meniscus, a.meniscusW, a.translucency, a.oilTexture };
-    float p3[4] = { a.inkLevels, a.inkSoft, a.inkMix, a.inkHueVary };
-    float p4[4] = { a.inkGain, a.inkBias, a.seamStrength, a.seamScale };
+    slot(LA_BLOB_COUNT,   (float)(n < kAcidMaxBlobs ? n : kAcidMaxBlobs));
+    slot(LA_THRESHOLD,    a.threshold);
+    slot(LA_SUPPORT_SCALE, a.supportScale);
+    slot(LA_AA_SCALE,     a.aaScale);
+    slot(LA_RIM_WIDTH,    a.rimWidth);
+    slot(LA_RIM_INSET,    a.rimInset);
+    slot(LA_RIM_DARK,     a.rimDark);
+    slot(LA_REFRACTION,   a.refraction);
+    slot(LA_MENISCUS,     a.meniscus);
+    slot(LA_MENISCUS_W,   a.meniscusW);
+    slot(LA_TRANSLUCENCY, a.translucency);
+    slot(LA_OIL_TEXTURE,  a.oilTexture);
+    slot(LA_INK_LEVELS,   a.inkLevels);
+    slot(LA_INK_SOFT,     a.inkSoft);
+    slot(LA_INK_MIX,      a.inkMix);
+    slot(LA_INK_HUE_VARY, a.inkHueVary);
+    slot(LA_INK_GAIN,     a.inkGain);
+    slot(LA_INK_BIAS,     a.inkBias);
+    slot(LA_SEAM_STR,     a.seamStrength);
+    slot(LA_SEAM_SCALE,   a.seamScale);
     // brief BD: the look's own grain is DEFERRED exactly as [post] film_grain
     // is when the image-space pass runs -- not moved there, dropped. It was a
     // SECOND stock on top of the [post] one, unpaced, and it lived in the
@@ -4888,91 +4927,116 @@ void FluidRenderer::UploadAcidConstants() {
     // effects)" twin runs the post pass for dither alone with film_grain 0,
     // and this grain is the only one it has.
     const bool postGrain = PostActive() && m_cfg.post.filmGrain > 0.0005f;
-    float p5[4] = { a.seamLo, a.seamHi,
-                    postGrain ? 0.0f : a.grainAmt, a.grainScale };
-    float p6[4] = { a.speckle, a.speckScale, m_time, aspect };
-    float p7[4] = { a.oilHdr, a.rimHdr, a.meniscusOff, a.inkShading };
+    slot(LA_SEAM_LO,      a.seamLo);
+    slot(LA_SEAM_HI,      a.seamHi);
+    slot(LA_GRAIN,        postGrain ? 0.0f : a.grainAmt);
+    slot(LA_GRAIN_SCALE,  a.grainScale);
+    slot(LA_SPECKLE,      a.speckle);
+    slot(LA_SPECKLE_SCALE, a.speckScale);
+    slot(LA_TIME,         m_time);
+    slot(LA_ASPECT,       aspect);
+    slot(LA_OIL_HDR,      a.oilHdr);
+    slot(LA_RIM_HDR,      a.rimHdr);
+    slot(LA_MENISCUS_OFF, a.meniscusOff);
+    slot(LA_INK_SHADING,  a.inkShading);
     // With the droplet particle sim on, the procedural swarms are forced OFF:
     // ONE system is the whole point (the user, on the two layered together:
     // "it still looks like 2 things layered. The dots look png'd on").
     const bool dropsOn = (a.droplets > 0);
-    float p8[4] = { dropsOn ? 0.0f : a.swarmHoles, dropsOn ? 0.0f : a.swarmDrops,
-                    a.swarmDensity, a.swarmRimDark };
-    float p9[4] = { a.swarmScaleA, a.swarmScaleB, a.swarmRMin, a.swarmRMax };
-    memcpy(p.p0, p0, 16); memcpy(p.p1, p1, 16); memcpy(p.p2, p2, 16); memcpy(p.p3, p3, 16);
-    memcpy(p.p4, p4, 16); memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16); memcpy(p.p7, p7, 16);
-    float p10[4] = { a.swarmClump, a.swarmDark, (a.inkMode == 1 ? 1.0f : 0.0f),
-                     fmaxf(a.toeTint, 0.0f) };
+    slot(LA_SWARM_HOLES,  dropsOn ? 0.0f : a.swarmHoles);
+    slot(LA_SWARM_DROPS,  dropsOn ? 0.0f : a.swarmDrops);
+    slot(LA_SWARM_DENSITY, a.swarmDensity);
+    slot(LA_SWARM_RIM_DARK, a.swarmRimDark);
+    slot(LA_SWARM_SCALE_HOLES, a.swarmScaleA);
+    slot(LA_SWARM_SCALE_DROPS, a.swarmScaleB);
+    slot(LA_SWARM_R_MIN,  a.swarmRMin);
+    slot(LA_SWARM_R_MAX,  a.swarmRMax);
+    slot(LA_SWARM_CLUMP,  a.swarmClump);
+    slot(LA_SWARM_DARK,   a.swarmDark);
+    slot(LA_INK_WATER,    (a.inkMode == 1 ? 1.0f : 0.0f));
+    slot(LA_TOE_TINT,     fmaxf(a.toeTint, 0.0f));
     // Target ink hue = the oil family's mean hue, swept, plus 180 degrees.
+    // (laP11.w is free: the hue sweep is applied to the palette above.)
     float targetHue = fmodf(OilMeanHueDeg(effOil) + 180.0f, 360.0f);
-    float p11[4] = { a.inkComplementLock ? 1.0f : 0.0f, a.inkComplementSpan,
-                     targetHue, 0.0f };   // .w unused: the sweep is applied above
-    float p12[4] = { a.rimVary, a.rimInkFollow, a.rimOrder ? 1.0f : 0.0f,
-                     fmaxf(a.grainShadowW, 0.0f) };
-    float p13[4] = { fmaxf(a.oilThinEdge, 0.0f), fmaxf(a.oilEdgeFrac, 0.0f),
-                     fmaxf(a.oilSpecular, 0.0f), fmaxf(a.oilIrid, 0.0f) };
-    float p14[4] = { fmaxf(a.swarmLens, 0.0f), fmaxf(a.meniscusFromInk, 0.0f),
-                     fmaxf(a.oilGlow, 0.0f), fmaxf(a.refractionWidth, 0.0f) };
+    slot(LA_INK_LOCK,     a.inkComplementLock ? 1.0f : 0.0f);
+    slot(LA_INK_LOCK_SPAN, a.inkComplementSpan);
+    slot(LA_INK_TARGET_HUE, targetHue);
+    slot(LA_RIM_VARY,     a.rimVary);
+    slot(LA_RIM_INK_FOLLOW, a.rimInkFollow);
+    slot(LA_RIM_ORDER,    a.rimOrder ? 1.0f : 0.0f);
+    slot(LA_GRAIN_SHADOW_W, fmaxf(a.grainShadowW, 0.0f));
+    slot(LA_OIL_THIN_EDGE, fmaxf(a.oilThinEdge, 0.0f));
+    slot(LA_OIL_EDGE_FRAC, fmaxf(a.oilEdgeFrac, 0.0f));
+    slot(LA_OIL_SPECULAR, fmaxf(a.oilSpecular, 0.0f));
+    slot(LA_OIL_IRID,     fmaxf(a.oilIrid, 0.0f));
+    slot(LA_SWARM_LENS,   fmaxf(a.swarmLens, 0.0f));
+    slot(LA_MEN_FROM_INK, fmaxf(a.meniscusFromInk, 0.0f));
+    slot(LA_OIL_GLOW,     fmaxf(a.oilGlow, 0.0f));
+    slot(LA_REFR_WIDTH,   fmaxf(a.refractionWidth, 0.0f));
     float men[4] = { effMen[0], effMen[1], effMen[2], 0.0f };
-    memcpy(p.p8, p8, 16); memcpy(p.p9, p9, 16);
-    memcpy(p.p10, p10, 16); memcpy(p.p11, p11, 16); memcpy(p.p12, p12, 16);
-    float p15[4] = { fmaxf(a.oilTransparency, 0.0f), fmaxf(a.oilAbsorb, 0.0f),
-                     fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
-    // .y = dye_depth_w: how much the dye layer weighs against the droplets
-    // in the per-pixel depth blend (item AA; 0.25 = the old constant prior).
-    // .z = meniscus_film_mix: how much of the meniscus halo's colour (and its
-    // ink-brightness gate) comes from the FILM instead of the ink. 0 = today.
-    float p16[4] = { fmaxf(a.oilInkBlur, 0.0f),
-                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f),
-                     fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f), 0.0f };
-    float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
-                     fmaxf(a.postLift, 0.0f), 0.0f };
-    float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,
-                     (a.oilEdgeMode == 1) ? 1.0f : 0.0f };
-    // .w = the index the RING SHAPE records start at, so the shader can find
-    // a droplet's second float4 without a second SRV.
-    float p19[4] = { fmaxf(a.dropletSupport, 0.5f), fmaxf(a.dropletWeight, 0.0f),
-                     fmaxf(a.dropletOilW, 0.0f), (float)kAcidMaxDrops };
-    // ring band half-width as a fraction of the droplet's SUPPORT radius, so
+    memcpy(p.men, men, 16);
+    slot(LA_OIL_TRANSP,   fmaxf(a.oilTransparency, 0.0f));
+    slot(LA_OIL_ABSORB,   fmaxf(a.oilAbsorb, 0.0f));
+    slot(LA_OIL_FILM_BUMP, fmaxf(a.oilFilmBump, 0.0f));
+    slot(LA_OIL_REFR_BODY, fmaxf(a.oilRefractBody, 0.0f));
+    // DYE_DEPTH_W: how much the dye layer weighs against the droplets in the
+    // per-pixel depth blend (item AA; 0.25 = the old constant prior).
+    // MEN_FILM_MIX = meniscus_film_mix: how much of the meniscus halo's colour
+    // (and its ink-brightness gate) comes from the FILM instead of the ink.
+    // 0 = today.
+    slot(LA_OIL_INK_BLUR, fmaxf(a.oilInkBlur, 0.0f));
+    slot(LA_DYE_DEPTH_W,  fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f));
+    slot(LA_MEN_FILM_MIX, fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f));
+    slot(LA_RISE_BOTTOM_LIGHT, fmaxf(a.riseBottomLight, 0.0f));
+    slot(LA_POST_CHROMA,  fmaxf(a.postChroma, 0.0f));
+    slot(LA_POST_LIFT,    fmaxf(a.postLift, 0.0f));
+    slot(LA_DROPS_ON,     dropsOn ? 1.0f : 0.0f);
+    slot(LA_DROP_GRID_W,  (float)kDropGridW);
+    slot(LA_DROP_GRID_H,  (float)kDropGridH);
+    slot(LA_OIL_EDGE_MODE, (a.oilEdgeMode == 1) ? 1.0f : 0.0f);
+    slot(LA_DROP_SUPPORT, fmaxf(a.dropletSupport, 0.5f));
+    slot(LA_DROP_WEIGHT,  fmaxf(a.dropletWeight, 0.0f));
+    slot(LA_DROP_OIL_W,   fmaxf(a.dropletOilW, 0.0f));
+    // The index the RING SHAPE records start at, so the shader can find a
+    // droplet's second float4 without a second SRV.
+    slot(LA_DROP_RING_BASE, (float)kAcidMaxDrops);
+    // Ring band half-width as a fraction of the droplet's SUPPORT radius, so
     // the shader can build the annulus without a per-droplet size; the visible
     // ring is about this fraction of the droplet across.
-    // .w = the DIFFRACTION scale: the point spread times the constant k that
-    // sets where the size curve bends, carried in uv-y like every other
+    slot(LA_DROP_RING_WIDTH, fminf(fmaxf(a.dropletRingWidth, 0.02f), 0.60f));
+    slot(LA_DROP_RING_LIFT, fminf(fmaxf(a.dropletRingLift, 0.0f), 1.0f));
+    slot(LA_OIL_EDGE_CURVE, fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f));
+    // DIFFR_SCALE = the DIFFRACTION scale: the point spread times the constant
+    // k that sets where the size curve bends, carried in uv-y like every other
     // optical width here so a preview and the panel diffract the same. A
     // droplet of this radius comes out at 63% of its full darkness; twice it,
     // 98%. k = 2.5 puts the knee on the sim's small droplets (r_min is about
     // 1.6 px at 1440p) and leaves anything above ~8 px fully black.
-    float p20[4] = { fminf(fmaxf(a.dropletRingWidth, 0.02f), 0.60f),
-                     fminf(fmaxf(a.dropletRingLift, 0.0f), 1.0f),
-                     fminf(fmaxf(a.oilEdgeCurve, 0.0f), 1.0f),
-                     2.5f * fmaxf(a.diffractionPx, 0.05f) / 1440.0f };
+    slot(LA_DIFFR_SCALE,  2.5f * fmaxf(a.diffractionPx, 0.05f) / 1440.0f);
     // [post] halo / halo_px / softness. All three are optical widths authored
     // in px at 1440p and handed to the shader as a FRACTION of the frame, so
     // a 960x540 preview and the 1440p panel show the same lens.
     const PostConfig& po = m_cfg.post;
-    float p21[4] = { fminf(fmaxf(po.halo, 0.0f), 1.0f),
-                     fmaxf(po.haloPx, 0.5f) / 1440.0f,
-                     fmaxf(po.softness, 0.0f) / 1440.0f,
-                     fminf(fmaxf(po.bandMin, 0.0f), 1.0f) };
-    memcpy(p.p13, p13, 16); memcpy(p.p14, p14, 16);
-    memcpy(p.p15, p15, 16); memcpy(p.p16, p16, 16); memcpy(p.p17, p17, 16);
-    memcpy(p.p18, p18, 16); memcpy(p.p19, p19, 16);
+    slot(LA_HALO,         fminf(fmaxf(po.halo, 0.0f), 1.0f));
+    slot(LA_HALO_W,       fmaxf(po.haloPx, 0.5f) / 1440.0f);
+    slot(LA_SOFTNESS,     fmaxf(po.softness, 0.0f) / 1440.0f);
+    slot(LA_BAND_MIN,     fminf(fmaxf(po.bandMin, 0.0f), 1.0f));
     // oil_penumbra: width authored in px at 1440p, carried as a fraction of
     // the frame so a preview and the panel show the same band.
-    float p22[4] = { fminf(fmaxf(a.oilPenumbra, 0.0f), 1.0f),
-                     fmaxf(a.oilPenumbraPx, 0.5f) / 1440.0f,
-                     a.oilPenumbraHue,
-                     fminf(fmaxf(a.oilPenumbraDark, 0.0f), 1.0f) };
+    slot(LA_PENUMBRA,     fminf(fmaxf(a.oilPenumbra, 0.0f), 1.0f));
+    slot(LA_PENUMBRA_W,   fmaxf(a.oilPenumbraPx, 0.5f) / 1440.0f);
+    slot(LA_PENUMBRA_HUE, a.oilPenumbraHue);
+    slot(LA_PENUMBRA_DARK, fminf(fmaxf(a.oilPenumbraDark, 0.0f), 1.0f));
     // cellulose: the master folded into the two side weights, so the shader
     // can skip the whole block on one test; the feature size is authored in
     // px at 1440p and carried as a fraction of the frame (same convention as
     // every other optical width here), and the drift is the rise speed times
     // cellulose_drift, in uv/s, so the fibres travel with the masses.
     const float cellM = fminf(fmaxf(a.cellulose, 0.0f), 1.0f);
-    float p23[4] = { cellM * fmaxf(a.celluloseInk, 0.0f),
-                     cellM * fmaxf(a.celluloseOil, 0.0f),
-                     fmaxf(a.celluloseScale, 2.0f) / 1440.0f,
-                     fmaxf(a.riseSpeed, 0.0f) * fminf(fmaxf(a.celluloseDrift, 0.0f), 1.0f) };
+    slot(LA_CELL_INK,     cellM * fmaxf(a.celluloseInk, 0.0f));
+    slot(LA_CELL_OIL,     cellM * fmaxf(a.celluloseOil, 0.0f));
+    slot(LA_CELL_SCALE,   fmaxf(a.celluloseScale, 2.0f) / 1440.0f);
+    slot(LA_CELL_DRIFT,   fmaxf(a.riseSpeed, 0.0f) * fminf(fmaxf(a.celluloseDrift, 0.0f), 1.0f));
     // ---- PERSPECTIVE CAMERA + DEPTH OF FIELD + TILT ----------------------
     // The optical axis is given in uv and used in the shader's p-space (x
     // times the aspect), so it is handed over already scaled. camera_fov is
@@ -4986,51 +5050,52 @@ void FluidRenderer::UploadAcidConstants() {
     const bool  dofOn = (po.dofMaxPx > 0.01f);
     const float fovK  = (po.cameraFov > 0.01f)
                       ? tanf(fminf(po.cameraFov, 170.0f) * 0.5f * DEG) / 0.5f : 0.0f;
-    float p24[4] = { m_rig.axisX, m_rig.axisY,
-                     dofOn ? m_rig.focus : 0.5f,
-                     dofOn ? fmaxf(po.dofMaxPx, 0.0f) : 0.0f };
-    float p25[4] = { po.cameraFieldCurve, m_rig.tiltAmt,
-                     cosf(m_rig.tiltAngle), sinf(m_rig.tiltAngle) };
-    // .y = 1 / the depth interval over which the CoC ramps from the edge of
-    // the sharp band to the full dof_max_px. A TENTH of the depth range, and
-    // the shader's ramp is shouldered on top of that: the user's reference is
-    // a macro lens whose one sharp plane resolves fine texture while
-    // everything off it is already a wash, so the falloff has to be steep.
-    // Fixed rather than another key -- it is the aperture, and camera_focus,
-    // focus_band_px and droplet_depth already aim the plane.
-    float p26[4] = { fmaxf(po.focusBandPx, 0.0f) / 1440.0f,
-                     1.0f / 0.12f,
-                     fovK,
-                     fminf(fmaxf(a.diffraction, 0.0f), 1.0f) };
-    memcpy(p.p20, p20, 16); memcpy(p.p21, p21, 16); memcpy(p.p22, p22, 16);
-    memcpy(p.p23, p23, 16);
-    memcpy(p.men, men, 16);
+    slot(LA_CAM_AXIS_X,   m_rig.axisX);
+    slot(LA_CAM_AXIS_Y,   m_rig.axisY);
+    slot(LA_FOCUS_DEPTH,  dofOn ? m_rig.focus : 0.5f);
+    slot(LA_DOF_MAX_PX,   dofOn ? fmaxf(po.dofMaxPx, 0.0f) : 0.0f);
+    slot(LA_FIELD_CURVE,  po.cameraFieldCurve);
+    slot(LA_TILT_AMT,     m_rig.tiltAmt);
+    slot(LA_TILT_COS,     cosf(m_rig.tiltAngle));
+    slot(LA_TILT_SIN,     sinf(m_rig.tiltAngle));
+    // COC_SPAN_INV = 1 / the depth interval over which the CoC ramps from the
+    // edge of the sharp band to the full dof_max_px. A TENTH of the depth
+    // range, and the shader's ramp is shouldered on top of that: the user's
+    // reference is a macro lens whose one sharp plane resolves fine texture
+    // while everything off it is already a wash, so the falloff has to be
+    // steep. Fixed rather than another key -- it is the aperture, and
+    // camera_focus, focus_band_px and droplet_depth already aim the plane.
+    slot(LA_FOCUS_BAND,   fmaxf(po.focusBandPx, 0.0f) / 1440.0f);
+    slot(LA_COC_SPAN_INV, 1.0f / 0.12f);
+    slot(LA_FOV_K,        fovK);
+    slot(LA_DIFFRACTION,  fminf(fmaxf(a.diffraction, 0.0f), 1.0f));
     // ---- DROPLET LENS SHADING (item X) -----------------------------------
     // The band width is authored in px at 1440p like every other optical
     // width here and carried as a fraction of the frame. The LAMP comes off
     // the rig, so the specular swings with the same light the haze and the
     // bloom hang off instead of inventing a second one.
-    float p27[4] = { fminf(fmaxf(a.dropletLens, 0.0f), 1.0f),
-                     fminf(fmaxf(a.dropletLensCentre, 0.0f), 1.0f),
-                     fmaxf(a.dropletLensBand, 0.25f) / 1440.0f,
-                     fminf(fmaxf(a.dropletSpec, 0.0f), 1.0f) };
-    // .zw = the DYE LAYER's own depth and its slope (item AA). The slope runs
-    // along the direction from the lens centre to the lamp, which drifts, so
-    // the dye slab is never parallel to the focus surface and the line where
-    // they cross travels with the rig instead of sitting on one row of pixels.
-    float p28[4] = { m_rig.lampX, m_rig.lampY,
-                     fminf(fmaxf(a.dyeDepth, 0.0f), 1.0f),
-                     a.dyeDepthTilt };
-    memcpy(p.p24, p24, 16); memcpy(p.p25, p25, 16); memcpy(p.p26, p26, 16);
-    memcpy(p.p27, p27, 16); memcpy(p.p28, p28, 16);
+    slot(LA_LENS,         fminf(fmaxf(a.dropletLens, 0.0f), 1.0f));
+    slot(LA_LENS_CENTRE,  fminf(fmaxf(a.dropletLensCentre, 0.0f), 1.0f));
+    slot(LA_LENS_BAND,    fmaxf(a.dropletLensBand, 0.25f) / 1440.0f);
+    slot(LA_DROP_SPEC,    fminf(fmaxf(a.dropletSpec, 0.0f), 1.0f));
+    // DYE_DEPTH / DYE_TILT = the DYE LAYER's own depth and its slope (item
+    // AA). The slope runs along the direction from the lens centre to the
+    // lamp, which drifts, so the dye slab is never parallel to the focus
+    // surface and the line where they cross travels with the rig instead of
+    // sitting on one row of pixels.
+    slot(LA_LAMP_X,       m_rig.lampX);
+    slot(LA_LAMP_Y,       m_rig.lampY);
+    slot(LA_DYE_DEPTH,    fminf(fmaxf(a.dyeDepth, 0.0f), 1.0f));
+    slot(LA_DYE_TILT,     a.dyeDepthTilt);
     // mass_rim (brief AB): strength, and its width as a fraction of the frame
-    // from px at 1440p -- the same convention as every other optical width.
-    // .z/.w = the mass dye's amount and hue (brief AG/AM); its saturation rides
-    // p31.w. Amount 0 = the shader skips the wax branch entirely, which is what
-    // keeps dye_sat 0 / dye_lum 0 byte-identical.
-    float p29[4] = { fminf(fmaxf(a.massRim, 0.0f), 1.0f),
-                     3.0f / 1440.0f, dyeAmt, dyeHueN };
-    memcpy(p.p29, p29, 16);
+    // from px at 1440p -- the same convention as every other optical width
+    // (3 px, hardcoded: there is no key). DYE_AMT / DYE_HUE / DYE_SAT = the
+    // mass dye (brief AG/AM). Amount 0 = the shader skips the wax branch
+    // entirely, which is what keeps dye_sat 0 / dye_lum 0 byte-identical.
+    slot(LA_MASS_RIM,     fminf(fmaxf(a.massRim, 0.0f), 1.0f));
+    slot(LA_MASS_RIM_W,   3.0f / 1440.0f);
+    slot(LA_DYE_AMT,      dyeAmt);
+    slot(LA_DYE_HUE,      dyeHueN);
     // ---- brief AE: the second (and third) dye hue ------------------------
     // ---- the contrast hue WOBBLES (brief AE-b) ---------------------------
     // The user: "the contrast colour wiggles around like 170-190 degrees
@@ -5052,30 +5117,27 @@ void FluidRenderer::UploadAcidConstants() {
                                      + 1.7f + m_mixPhase * 0.7f);
         hue2Eff += a.filmHue2Wobble * w;
     }
-    float p30[4] = { fminf(fmaxf(a.filmHue2Amt, 0.0f), 1.0f),
-                     hue2Eff,
-                     fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f),
-                     a.filmHue3 };
-    // .y/.z: brief AJ, the boundary-reflection reach (screen heights) and how
-    // much of the seam's hue a rim takes. 0 reach = today, and the shader
-    // skips the whole probe.
-    // .w: the mass dye's saturation (brief AG/AM); its hue rides p29.w and its
-    // amount p29.z, and the shader builds the colour from the three.
-    float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
-                     fmaxf(a.boundaryReflectR, 0.0f),
-                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), dyeSat };
-    memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
+    slot(LA_HUE2_AMT,     fminf(fmaxf(a.filmHue2Amt, 0.0f), 1.0f));
+    slot(LA_HUE2_DEG,     hue2Eff);
+    slot(LA_HUE3_AMT,     fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f));
+    slot(LA_HUE3_DEG,     a.filmHue3);
+    // REFLECT_R / REFLECT_AMT: brief AJ, the boundary-reflection reach
+    // (screen heights) and how much of the seam's hue a rim takes. 0 reach =
+    // today, and the shader skips the whole probe.
+    slot(LA_CRUST_HUE_MIX, fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f));
+    slot(LA_REFLECT_R,    fmaxf(a.boundaryReflectR, 0.0f));
+    slot(LA_REFLECT_AMT,  fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f));
+    slot(LA_DYE_SAT,      dyeSat);
     // ---- CAST SHADOWS (brief BC) ----------------------------------------
     // shadow_len is a fraction of the screen HEIGHT, which is exactly the
     // unit the shader's p-space y carries, so it goes across untouched.
     // light_z lives in [post] beside light_x / light_y -- it is a property
     // of the lamp, not of the oil -- and rides over here because the only
     // pass that can see an occluder is the acid display pass.
-    float p32[4] = { fminf(fmaxf(a.shadowAmt, 0.0f), 1.0f),
-                     fmaxf(a.shadowLen, 0.0f),
-                     fminf(fmaxf(a.shadowSoft, 0.0f), 1.0f),
-                     fminf(fmaxf(po.lightZ, -1.0f), 1.0f) };
-    memcpy(p.p32, p32, 16);
+    slot(LA_SHADOW_AMT,   fminf(fmaxf(a.shadowAmt, 0.0f), 1.0f));
+    slot(LA_SHADOW_LEN,   fmaxf(a.shadowLen, 0.0f));
+    slot(LA_SHADOW_SOFT,  fminf(fmaxf(a.shadowSoft, 0.0f), 1.0f));
+    slot(LA_LIGHT_Z,      fminf(fmaxf(po.lightZ, -1.0f), 1.0f));
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

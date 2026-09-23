@@ -25,9 +25,9 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
   MATCH/DIFFERS per preset and exits 1 on any diff. Before merging: `tools\preset-identity.ps1
   -Exe <your build> -Baseline <latest baseline>` must print MATCH for every preset whose keys you
   did not intentionally change.
-- MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`. Tightest
-  is `kDisplaySrc` at ~2.3 KB headroom (audit 2026-09-22): split before adding more than ~20 lines
-  to it, or to `kPostSrc`/`kComputeSrc` (also close to cap).
+- MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`.
+  `tools\slot-check.ps1` prints the three largest pieces (and fails over 16000): split before
+  adding more than ~20 lines to one within ~2.3 KB of the cap.
 - Root signature is at the 64-DWORD limit — cbuffer slack only, don't add root params.
 - New key's range/step comes from a real A/B sheet (3-5 values), not a guess (slider-range-policy:
   a blur useful over 0.1-3 cannot ship as a 0-50 slider — it hides the good zone).
@@ -52,6 +52,7 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - `src\main.cpp` — ini getF/putF, CLI flags, fullscreen pause.
 - `src\fluid.h` — config structs + defaults; key names in trailing comments.
 - `src\fluid.cpp` — sim, constants upload, post pass (`RunPostPass`).
+- `src\acid_slots.h` — the packed acid cbuffer's slot table (names for every `laP<n>.<c>`).
 - `src\shaders.h` — HLSL string literals: acid sim/display `kAcid*`, post `kPostSrc`, display pass.
 - `src\settings.cpp` — slider table: label, min, max, step, decimals, pointer, section, key, help.
 - Other `src\`: `analyzer.cpp`, `app.rc`, `app_state.h`, `journey.cpp/h`, `moods.cpp/h`, `scenes.cpp`.
@@ -80,12 +81,15 @@ gitignored but NOT OneDrive-ignored in the main repo) — sweep old shots period
 
 ## 3.5. Before merging a branch that touches the acid cbuffer
 
-Run `tools\slot-check` (the auditor's cross-check of `UploadAcidConstants` against every `laP*`
-read in the acid HLSL literals — read/write/order agreement, no double-meaning slots), if it has
-been committed by the time you read this. It is what caught the AG dye failure's root cause faster
-than guessing would have, and what the 2026-09-22 audits ran by hand each time. If it is not yet
-committed, do the same cross-check manually before merging (see AUDIT-2026-09-22.md section 1/10
-for the method) rather than skipping it.
+**Run `tools\slot-check.ps1` before merging** (any branch that touches `UploadAcidConstants`,
+`cbuffer AcidCB` or any HLSL literal; no GPU, <1 s; exit 1 = do not merge). Every packed acid
+scalar has a NAME in `src\acid_slots.h` (one row: name, float4, component). The upload writes
+`slot(LA_<NAME>, v)`; the acid HLSL reads `LA_<NAME>` (a define `kAcidSlotMacros` hands to
+D3DCompile) — never `laP13.x`. The checker fails on a slot written but unread, read but unwritten,
+written twice, two names on one component, any raw `laP<n>.<c>`, C++/HLSL cbuffer order mismatch,
+a stale comment table, or a literal piece over 16000 bytes; it also prints the free components and
+the three largest literals. New key: add a row, `slot(...)` it, read it, then
+`tools\slot-check.ps1 -Fix` regenerates the cbuffer comment table in `shaders.h`.
 
 ## 4. Current state
 

@@ -961,3 +961,11 @@ sat (what the dark fluid receives), and the dye then rides the ambient, not the 
 structural answer to BK (sense of darkness with bright colours) rather than a value tweak. Scope
 with an Opus executor after the variation sheet and the user's pick; needs a headless A/B then a
 live look. Not started.
+BL refs (user, 18:40, "almost like this"): reference/shots/photos/bl-biolum-ref-1.jpg, -2.jpg
+(bioluminescent plankton on night beaches: the water GLOWS electric blue by itself, brightest in
+the churned foam edges and sparkles, everything else near black or a dim warm horizon). The model
+in one line: the colour is EMISSIVE and lives in the oil; the surround is dark and only ambient-lit;
+brightness is concentrated at edges/turbulence (the seams, droplet rims, crust) rather than flat
+fields. So BL = oil_fluor emissive under the lamp + dim ambient fluid + edge-weighted glow, with the
+flat film level pulled down so the glow reads against dark. This supersedes the value-tweak
+reading of BK; the maroon/dim dye variants still inform the ambient term.

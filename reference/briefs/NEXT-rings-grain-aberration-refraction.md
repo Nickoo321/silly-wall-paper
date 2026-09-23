@@ -734,3 +734,16 @@ rack (note 8 / AS: focus visibly moves at least every 10 s) breathes more. Keys:
 (scale per unit focus change, default 0 = today) and breath_readjust (extra on the readjust
 event). Judge live: a still cannot show it. Cheap: one uv scale in the post pass before the CA
 resample. User: "very subtle, but just an idea" (idea tier, not a request; default off; do it only when cheap).
+
+BI. **Compute audit + skeleton fluid.** User (2026-09-22 22:00): (1) "a possible audit of what
+features take a lot of compute"; (2) "this is running on a fluid sim right? if I turned on mouse
+movement it would appear. Is it possible to run it in skeleton mode to save compute, or would it
+interfere, or just turn it off altogether." Reading: the WE-parity fluid sim runs under the oil
+look; the oil uses its velocity (t3) to advect shimmer and the hue2 field, the water under the oil
+is its dye/ink (oil_drag rests the ink beneath islands), racers and weather push it. Audit task
+(auditor or an Opus executor with GPU timestamp queries): per-pass GPU time on the live preset at
+1440p (fluid sim steps, acid sim, acid display, post pass, display pass), which keys change it most,
+then test a skeleton fluid (half-res grid and/or every-other-frame step, with the oil reading the
+same velocity) and a fluid-off mode, each judged headless for what the oil loses (advection,
+water motion, mouse). Keys: fluid_res_scale, fluid_step_div, fluid_off (defaults = today).
+Not started.

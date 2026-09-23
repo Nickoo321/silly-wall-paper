@@ -918,3 +918,13 @@ film_hairs/film_dust/film_leak actually paint; the seam_* and rim_* inert keys e
 past tunings "did nothing". Fold into the ring table and FEATURES.md inert list (Sonnet, next day).
 BD verdict (user, 2026-09-23 18:10, live on the panel): "noise fix is fire." Keep: multiplicative
 density-weighted grain, averaged aberration source, spatial in-mass fades, aberration_coc 0.
+
+BC verdict (user, 09-23 18:12, live): "the shading from the external light is fire" (shadow_amt 0.40).
+BK. **Vibe: lost the sense of darkness.** User (18:12): "I think it's too bright maybe? Not just in
+the 8-bit sc. Or maybe the colours aren't working. It lost the sense of darkness in a lot of the
+references. The bright colours are fine, but it's the vibe. Don't do much yet, I'll send reference
+photos of examples." WAIT for the photos. Candidates to have ready: overall level (peak_nits / the
+film's lit level vs the references' dark surround), more and larger dark area (masses, vignette
+strength, lamp falloff so the far side goes dark), dye lum lower, film saturation vs value. Sonnet
+first: a colour-variation sheet of the dye (hue/sat/lum grid + follow + a dark variant) because
+"it's hard to say what's wrong with it" (the dyed masses).

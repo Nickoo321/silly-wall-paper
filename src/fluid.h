@@ -599,6 +599,23 @@ struct LiquidAcidConfig {
     float dropletCrustR     = 1.0f;   //  0..1        droplet_crust_r
     float massRim           = 0.0f;   //  0..1             mass_rim
 
+    // --- CAST SHADOWS (brief BC) ------------------------------------------
+    // The user: "the light should cast shadows essentially... it can be from
+    // behind, or the bottom, or the top or side." The lamp already drives the
+    // specular, the mass rim, the penumbra, the haze and the bloom; nothing
+    // in the frame blocked any of it. Every mass and every droplet now
+    // darkens the film in the direction AWAY from the lamp, tightest and
+    // darkest at the caster and softening as it runs out. The length comes
+    // from the caster's own height (a droplet's radius, a mass's thickness)
+    // and from [post] light_z, the lamp's stand-off from the dish.
+    //   shadow_amt   0 = today, and the whole block is branched out
+    //   shadow_len   how far the longest shadow reaches, as a fraction of
+    //                the screen HEIGHT, before light_z lengthens it
+    //   shadow_soft  how fast the penumbra opens up with distance
+    float shadowAmt         = 0.0f;   //  0..1           shadow_amt
+    float shadowLen         = 0.12f;  //  frac of height shadow_len
+    float shadowSoft        = 0.50f;  //  0..1           shadow_soft
+
     // --- MULTICOLOUR OIL (brief AE, the AE+AH decision) -------------------
     // Ref oil-colour-combo-ref-1.jpg, which the user rated positive: a
     // magenta film carrying soft CYAN patches that read like a light leak,
@@ -1027,6 +1044,13 @@ struct PostConfig {
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x
     float lightY     = 1.20f;     //                                 light_y
     float lightDrift = 1.0f;      // 0..1 idle motion            light_drift
+    // Where the lamp stands relative to the PLANE of the dish (brief BC).
+    // > 0 in front of / above it, so a cast shadow rakes away from the lamp
+    // and shortens as the lamp rises; 0 = in the plane, the longest shadows;
+    // < 0 behind the dish = backlit, where the shadow has no direction left
+    // and spills evenly round each caster toward the camera. Read by the
+    // acid display pass, and inert until shadow_amt is turned up.
+    float lightZ     = 0.35f;     // -1..1                           light_z
 
     // --- PERSPECTIVE CAMERA + DEPTH OF FIELD + TILT (items N + R) ---------
     // Up to here the camera was an orthographic scanner with ONE global

@@ -928,3 +928,12 @@ film's lit level vs the references' dark surround), more and larger dark area (m
 strength, lamp falloff so the far side goes dark), dye lum lower, film saturation vs value. Sonnet
 first: a colour-variation sheet of the dye (hue/sat/lum grid + follow + a dark variant) because
 "it's hard to say what's wrong with it" (the dyed masses).
+BK refs (user, 18:20, two phone photos of the panel from earlier builds, "this still looks dim in a
+way"): reference/shots/photos/bk-vibe-ref-1-cyan-black-masses.jpg (cyan film, TRUE BLACK droplets
+and masses, no lift), bk-vibe-ref-2-magenta-green-black-masses.jpg (magenta/green film, big
+BLACK masses with a soft dark halo, film bright but the frame reads dim/moody). Reading: the
+"sense of darkness" came from true-black masses and droplets occupying a large share of the frame;
+the purple dye at lum 0.44 on every mass AND every droplet lifts all of that, and the raised lamp
+light (0.8) adds to it. Candidates when the user says go: dye much darker (lum ~0.15-0.2) or dye
+only the mass edges/crust while cores stay black (dye_core_black), droplets undyed (dye_droplets 0),
+rise_bottom_light back toward 0.5, more vignette. Still waiting for the user's word.

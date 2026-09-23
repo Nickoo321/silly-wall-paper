@@ -946,3 +946,18 @@ black with a maroon cast) or dye only above a size threshold; (2) "smoky" = wide
 thickness falloff (dye_soft key) so the colour sits in the body like smoke, not a filled disc;
 (3) maroon/dim values (hue ~345, sat 0.5-0.6, lum 0.10-0.15) as the shipped default; (4) background
 darker: rise_bottom_light 0.8 -> 0.5, vignette up. Sonnet sheet has V11-V13 for (3)+(4).
+
+BL. **Lighting model: fluorescent oil under the lamp, ambient light on the fluid.** User (09-23
+18:35): "What if the lamp lights up the oil, and it's like fluorescent? And the ambient light
+brightens the fluid?" Reading: two light sources with different jobs. The LAMP drives an emissive
+(fluorescent, UV-lit dye) response in the OIL: the film and its patches glow in their own saturated
+colour, strongest where the lamp is close, falling off away from it (bright colours stay bright).
+The FLUID underneath (the ink/water = the dark masses, and the water between) is lit only by a dim
+AMBIENT term: low level, low saturation, maroon/smoky cast, never black-lifted by the lamp. Today
+the lamp lights the film from below (rise_bottom_light) and the masses are dyed the same way as
+everything else, which is why the dye lifts the darkness. Keys to scope: oil_fluor (emissive gain
+of the oil under the lamp, with the existing lamp position/falloff), ambient_level, ambient_hue/
+sat (what the dark fluid receives), and the dye then rides the ambient, not the lamp. This is the
+structural answer to BK (sense of darkness with bright colours) rather than a value tweak. Scope
+with an Opus executor after the variation sheet and the user's pick; needs a headless A/B then a
+live look. Not started.

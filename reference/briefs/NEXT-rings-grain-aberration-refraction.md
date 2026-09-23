@@ -969,3 +969,22 @@ brightness is concentrated at edges/turbulence (the seams, droplet rims, crust) 
 fields. So BL = oil_fluor emissive under the lamp + dim ambient fluid + edge-weighted glow, with the
 flat film level pulled down so the glow reads against dark. This supersedes the value-tweak
 reading of BK; the maroon/dim dye variants still inform the ambient term.
+
+BM. **Scratched acrylic lid.** User (09-23 ~19:00, refs reference/shots/photos/lid-scratch-ref-1..4.jpg:
+a scratched acrylic PC side panel lit by an LED strip, and stock close-ups of scratched plastic:
+dense fine hairline scratches, swirl / spider-web micro-scratch patterns, a few longer straight
+gouges, all invisible until the light catches them, brightest near the light and at grazing
+angles): "Like this. I thought it in the corners would look realistic." This is what the user meant
+by "the plastic effect": not ghosts and rings, but the WEAR on the cover. Spec: a new lid term,
+lid_scratch (0..1 amount), lid_scratch_density, lid_scratch_len (mix of short swirls and a few
+long straight lines), lid_scratch_corner (weight toward the corners: 0 = uniform, 1 = only the
+corners, default ~0.7), lid_scratch_soft. Scratches are FIXED to the lid (they drift with the
+lid/rig, never with the fluid), thin (1 px at 1440p, see-through), and light up ANISOTROPICALLY:
+a scratch is bright only where its direction is perpendicular-ish to the vector to the lamp/glint
+(so the pattern breathes as the lamp drifts and the readjust re-aims it; nothing sits still), with
+a soft white/neutral colour (per the earlier rule, mono by default, lid_scratch_tint 0). Two
+scales: a fine micro-swirl field (procedural, hashed, anisotropic streak noise) and a sparse set of
+long lines. Over the dark masses they should read like the acrylic photo (visible on black where
+lit); over the bright film barely. Judge live; a headless sheet at 3 densities x corner weight
+0 / 0.7 first. Relates to note 5 / AP (hairs frequent, small, see-through, clustered around
+corners) and AW (lid weak): AP's film hairs stay a separate stock artefact. Not started.

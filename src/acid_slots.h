@@ -25,6 +25,12 @@
 // goes in BOTH AcidParamsGPU (fluid.cpp) and cbuffer AcidCB (shaders.h), in
 // the same position, before mix/laMix; the checker compares the two orders.
 //
+// FULL as of brief BK (2026-09-23): laP11.w (packed droplet dye) and laP16.w /
+// laP17.w (dye_smoke / film_level) took the last three free components. The
+// NEXT key needs a new float4 laP33 (bump kAcidSlotVecs, add p33 to
+// AcidParamsGPU and laP33 to cbuffer AcidCB in the same position), or packs
+// into an existing scalar the way DYE_DROP_RGB does.
+//
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
 // are marked as such -- there is no key for them.
@@ -78,6 +84,7 @@
     X(INK_LOCK,            11, x, "ink_complement_lock, 0/1") \
     X(INK_LOCK_SPAN,       11, y, "ink_complement_span, degrees") \
     X(INK_TARGET_HUE,      11, z, "oil mean hue + 180, degrees (computed)") \
+    X(DYE_DROP_RGB,        11, w, "droplet dye r+256g+65536b (8-bit each), -1 = split off; dye_droplet_* x dye_droplets (brief BK)") \
     X(RIM_VARY,            12, x, "rim_vary") \
     X(RIM_INK_FOLLOW,      12, y, "rim_ink_follow") \
     X(RIM_ORDER,           12, z, "rim_order, 0/1") \
@@ -97,9 +104,11 @@
     X(OIL_INK_BLUR,        16, x, "oil_ink_blur") \
     X(DYE_DEPTH_W,         16, y, "dye_depth_w, clamped 0.01..4") \
     X(MEN_FILM_MIX,        16, z, "meniscus_film_mix") \
+    X(DYE_SMOKE,           16, w, "dye_smoke, 0..1 (brief BK)") \
     X(RISE_BOTTOM_LIGHT,   17, x, "rise_bottom_light") \
     X(POST_CHROMA,         17, y, "post_chroma") \
     X(POST_LIFT,           17, z, "post_lift") \
+    X(FILM_LEVEL,          17, w, "film_level, 0..1 (brief BK)") \
     X(DROPS_ON,            18, x, "1 while droplets > 0") \
     X(DROP_GRID_W,         18, y, "kDropGridW") \
     X(DROP_GRID_H,         18, z, "kDropGridH") \

@@ -638,6 +638,13 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dyeSat           = getF(S, L"dye_sat", a.dyeSat);
         a.dyeLum           = getF(S, L"dye_lum", a.dyeLum);
         a.dyeHueFollow     = getI(S, L"dye_hue_follow", a.dyeHueFollow);
+        a.dyeDroplets      = getF(S, L"dye_droplets", a.dyeDroplets);
+        a.dyeMasses        = getF(S, L"dye_masses", a.dyeMasses);
+        a.dyeDropHue       = getF(S, L"dye_droplet_hue", a.dyeDropHue);
+        a.dyeDropSat       = getF(S, L"dye_droplet_sat", a.dyeDropSat);
+        a.dyeDropLum       = getF(S, L"dye_droplet_lum", a.dyeDropLum);
+        a.dyeSmoke         = getF(S, L"dye_smoke", a.dyeSmoke);
+        a.filmLevel        = getF(S, L"film_level", a.filmLevel);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1853,6 +1860,13 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"dye_sat", a.dyeSat, 3);
         putF(S, L"dye_lum", a.dyeLum, 3);
         putI(S, L"dye_hue_follow", a.dyeHueFollow);
+        putF(S, L"dye_droplets", a.dyeDroplets, 3);
+        putF(S, L"dye_masses", a.dyeMasses, 3);
+        putF(S, L"dye_droplet_hue", a.dyeDropHue, 1);
+        putF(S, L"dye_droplet_sat", a.dyeDropSat, 3);
+        putF(S, L"dye_droplet_lum", a.dyeDropLum, 3);
+        putF(S, L"dye_smoke", a.dyeSmoke, 3);
+        putF(S, L"film_level", a.filmLevel, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

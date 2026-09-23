@@ -582,13 +582,13 @@ cbuffer AcidCB : register(b1) {
     float4 laP8;      // x SWARM_HOLES  y SWARM_DROPS  z SWARM_DENSITY  w SWARM_RIM_DARK
     float4 laP9;      // x SWARM_SCALE_HOLES  y SWARM_SCALE_DROPS  z SWARM_R_MIN  w SWARM_R_MAX
     float4 laP10;     // x SWARM_CLUMP  y SWARM_DARK  z INK_WATER  w TOE_TINT
-    float4 laP11;     // x INK_LOCK  y INK_LOCK_SPAN  z INK_TARGET_HUE  w -
+    float4 laP11;     // x INK_LOCK  y INK_LOCK_SPAN  z INK_TARGET_HUE  w DYE_DROP_RGB
     float4 laP12;     // x RIM_VARY  y RIM_INK_FOLLOW  z RIM_ORDER  w GRAIN_SHADOW_W
     float4 laP13;     // x OIL_THIN_EDGE  y OIL_EDGE_FRAC  z OIL_SPECULAR  w OIL_IRID
     float4 laP14;     // x SWARM_LENS  y MEN_FROM_INK  z OIL_GLOW  w REFR_WIDTH
     float4 laP15;     // x OIL_TRANSP  y OIL_ABSORB  z OIL_FILM_BUMP  w OIL_REFR_BODY
-    float4 laP16;     // x OIL_INK_BLUR  y DYE_DEPTH_W  z MEN_FILM_MIX  w -
-    float4 laP17;     // x RISE_BOTTOM_LIGHT  y POST_CHROMA  z POST_LIFT  w -
+    float4 laP16;     // x OIL_INK_BLUR  y DYE_DEPTH_W  z MEN_FILM_MIX  w DYE_SMOKE
+    float4 laP17;     // x RISE_BOTTOM_LIGHT  y POST_CHROMA  z POST_LIFT  w FILM_LEVEL
     float4 laP18;     // x DROPS_ON  y DROP_GRID_W  z DROP_GRID_H  w OIL_EDGE_MODE
     float4 laP19;     // x DROP_SUPPORT  y DROP_WEIGHT  z DROP_OIL_W  w DROP_RING_BASE
     float4 laP20;     // x DROP_RING_WIDTH  y DROP_RING_LIFT  z OIL_EDGE_CURVE  w DIFFR_SCALE
@@ -1851,15 +1851,72 @@ R"hlsl(
     // dyes the black, nothing else. crust and mass_rim are added to `col`
     // further down and still read against it.
     // LA_DYE_AMT = 0 (dye_sat 0 or dye_lum 0) skips the branch: byte-identical.
-    [branch] if (LA_DYE_AMT > 0.0005) {
+    // brief BK: ...unless the droplets carry a dye of their own (DYE_DROP_RGB
+    // >= 0, see below); it is -1 whenever the split is off, so this is the old
+    // test for every existing preset.
+    [branch] if (LA_DYE_AMT > 0.0005 || LA_DYE_DROP_RGB > -0.5) {
         // value 1: the amount and the thickness carry the level, so the hue is
         // as vivid deep in the mass as it is at the rim.
         float3 dyeC = InkHsv2Rgb(float3(LA_DYE_HUE, LA_DYE_SAT, 1.0));
         float dIn  = max(-sdf, 0.0);                 // p-units into the mass
         float Tw   = exp(-dIn / 0.055);              // light left after the wax
         float inkL = max(inkC.r, max(inkC.g, inkC.b));
-        float wD   = (1.0 - cov) * (1.0 - smoothstep(0.0, 0.55, inkL));
-        inkC += dyeC * (LA_DYE_AMT * lerp(0.42, 1.0, Tw) * lampG * wD);
+        float dkG  = 1.0 - smoothstep(0.0, 0.55, inkL);
+        float wD   = (1.0 - cov) * dkG;
+        float3 dyeAdd = dyeC * (LA_DYE_AMT * lerp(0.42, 1.0, Tw) * lampG * wD);
+        // ---- brief BK: masses vs droplets, and smoke ---------------------
+        // "Too bubbly": the dye on EVERY droplet is what reads as bubbles.
+        // Mass vs droplet is decided by WHICH sim object made the dark, not
+        // by size or depth (a mass's rim is as thin as a droplet): fieldB is
+        // the blob field before any droplet is punched in, so fieldB below
+        // the threshold is a mass (a gap between blobs) and a dark pixel with
+        // fieldB above it is a droplet hole in the sheet -- the same test the
+        // crust already keys off. sB is that blob-only surface as a distance;
+        // mK = 1 in mass territory, easing to 0 over 3 px (plus the smoke's
+        // reach, so a mass's own smoke is never cut by the droplet colour)
+        // into the sheet. The two territories take two colours:
+        //   masses   = dye_hue/sat/lum * dye_masses  (folded into DYE_AMT on
+        //              the CPU while the split is on)
+        //   droplets = DYE_DROP_RGB: dye_droplet_hue/sat/lum (each -1 =
+        //              inherit the mass dye) * dye_droplets, built on the CPU
+        //              and packed as three 8-bit channels r + 256 g + 65536 b
+        //              in one float (exact: < 2^24); -1 = split off.
+        // dye_smoke: the old gate is (1 - cov), a hard stop at the isoline,
+        // and the thin-edge-brightest profile, i.e. a lit disc. Smoke
+        // instead thickens GRADUALLY inward, leaks wOut out under the thin
+        // film (the film's transparency shows it, tinted), carries no edge
+        // peak and is broken into wisps by a slow fbm that both modulates the
+        // density and warps the edge. Where sdf is not a real distance (isoOk
+        // < 1) the gate falls back to plain coverage. Smoke is a MASS property
+        // (weighted by mK): a droplet is narrower than the smoke's inward ramp,
+        // so smoking it only dimmed it -- a second dye_droplets (first sheet).
+        // Split off and smoke 0 skip all of this: dyeAdd above is the old line.
+        [branch] if (LA_DYE_SMOKE > 0.0005 || LA_DYE_DROP_RGB > -0.5) {
+            float s    = saturate(LA_DYE_SMOKE);
+            float wOut = s * 0.030;
+            float sB   = (fieldB - thresh) / max(length(gradB), 1e-6);
+            float mK   = 1.0 - smoothstep(0.0, 3.0 * PX1440 + wOut, sB);
+            float prof = lerp(0.42, 1.0, Tw);
+            float gate = 1.0 - cov;
+            [branch] if (s > 0.0005) {
+                float n  = saturate(AcidFbm(pp * 6.0 + float2(LA_TIME * 0.007,
+                                                              -LA_TIME * 0.011)) * 1.143);
+                float dS = -sdf + s * 0.030 * (n - 0.5);
+                gate = lerp(gate, smoothstep(-wOut, 0.010 + 0.080 * s, dS), isoOk * mK);
+                prof = lerp(prof, lerp(prof, 0.75, s) * lerp(1.0, 0.30 + 1.40 * n, s), mK);
+            }
+            float3 massC = dyeC * LA_DYE_AMT;
+            float3 dropC = massC;
+            [branch] if (LA_DYE_DROP_RGB > -0.5) {
+                float v  = LA_DYE_DROP_RGB;
+                float cb = floor(v * (1.0 / 65536.0));
+                float cg = floor((v - cb * 65536.0) * (1.0 / 256.0));
+                float cr = v - cb * 65536.0 - cg * 256.0;
+                dropC = float3(cr, cg, cb) * (1.0 / 255.0);
+            }
+            dyeAdd = lerp(dropC, massC, mK) * (prof * lampG * gate * dkG);
+        }
+        inkC += dyeAdd;
     }
     oilC *= lerp(1.0, 0.93 + 0.14 * AcidFbm(pp * 7.0 + float2(LA_TIME * 0.010,
                                                               -LA_TIME * 0.007)),
@@ -2094,6 +2151,14 @@ R"hlsl(
         }
         alpha = lerp(cov, aS * aS, saturate(LA_OIL_THIN_EDGE));
     }
+    // ---- film_level (brief BK): the FLAT film's own light -----------------
+    // The user: one element pitch black, one the main colour, one an accent.
+    // This dims the sheet (and whatever of the ink its transparency shows)
+    // but NOT the edge light: oilR / oilThinR were copied above, so mass_rim,
+    // oil_glow, the bright-field halo and the lens highlights keep the full
+    // palette -- brief BL's "brightness at the edges, the flat field dark".
+    // The dye on the masses/droplets rides on inkC and is untouched.
+    if (LA_FILM_LEVEL < 0.9995) oilC *= LA_FILM_LEVEL;
     float3 col = lerp(inkC, oilC, alpha);
     // ---- BACKLIGHT PENUMBRA (oil_penumbra) -------------------------------
     // The lamp is under the middle of the dish: the oil right next to a black

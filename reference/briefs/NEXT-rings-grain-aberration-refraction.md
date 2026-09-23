@@ -709,3 +709,18 @@ ships 0) + density hump (film_grain_density, default 0, ships 1); aberration mec
 source, CoC-scaled) but amount/px UNCHANGED (user approved the look), separate A/B 1.8 vs 0.9 px for
 a live verdict; sheen/glint fade inside masses; fog_mass_gate (default 0, ships 0.7); acid grain
 deferred + 0 in acid-rise-12; overlay dark floor 0; gather jitter reduced. Amount re-dial live (AT).
+
+BG DONE (4b291c5): --shot writes .png (8-bit SDR, the md5 file), -hdr.png, .jxr (lossless JPEG XR
+64bpp half scRGB, real HDR in Photos) and -pq.png (16-bit Rec.2020/ST 2084 + cICP); tools\jxr-check.ps1
+verifies. Each shot ~35 MB extra; sweep build2\shots periodically.
+
+EXECUTOR REVIEW 2 of 3 (F, jxr): (1) the verification loop was the weak link: HDR-native post effects
+were tuned through an 8-bit window, which is why so many items read "weak / too distracting"; this
+should have existed before AF/AT/AW were filed. (2) WriteShotPair's single-owner shape made the change
+an hour's work. (3) the parity md5 rule is the best thing in the project. (4) 5-6 executors on one GPU
+and one main worktree is past diminishing returns: a 60 s render took 4x solo time, and an uncommitted
+file collision in main cost a decision; a queue would beat "render anyway". (5) the AC-BA list grows
+faster than it shrinks and much of it is the same complaint ("too weak / too strong"); with real HDR
+captures a batch of those may collapse into a couple of gain curves.
+Convergence so far with review 1 (C): backlog is symptoms not features (both); contention / process
+over-parallelism (both); C: ring budget + positional slots; F: 8-bit verification window.

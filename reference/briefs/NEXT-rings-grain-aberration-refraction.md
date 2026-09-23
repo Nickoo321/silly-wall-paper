@@ -762,3 +762,8 @@ its own grain field, coarse soft correlated clouds, blue-sensitive layer coarses
 per layer so it cannot lift black. Key film_grain_layers (0 = mono, today; 1 = three-layer) with
 per-layer size scale. After phase 2 lands; A/B against mono on the edge band and the open film.
 User (22:30): "a subtle amount of that is probably fine": ship it low when it lands.
+BD phase 2 note (20:45): the CoC-scaled aberration (physically right: no lateral CA on a bokeh disc)
+reads quieter than the uniform split the user approved on 09-19. Decision: aberration_coc key
+(default 0 = uniform), acid-rise-12 ships 1, plus a uniform frame bd-after-coc0.png, so the live
+choice is uniform 1.8 / CoC 1.8 / 0.9 px. Averaged tap source unkeyed. Every acid preset changes
+by the mechanism fixes (expected DIFFERS in preset-identity; fluid must MATCH).

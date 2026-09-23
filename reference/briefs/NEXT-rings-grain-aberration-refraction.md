@@ -847,3 +847,27 @@ interactions (aberration x grain x dither) no single sheet showed; "the approved
 were an artefact, tuning by eye keeps approving artefacts". First change: a standing ablation
 harness (every post effect on/off, noise per tone band). Second: taste knobs out of hand-packed bit
 fields; rg2.w is full, root-signature budget rethink due. => joins the convergence (slots, tooling).
+
+MENISCUS A/B DONE (86d1fd3, executor G): meniscus_film_mix (default 0, laP16.z). FINDING that
+corrects the audit's ring table: in acid-rise-12 the meniscus and rim_dark paint NOTHING (their
+meniscus_from_ink gate reads the ink brightness outside the oil, which is black everywhere), so
+setting either to 0 is byte-identical. The "0.85 meniscus dominates the ring" premise was wrong;
+the film-derived rim terms are what shows. The key therefore both recolours the halo from the film
+AND opens the ink gate for the meniscus only (accepted, Fable: default 0 changes nothing; the A/B
+is the judge). A/B/C = 0 / 0.5 / 1.0 in build2/shots/live/menis-*.{png,jxr} + menis-sheet.png;
+MAD A-B 0.92, B-C 3.68. G: B subtle, C strong but washes the purple dye in seam droplets; would
+pick 0.3-0.5. Rote: meniscus_film_mix 0 into the tray presets; fix the audit's ring table;
+preset-identity.ps1 uses yield 2 + 2-min lock + its own repo lock (make it main-lock, yield 8);
+kDisplaySrc chunk 2450-2703 has 862 bytes left under the literal cap: split before any edit.
+
+EXECUTOR REVIEW 5 (G): silent no-ops are the worry: two top-amplitude terms did nothing, dye_hue
+was inert before; keys get tuned, audited and argued over with no check that they move a pixel.
+First change: a "does this key do anything" test (render at 0 and at live, flag byte-identical
+pairs). Second: consolidate the boundary terms instead of adding another. Third: one integration
+branch with coordinator-driven rebases instead of merge-and-re-slot.
+
+BJ. **Key-effect harness (from reviews 4 and 5).** tools/key-effect.ps1: for a preset and a list of
+keys, render at the key's live value and at its default/0, flag byte-identical pairs (inert keys)
+and report MAD otherwise; run over every [liquid_acid]/[post] key of acid-rise-12 once, then before
+every merge for the keys touched. Superset: the ablation harness of review 4 (noise per tone band
+with each post effect off). Headless, no user needed: NIGHT candidate after BE.

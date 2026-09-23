@@ -1022,3 +1022,10 @@ subject stays sharp); the far corner falls to black with a soft, slightly ragged
 layer 2 (lamp_flare) is primarily this veiling bloom from the lamp side, keyed for amount, reach,
 warmth; the streak is secondary. The existing keyed post bloom (acid-rise-12 ships 0.30) is the
 starting point: A/B it first at 0.3 / 0.6 / 1.0 with a warm hue before adding code.
+BN addendum 2 (user, 19:03): "and the sort of hazy focus, again referring to the photo that's alone."
+The tile is HAZY but not out of focus: a diffusion / pro-mist look. The sharp image stays, and a wide,
+low-amplitude, brightness-weighted blur of it is ADDED on top, so highlights bleed into a soft haze,
+contrast drops a little everywhere near the light, yet the grid texture still resolves. This is not
+the DOF band (sharp/blurred crossfade) and not the veiling bloom alone: layer 4 = haze (0..1) +
+haze_radius + haze_warmth, applied full-frame with a mild bias toward the lamp side; centre stays
+sharp because the base image is never blurred, only veiled. A/B sheet 0 / 0.2 / 0.4 / 0.7.

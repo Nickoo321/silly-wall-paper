@@ -1047,3 +1047,17 @@ BN auditor pre-flight (2026-09-23 19:15), SUPERSEDES the layer specs above where
 - Budget: ~5 new scalars (corner_warp, corner_warp_r, bloom_warmth, glass_streaks,
   halation_threshold) packed as four 6-bit fields each in rg1.x and rg1.y; new HLSL in new literal
   pieces; slot-check.
+
+## BO. Black-mass artefacts must be luminance/colour dependent (user, 2026-09-23 19:35)
+
+User, on the 1440p dye frames: "the black one still has too much artificial looking artifacting on
+the black blob. The colors look more natural, so might have to be brightness / color dependent."
+Read: the grain / aberration / lid sheen / edge band that BD left on the masses reads as fake on a
+PURE BLACK mass and as natural on a dyed (coloured, brighter) mass. So the artefact amplitude inside
+a mass should follow the mass's own luminance and saturation: near-black => almost none, coloured
+=> today's amount. Spec: one key artefact_lum_gate (0..1, default 0 = today), in the post pass where
+BD's density/mass gates already live (fog_mass_gate, the in-mass fade), scaling film_grain,
+aberration and lid sheen/glint by smoothstep(0, gate_width, localLum) with a saturation lift, so
+dyed masses keep their texture. Proof block: crop pairs of a black mass and a dyed mass at
+0 / 0.5 / 1; measure noise std in the black-mass crop (target: falls to the film's level) and in
+the dyed crop (target: unchanged within 10%). Night-shift item; auditor pre-flight first.

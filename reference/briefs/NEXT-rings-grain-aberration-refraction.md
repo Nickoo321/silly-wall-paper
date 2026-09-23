@@ -814,3 +814,13 @@ with no trace of what is live (C ring budget + slot table, D untraced interactio
 complaint in different clothes"); (b) the verification tooling is the thing that works (parity
 md5, identity) and must be made reliable and current. Two of three: the process over-parallelises
 (C, F). => SYSTEMATIC: do BE (named slots) and make preset-identity reliable before more features.
+
+AG-b. **Dye gradients, so the masses are not all the same.** User (2026-09-22 22:57, on the dye
+sheet): "maybe medium too, but there should probably be gradients or something, so they aren't all
+the same." Today every mass is the same wax: one hue, one lum, only the thin-edge falloff varies.
+Add variation keys, defaults 0 = today: dye_lum_vary (per-mass lum spread, seeded per mass so it is
+stable while the mass lives), dye_hue_vary (per-mass hue spread, degrees), dye_thick_hue (hue
+shift with thickness inside a mass, like real dye density: thin edges warmer/lighter, cores deeper),
+and the lamp falloff (rise_bottom_light) should already darken the far side; check it does for the
+dye. Sheet: 4 masses in one frame at vary 0 / 0.3 / 0.6. Ship "medium" overall: lum around 0.36
+with spread so some read 0.28 and some 0.44. Not started (night scope = finish in-flight only).

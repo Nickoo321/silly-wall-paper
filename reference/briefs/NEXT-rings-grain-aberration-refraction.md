@@ -749,3 +749,8 @@ water motion, mouse). Keys: fluid_res_scale, fluid_step_div, fluid_off (defaults
 User direction (22:05): try the slow-dye haze idea once; if it does not work ("which I doubt"),
 then turn OFF as much of the fluid sim as possible: the oil keeps only what it provably uses
 (velocity for advection) at the cheapest rate that still looks the same. Not started.
+BD constraint (user, 22:10, photo reference/shots/photos/mass-edge-light-band-keep-phone.jpg): the
+LIGHTER BAND along a big mass's edge (thin-edge translucency: post_glow_dark / cellulose / penumbra /
+mass_rim) must stay. "It has a cool effect, the ISO issue may be doing some of the work, but it's a
+separate thing and needs to stay." Only interior lifts fade to zero. Executor told to measure the
+edge band before/after.

@@ -115,12 +115,12 @@ The population and physics of the "oil on inked water" look: how many blobs/disc
 | `[liquid_acid] flow_gain` | Flow gain (fluid drags the oil) | 0..4, step 0.05 | 1.15 | 1.15 | How strongly the sim's velocity advects the blobs |
 | `[liquid_acid] curl_drift` | Curl drift | 0..0.01, step 0.0002 | 0.0016 | 0.0016 | Analytic swirl on top, so oil still creeps in still water |
 | `[liquid_acid] repulsion` | Repulsion (same-sign blobs) | 0..3, step 0.05 | 0.55 | 0.90 | Keeps blobs from collapsing into a single mass |
-| `[liquid_acid] swarm_holes` | Hole swarm (bubbles in the oil) | 0..1, step 0.02 | 0.90 | 0 | Hundreds of water droplets trapped inside the oil |
-| `[liquid_acid] swarm_drops` | Droplet swarm (oil on the ink) | 0..1, step 0.02 | 0.55 | 0 | Small oil droplets floating on the open ink |
-| `[liquid_acid] swarm_clump` | Swarm clumping | 0..1, step 0.02 | 0.70 | 0.85 | 0 = even blanket of droplets, 1 = droplets only in patches |
-| `[liquid_acid] swarm_density` | Swarm density | 0.05..1, step 0.02 | 0.55 | 0.2674 | Fraction of swarm cells that carry a droplet |
-| `[liquid_acid] swarm_scale_holes` | Swarm hole size (higher=smaller) | 6..90, step 1 | 26.0 | 22 | Cells per unit for the hole swarm. Higher = smaller, denser holes |
-| `[liquid_acid] swarm_scale_drops` | Swarm droplet size (higher=small) | 6..90, step 1 | 34.0 | 30 | Cells per unit for the droplet swarm |
+| `[liquid_acid] swarm_holes` | Hole swarm (bubbles in the oil) | 0..1, step 0.02 | 0.90 | 0 | Hundreds of water droplets trapped inside the oil -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_drops` | Droplet swarm (oil on the ink) | 0..1, step 0.02 | 0.55 | 0 | Small oil droplets floating on the open ink -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_clump` | Swarm clumping | 0..1, step 0.02 | 0.70 | 0.85 | 0 = even blanket of droplets, 1 = droplets only in patches -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_density` | Swarm density | 0.05..1, step 0.02 | 0.55 | 0.2674 | Fraction of swarm cells that carry a droplet -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_scale_holes` | Swarm hole size (higher=smaller) | 6..90, step 1 | 26.0 | 22 | Cells per unit for the hole swarm. Higher = smaller, denser holes -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_scale_drops` | Swarm droplet size (higher=small) | 6..90, step 1 | 34.0 | 30 | Cells per unit for the droplet swarm -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
 | `[liquid_acid] rise_speed` | Rise speed (lava lamp, uv/s) | 0..0.08, step 0.001 | 0.0 | 0.0195 | Constant upward drift on every blob. 0.015 = one screen height in about 65 s. 0 = the shipped free drift |
 | `[liquid_acid] rise_wobble` | Rise wobble | 0..1, step 0.05 | 0.0 | 0.5 | A lazy sideways sway on the way up, out of step from blob to blob |
 | `[liquid_acid] rise_stretch` | Rise stretch (teardrops) | 0..1, step 0.05 | 0.0 | 0.45 | Moving blobs elongate along their travel and relax round as they slow. Small fast ones stretch most |
@@ -128,7 +128,7 @@ The population and physics of the "oil on inked water" look: how many blobs/disc
 | `[liquid_acid] rise_parallax` | Rise parallax (small = far) | 0..1, step 0.05 | 0.0 | 0.7 | Small blobs rise, sway and follow the water more slowly, as if further away. Scaled by radius against the largest disc |
 | `[liquid_acid] rise_parallax_dim` | Parallax dimming | 0..1, step 0.05 | 0.0 | 0 | Far (small) blobs are slightly darker as a depth cue. Keep it subtle; past ~0.4 they read as a different palette |
 | `[liquid_acid] oil_drag` | Oil drag on the ink | 0..1, step 0.05 | 0.0 | 0.9 | Friction under the oil: ink beneath an island is brought to rest and deflected around its rim, so the water cannot stream in underneath |
-| `[liquid_acid] oil_dye_block` | Oil blocks the ink | 0..1, step 0.05 | 0.0 | 0.7 | Ink that ends up under the oil fades out over a second or two, so the oil reads as sitting ON the water. Droplet holes are not oil and keep their ink |
+| `[liquid_acid] oil_dye_block` | Oil blocks the ink | 0..1, step 0.05 | 0.0 | 0.7 | Ink that ends up under the oil fades out over a second or two, so the oil reads as sitting ON the water. Droplet holes are not oil and keep their ink -- INERT on acid-rise-12 (why: gate not traced). |
 | `[liquid_acid] oil_viscosity` | Oil viscosity | 0..1, step 0.05 | 0.0 | 0.6 | Thick liquid: blobs lag the water, accelerate and coast slowly, breathe and sway slowly, neck together over seconds, and the droplets stop jittering |
 | `[liquid_acid] mouse_oil_mode` | Mouse oil mode (0 none 1 push 2 comb) | 0..2, step 1 | 0 | 0 | What the cursor does to the OIL (never to the ink). 0 = nothing at all, 1 = drags and parts it, 2 = a marbling comb that leaves streaks which round back up over about 3 s |
 | `[liquid_acid] mouse_oil_radius` | Mouse oil radius (uv) | 0.02..0.5, step 0.01 | 0.12 |  | Reach of the push, or the length of the comb's band along the pointer path |
@@ -181,10 +181,10 @@ The population and physics of the "oil on inked water" look: how many blobs/disc
 | `[liquid_acid] droplet_support` | *(no slider)* | — | 2.20 |  | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] hole_max` | *(no slider)* | — | 0.130 | 0.130 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] hole_min` | *(no slider)* | — | 0.030 | 0.030 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
-| `[liquid_acid] swarm_dark` | *(no slider)* | — | 0.80 | 0.35 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
+| `[liquid_acid] swarm_dark` | *(no slider)* | — | 0.80 | 0.35 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
 | `[liquid_acid] swarm_drift` | *(no slider)* | — | 1.0 |  | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
-| `[liquid_acid] swarm_r_max` | *(no slider)* | — | 0.430 | 0.420 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
-| `[liquid_acid] swarm_r_min` | *(no slider)* | — | 0.045 | 0.120 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
+| `[liquid_acid] swarm_r_max` | *(no slider)* | — | 0.430 | 0.420 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
+| `[liquid_acid] swarm_r_min` | *(no slider)* | — | 0.045 | 0.120 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
 | `[liquid_acid] swarm_rim_dark` | *(no slider)* | — | 0.55 | 0.55 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] web_max` | *(no slider)* | — | 0.260 | 0.200 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] web_min` | *(no slider)* | — | 0.110 | 0.070 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
@@ -197,16 +197,16 @@ Where every colour in the oil, the ink and the dark masses comes from: the curat
 | Key | Label | Range (min..max, step) | Default | Live (acid-rise-12) | What it does |
 |---|---|---|---|---|---|
 | `[liquid_acid] ink_shading` | Ink emboss (0 = flat bands) | 0..1, step 0.02 | 0.00 | 0.00 | How much of the fluid look's pseudo-3D shading survives. The refs are flat |
-| `[liquid_acid] ink_levels` | Ink bands (posterise) | 2..24, step 1 | 5.0 | 4 | Flat colour plateaus in the ink. Low = poster, high = smooth |
-| `[liquid_acid] ink_soft` | Ink band softness | 0.01..0.5, step 0.01 | 0.42 | 0.60 | 0 = hard steps between bands |
-| `[liquid_acid] ink_mix` | Ink palette strength | 0..1, step 0.02 | 0.88 | 0.95 | 0 = keep the normal fluid colours, 1 = full duotone ramp |
-| `[liquid_acid] ink_hue_vary` | Ink hue variation (deg) | 0..90, step 1 | 14.0 | 3 | Rotates the ramp by the dye's own hue so the ink still drifts |
+| `[liquid_acid] ink_levels` | Ink bands (posterise) | 2..24, step 1 | 5.0 | 4 | Flat colour plateaus in the ink. Low = poster, high = smooth -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
+| `[liquid_acid] ink_soft` | Ink band softness | 0.01..0.5, step 0.01 | 0.42 | 0.60 | 0 = hard steps between bands -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
+| `[liquid_acid] ink_mix` | Ink palette strength | 0..1, step 0.02 | 0.88 | 0.95 | 0 = keep the normal fluid colours, 1 = full duotone ramp -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
+| `[liquid_acid] ink_hue_vary` | Ink hue variation (deg) | 0..90, step 1 | 14.0 | 3 | Rotates the ramp by the dye's own hue so the ink still drifts -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
 | `[liquid_acid] ink_complement_span` | Complement window (deg) | 5..180, step 1 | 40.0 |  | How far the ink hue may wander from the oil's opposite. Small = strictly two-hue |
 | `[liquid_acid] hue_sweep_period` | Palette sweep (s per cycle, 0=off) | 0..1800, step 5 | 0.0 | 630 | Cross-fade through the curated vivid palette list. Long settled stretches, short fades. 0 = fixed palette |
 | `[liquid_acid] sweep_count` | Palettes in the sweep list | 1..12, step 1 | kSweepPairs | 8 | How many entries of the sweep list are used (the shipped list is 5; the tile9 set is 8) |
 | `[liquid_acid] hue_rotate_period` | Hue rotation (s per turn, 0=off) | 0..1800, step 10 | 0.0 | 3600 | Continuously rotates the whole oil palette's hue. The ink is untouched, so mono ink stays grey and the holes stay black. 0 = off |
 | `[liquid_acid] oil_saturation` | Oil saturation | 0..2, step 0.05 | 1.0 | 1.0 | Vividness of the oil palette, whichever source it came from. 1 = the authored colours |
-| `[liquid_acid] ink_gain` | Ink ramp gain | 0.3..3, step 0.05 | 2.30 | 1.30 | Maps dye brightness onto the ramp. Higher = more bright ink |
+| `[liquid_acid] ink_gain` | Ink ramp gain | 0.3..3, step 0.05 | 2.30 | 1.30 | Maps dye brightness onto the ramp. Higher = more bright ink -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
 | `[liquid_acid] toe_tint` | Ink-tinted black toe | 0..1, step 0.02 | 0.0 |  | Lifts the darkest pixels toward a dark version of the ink hue instead of neutral black |
 | `[liquid_acid] accent_mode` | Accent: 0 any size / 1 small only | 0..1, step 1 | 0 |  | Who may take the palette's 4th shade (the complement in the 80-20 palettes). 0 = whoever drew it, big masses included. 1 = only elements under the accent size, so the frame is one colour with small scattered accents |
 | `[liquid_acid] accent_max_r` | Accent max size (of disc max) | 0.05..1, step 0.01 | 0.35 |  | How small a blob has to be to carry the accent colour, as a fraction of the biggest disc. Anything larger uses the base shades |
@@ -228,8 +228,8 @@ Where every colour in the oil, the ink and the dark masses comes from: the curat
 | `[liquid_acid] dye_lum` | Dye brightness | 0..0.50, step 0.02 | 0.0 | 0.30 | How much lamp the THIN edge of a mass passes; the thick core keeps about 40% of it, which is what reads as translucent wax. Range from the dye4 sheet: under ~0.10 the mass is still black, 0.28-0.34 is the deep wax, and past ~0.45 the mass stops reading as dark at all. 0 = today's black |
 | `[liquid_acid] dye_hue_follow` | Dye follows film hue | 0..1, step 1 | 0 | 0 | 1 = Dye hue is an offset from the film's current hue, so the dye rotates with it under hue_rotate_period and the sweep and the pair stays designed. 0 = a fixed absolute hue |
 | `[liquid_acid] oil_hdr` | Oil HDR level (0 = follow ink) | 0..1.4, step 0.02 | 0.0 |  | Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's |
-| `[liquid_acid] ink_complement_lock` | Lock ink opposite the oil hue | on/off | true | 0 | Hold the ink's hue on the far side of the wheel from the oil |
-| `[liquid_acid] ink_bias` | *(no slider)* | — | 0.05 | 0.03 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
+| `[liquid_acid] ink_complement_lock` | Lock ink opposite the oil hue | on/off | true | 0 | Hold the ink's hue on the far side of the wheel from the oil -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
+| `[liquid_acid] ink_bias` | *(no slider)* | — | 0.05 | 0.03 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
 | `[liquid_acid] oil_color_1` | *(no slider — colour triple, hand-edit only)* | — | 0.902 0.278 0.157 | 0.95 0.40 0.10 | One of the oil look's up to 4 dominant blob colours (r g b). Fixed palette, used when the sweep/rotation are both off. |
 | `[liquid_acid] oil_color_2` | *(no slider — colour triple, hand-edit only)* | — | 0.976 0.400 0.078 | 0.98 0.45 0.08 | One of the oil look's up to 4 dominant blob colours (r g b). Fixed palette, used when the sweep/rotation are both off. |
 | `[liquid_acid] oil_color_3` | *(no slider — colour triple, hand-edit only)* | — | 0.859 0.204 0.098 | 0.92 0.35 0.12 | One of the oil look's up to 4 dominant blob colours (r g b). Fixed palette, used when the sweep/rotation are both off. |
@@ -248,15 +248,15 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 |---|---|---|---|---|---|
 | `[liquid_acid] rim_width` | Rim width | 0.001..0.03, step 0.0005 | 0.0013 | 0.0016 | Half-width of the dark rim band at the oil edge |
 | `[liquid_acid] rim_dark` | Rim darkness | 0..1, step 0.02 | 0.80 | 0.80 | How dark the thin rim just inside the oil edge goes |
-| `[liquid_acid] rim_vary` | Rim variation | 0..1, step 0.05 | 0.0 | 0.4 | Break the rim up: low-frequency noise on its width and on the halo, so it thickens, thins and dies out along the edge |
-| `[liquid_acid] rim_ink_follow` | Rim follows ink | 0..1, step 0.05 | 0.0 | 0.5 | The bright halo is refracted ink: scale it by how bright the ink just outside the edge is |
+| `[liquid_acid] rim_vary` | Rim variation | 0..1, step 0.05 | 0.0 | 0.4 | Break the rim up: low-frequency noise on its width and on the halo, so it thickens, thins and dies out along the edge -- INERT on acid-rise-12 (why: ink-brightness gate (haloInk=0): the ink outside the oil is black everywhere under this preset's ink_mode=water, so the rim+halo annulus this key shapes contributes zero regardless of its value). |
+| `[liquid_acid] rim_ink_follow` | Rim follows ink | 0..1, step 0.05 | 0.0 | 0.5 | The bright halo is refracted ink: scale it by how bright the ink just outside the edge is -- INERT on acid-rise-12 (why: ink-brightness gate (haloInk=0): the ink outside the oil is black everywhere under this preset's ink_mode=water, so the rim+halo annulus this key shapes contributes zero regardless of its value). |
 | `[liquid_acid] meniscus` | Meniscus (bright halo) | 0..1, step 0.02 | 0.85 | 0.85 | Thin bright ink-coloured halo just outside the oil's dark rim |
 | `[liquid_acid] meniscus_width` | Meniscus width | 0.0005..0.01, step 0.0005 | 0.0020 | 0.0020 | Half-width of the bright halo |
 | `[liquid_acid] refraction` | Refraction through the rim | 0..0.2, step 0.005 | 0.050 | 0.050 | Shifts the ink seen through the thinning oil near edges |
 | `[liquid_acid] translucency` | Oil translucency | 0..1, step 0.02 | 0.16 | 0.10 | How much the ink underneath modulates the oil fill |
-| `[liquid_acid] seam_strength` | Seam strength (dark edging) | 0..1, step 0.02 | 0.70 | 0.30 | Dark seams where the dye gradient is steep (acrylic-pour edging) |
+| `[liquid_acid] seam_strength` | Seam strength (dark edging) | 0..1, step 0.02 | 0.70 | 0.30 | Dark seams where the dye gradient is steep (acrylic-pour edging) -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
 | `[liquid_acid] seam_lo` | Seam threshold | 0..0.5, step 0.01 | 0.06 | 0.06 | Gradient magnitude a seam starts at |
-| `[liquid_acid] grain` | Film grain | 0..0.2, step 0.005 | 0.030 | 0 | Coarse animated grain over the whole frame. Dropped when the [post] pass runs with a `film_grain` of its own, so it is never a second stock on top of it (brief BD); kept where it is the only grain; paced to `film_grain_fps` |
+| `[liquid_acid] grain` | Film grain | 0..0.2, step 0.005 | 0.030 | 0 | Coarse animated grain over the whole frame. Dropped when the [post] pass runs with a `film_grain` of its own, so it is never a second stock on top of it (brief BD); kept where it is the only grain; paced to `film_grain_fps` -- INERT on acid-rise-12 (why: dropped because [post] film_grain is already running (0.10) in this preset, per this key's own stated rule). |
 | `[liquid_acid] grain_scale` | Grain coarseness (px) | 1..6, step 0.5 | 3.0 | 3.0 | Pixels per grain cell. 1 = fine, 4 = chunky macro-film |
 | `[liquid_acid] grain_shadow_weight` | Grain into shadows | 0..1, step 0.02 | 0.0 |  | Weights the grain by (1-luminance)^2 so flat bright oil stays clean |
 | `[liquid_acid] oil_edge_mode` | Edge: 0 soft film / 1 crisp | 0..1, step 1 | 0 | 0 | 0 = the film thins out over a wide band that scales with the blob size. 1 = every surface ends on the same hard isoline the droplets do, with only a thin meniscus |
@@ -274,7 +274,7 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] oil_edge_frac` | Thin-edge width | 0.02..0.40, step 0.01 | 0.14 | 0.14 | That band as a fraction of each blob's own radius |
 | `[liquid_acid] oil_specular` | Oil specular | 0..1, step 0.02 | 0.0 | 0.35 | Broad soft highlight off the lens curvature and a slow thickness ripple (the rig is backlit, so keep it low) |
 | `[liquid_acid] oil_iridescence` | Oil iridescence | 0..1, step 0.02 | 0.0 | 0.20 | Thin-film hue shimmer indexed by film thickness, strongest at the thin edges |
-| `[liquid_acid] swarm_lens` | Droplets as lenses | 0..1, step 0.02 | 0.0 | 0.80 | Trapped droplets become soft-edged holes in the film with a thin-oil fringe and a small highlight, not flat black discs |
+| `[liquid_acid] swarm_lens` | Droplets as lenses | 0..1, step 0.02 | 0.0 | 0.80 | Trapped droplets become soft-edged holes in the film with a thin-oil fringe and a small highlight, not flat black discs -- INERT on acid-rise-12 (why: swarm layers forced off: fluid.cpp zeroes LA_SWARM_HOLES/LA_SWARM_DROPS whenever droplets>0, and acid-rise-12 runs 950). |
 | `[liquid_acid] meniscus_from_ink` | Emergent halo (from the ink) | 0..1, step 0.02 | 0.0 | 1.0 | The halo takes the colour and the brightness of the ink just outside the edge, and disappears (with the dark hairline) over dark ink |
 | `[liquid_acid] meniscus_film_mix` |   halo colour from the film | 0..1, step 0.05 | 0.0 | 0 | The bright halo is the widest, strongest thing painted on a droplet's boundary, and its colour comes from the INK -- so no film-hue feature (a second hue, a seam reflect, the sweep) ever reaches it. Raised, the halo takes its colour from the FILM at that droplet instead, the same colour its lit rim already uses, so a hue2 seam colours the halos around it too, and the ink-brightness gate that hides the halo over black ink opens by the same amount. 0 = as shipped: `acid-rise-12` leaves this ink outside the oil black everywhere, so the gate is 0 and `meniscus`/`rim_dark` paint nothing regardless of this key (see the inert-keys section) |
 | `[liquid_acid] oil_glow` | Oil glow outside | 0..1, step 0.02 | 0.0 | 0.45 | Diffuse spill of the oil's own colour into the ink around it |
@@ -283,7 +283,7 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] oil_absorb` | Film absorption | 0..6.0, step 0.1 | 2.6 | 2.6 | How deeply the film absorbs. Low = a pale wash, high = a deep saturated glass |
 | `[liquid_acid] oil_film_bump` | Film thickness variation | 0..1, step 0.02 | 0.35 | 0.35 | Slow noise on the film's thickness, so it has islands of thick and thin instead of one even pane |
 | `[liquid_acid] oil_refract_body` | Refraction across the body | 0..0.04, step 0.002 | 0.0 | 0.006 | Displaces what is seen through the whole film, not only its edge, so the marbling wobbles as it passes under |
-| `[liquid_acid] oil_ink_blur` | Ink out of focus under the oil | 0..1, step 0.02 | 0.0 | 0.5 | Softens the ink seen through the film, strongest where the film is thickest |
+| `[liquid_acid] oil_ink_blur` | Ink out of focus under the oil | 0..1, step 0.02 | 0.0 | 0.5 | Softens the ink seen through the film, strongest where the film is thickest -- INERT on acid-rise-12 (why: gate not traced). |
 | `[liquid_acid] boundary_reflect_r` |   seam reflect reach | 0..0.60, step 0.01 | 0.0 | 0.33 | How far a hue2 SEAM reaches into the droplets around it, as a fraction of the screen HEIGHT. 0 = as before: a droplet carries the seam's colour only while it is standing in the seam, about one droplet across. Raised, the lit rims, lens highlights and glow of droplets this far away rotate toward the seam's own hue, fading smoothly so the nearest stay strongest. The film itself never changes and nothing is blurred |
 | `[liquid_acid] boundary_reflect_amt` |   seam reflect amount | 0..1, step 0.05 | 1.0 | 1.0 | How much of the seam's own hue a rim right beside it takes. 1 = the full seam colour. Only does anything where the reach above is above 0 |
 | `[liquid_acid] mass_rim` |   mass rim (lamp side) | 0..1, step 0.05 | 0.0 | 0.35 | A thin bright refracted rim on the lamp side of a mass edge, so a mass reads as a translucent body instead of a flat black cut-out |
@@ -303,8 +303,8 @@ How an individual blob, droplet or mass is actually rendered: its rim and menisc
 | `[liquid_acid] meniscus_offset` | *(no slider)* | — | 0.0022 | 0.0030 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] oil_texture` | *(no slider)* | — | 0.07 | 0.0759 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] rim_hdr` | *(no slider)* | — | 0.0 |  | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
-| `[liquid_acid] rim_inset` | *(no slider)* | — | 0.0013 | 0.0022 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
-| `[liquid_acid] seam_hi` | *(no slider)* | — | 0.45 | 0.70 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
+| `[liquid_acid] rim_inset` | *(no slider)* | — | 0.0013 | 0.0022 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: ink-brightness gate (haloInk=0): the ink outside the oil is black everywhere under this preset's ink_mode=water, so the rim+halo annulus this key shapes contributes zero regardless of its value). |
+| `[liquid_acid] seam_hi` | *(no slider)* | — | 0.45 | 0.70 | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. -- INERT on acid-rise-12 (why: ink_mode=bands-only code path skipped: acid-rise-12 runs ink_mode=water (the shared InkWater() branch), so this key's block in kDisplaySrc never executes). |
 | `[liquid_acid] seam_scale` | *(no slider)* | — | 2.6 |  | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] speckle_scale` | *(no slider)* | — | 240.0 |  | No control in the settings window — read from the ini as a float (`main.cpp`), no help text in `settings.cpp`. |
 | `[liquid_acid] meniscus_color` | *(no slider — colour triple, hand-edit only)* | — | 0.353 0.918 0.894 (bright cyan) | 0.02 0.02 0.02 | RGB of the bright meniscus halo, when meniscus_from_ink is off. |
@@ -335,7 +335,7 @@ The virtual lens the whole scene is shot through: focus depth, tilt and field cu
 | `[post] focus_tilt` | Focus tilt | 0..2, step 0.05 | 0.0 | 0.26 | Slants the surface of focus (Lensbaby / freelensing): a strip of sharpness across the frame with the focus falling off smoothly to either side. 0 = level |
 | `[post] focus_tilt_angle` | Focus tilt angle (deg) | -180..180, step 5 | 0.0 | 25 | Which way that strip runs. With a readjustment period set, this is the angle it is re-aimed around |
 | `[post] focus_band_px` | Sharp band width (px at 1440p) | 40..1200, step 20 | 260.0 | 340 | How wide the sharp strip is on screen. Wide is a gentle depth of field, narrow is the freelensing sliver |
-| `[post] focus_tilt_period` | Refocus period (s, 0 = never) | 0..300, step 5 | 0.0 | 75 | Mean seconds the focus plane holds still before somebody re-tilts the lens. Randomised around this, so it never feels scheduled. 0 = the lens is bolted down |
+| `[post] focus_tilt_period` | Refocus period (s, 0 = never) | 0..300, step 5 | 0.0 | 75 | Mean seconds the focus plane holds still before somebody re-tilts the lens. Randomised around this, so it never feels scheduled. 0 = the lens is bolted down -- INERT on acid-rise-12 (why: time/motion-named key: a 10 s still at 720p cannot show a slow or periodic effect). |
 | `[post] focus_tilt_move_s` | Refocus move (s) | 0.2..4, step 0.1 | 1.4 | 1.4 | How long one readjustment takes. A second or two, eased, with a slight overshoot and settle -- a hand letting go of a lens barrel |
 | `[post] camera_fov` | Camera field of view (deg) | 0..90, step 2 | 0.0 | 28 | 0 = an orthographic scanner, every ring a symmetric circle. Above 0 the dish is seen from a lens at the tip of a view cone: off-axis rings foreshorten toward the axis, their far wall reads thicker and their highlight swings to the side facing the axis |
 | `[post] camera_axis_x` | Optical axis x | 0..1, step 0.02 | 0.5 | 0.5 | Where the optical axis meets the dish: the one point seen face on, and the centre the field curvature and the tilt are measured from |
@@ -343,7 +343,7 @@ The virtual lens the whole scene is shot through: focus depth, tilt and field cu
 | `[post] psf_px` | Point spread (px at 1440p) | 0..6, step 0.1 | 0.0 | 1.0 | The floor under the defocus radius, applied whatever the focus: no lens resolves a point to a point, so the sharpest thing in the frame is still this wide. At 1 px and up an in-focus edge can never come out as stair-stepped coverage AA |
 | `[post] vignette_wander` | Vignette wander | 0..1, step 0.05 | 0.0 | 0.6 | Lets the vignette's centre follow the rig's lens, so the darkest corner turns over minutes instead of sitting in one corner of the panel for hours. 0 = pinned to the middle |
 | `[post] pixel_shift_px` | Pixel-shift orbit (px at 1440p) | 0..8, step 0.5 | 0.0 | 3 | The OLED safety net under everything else: the whole finished frame walks a slow closed orbit of this radius, a few thousandths of a pixel per frame, so no feature ever holds one pixel. Invisible, and still moving |
-| `[post] rig_readjust` | Rig readjust reach | 0..1, step 0.05 | 0.0 | 0.5 | How far the lamp and the lens centre re-aim when the focus readjusts. 0 = only focus and tilt move; above 0 the whole rig moves as one body on the same eased spring, which is the point of having a rig |
+| `[post] rig_readjust` | Rig readjust reach | 0..1, step 0.05 | 0.0 | 0.5 | How far the lamp and the lens centre re-aim when the focus readjusts. 0 = only focus and tilt move; above 0 the whole rig moves as one body on the same eased spring, which is the point of having a rig -- INERT on acid-rise-12 (why: time/motion-named key: a 10 s still at 720p cannot show a slow or periodic effect). |
 
 ## 6. Lid
 
@@ -356,7 +356,7 @@ The transparent cover glass over the dish: its ghost reflections, concentric rin
 | `[post] lid_ghost_spread` |   lid ghost spread | 0..2, step 0.05 | 1.0 | 1.0 | How far the ghost chain runs along the line from the lamp reflection through the optical centre |
 | `[post] lid_rings` |   lid ring ghosts | 0..1, step 0.05 | 0.0 | 0.25 | Concentric coloured arcs -- the field reflected off a curved element (the LAPD optics look) |
 | `[post] lid_sheen` |   lid sheen | 0..1, step 0.05 | 0.0 | 0.04 | A very wide, very weak warm smear where the lamp catches the cover |
-| `[post] lid_sheen_px` |   lid sheen width (px) | 40..1400, step 20.0 | 420.0 | 400 | Width of that smear, in px at 1440p |
+| `[post] lid_sheen_px` |   lid sheen width (px) | 40..1400, step 20.0 | 420.0 | 400 | Width of that smear, in px at 1440p -- INERT on acid-rise-12 (why: gate not traced). |
 | `[post] lid_glint` |   lid glint | 0..1, step 0.05 | 0.0 | 0.15 | The lamp's own reflection in the cover: a soft core with a wide amber halo |
 | `[post] lid_iris` |   lid iridescence | 0..1, step 0.05 | 0.0 | 0.22 | Interference colours of the thin oil film on the cover, visible only across the sheen |
 | `[post] lid_refract_px` |   lid refraction (px) | 0..12, step 0.5 | 0.0 | 2.5 | How much the uneven cover wobbles its own reflections (the transmitted picture is left alone) |
@@ -390,9 +390,9 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] bloom` | Bloom (wide, weak) | 0..1, step 0.02 | 0.0 | 0.30 | The bright film bleeds a very wide, very weak wash into the black. Its radius breathes and the wash drifts with the lamp |
 | `[post] bloom_px` | Bloom radius (px at 1440p) | 40..400, step 5 | 140.0 | 140 | How far that wash spreads |
 | `[post] film_dust` | Film dust | 0..1, step 0.02 | 0.0 | 0.10 | Specks of dust on the film: sparse bright points, a new scattering every film frame. Additive and weighted into the dark, so they are stars on the black and nothing on the bright film |
-| `[post] film_hairs` | Film hairs | 0..1, step 0.02 | 0.0 | 0.12 | How often a curly hair is caught in the gate. Each one sticks for a few seconds, flutters, and is gone |
+| `[post] film_hairs` | Film hairs | 0..1, step 0.02 | 0.0 | 0.12 | How often a curly hair is caught in the gate. Each one sticks for a few seconds, flutters, and is gone -- INERT on acid-rise-12 (why: gate not traced). |
 | `[post] film_scratches` | Film scratches | 0..1, step 0.02 | 0.0 | 0 | Faint near-vertical scratches that persist for a stretch, drift sideways and disappear |
-| `[post] film_leak` | Film light leak | 0..1, step 0.02 | 0.0 | 0.06 | A coloured leak at one edge -- warm core, cool fringe, soft bands -- that swells and dies, and does not come back every time |
+| `[post] film_leak` | Film light leak | 0..1, step 0.02 | 0.0 | 0.06 | A coloured leak at one edge -- warm core, cool fringe, soft bands -- that swells and dies, and does not come back every time -- INERT on acid-rise-12 (why: gate not traced). |
 | `[post] film_artefact_rate` | Film artefact rate (s) | 1..30, step 0.5 | 5.0 | 5 | How long one population of hairs lasts. Scratches change three times slower, the leak five times slower, the dust every film frame |
 | `[post] film_noise` | Film noise | 0..1, step 0.01 | 0.0 | 0 | A second, finer and faster noise layer under the coarse grain: the emulsion's own fizz as against the stock's grain structure |
 | `[post] film_noise_size` | Film noise size (px at 1440p) | 0.5..4, step 0.25 | 1.0 | 1 | Cell size of that finer layer, in px at 1440p |
@@ -528,7 +528,23 @@ which does reach the frame — confirmed by a hue-vs-hue delta sheet (max|delta|
 pixels differ by more than 2), not merely re-asserted. It was listed here because the two earlier
 attempts patched a part of the ink ramp that is dead code under this preset's `ink_mode = water`.
 
+### Brief BJ's 30-key sweep
+
+`reference/reports/key-effect-acid-rise-12-1d2786a.md` (brief BJ, `tools/key-effect.ps1`) rendered
+`acid-rise-12` at its live value against each key's fluid.h/settings.cpp default and found 30 keys
+byte-identical (MAD 0.000): every `ink_*`/`seam_strength`/`seam_hi` key (dead code — this preset's
+`ink_mode = water` skips the whole `ink_mode == bands` branch in `kDisplaySrc`), every `swarm_*` key
+plus `swarm_lens` (the procedural swarm layers are zeroed in `fluid.cpp` whenever `droplets > 0`,
+and this preset runs 950), `rim_vary`/`rim_ink_follow`/`rim_inset` (the same `haloInk` ink-brightness
+gate as `meniscus`/`rim_dark` above — see line 514 — zeroes the whole rim+halo annulus these three
+only shape), `grain` (dropped per its own rule above because `[post] film_grain` is already running),
+and `rig_readjust`/`focus_tilt_period` (time/motion-named keys — a 10 s still can't show a slow or
+periodic effect). Each of these has its own inline "INERT on acid-rise-12 (why: ...)" note next to
+its entry above. Five more from the same sweep — `oil_ink_blur`, `oil_dye_block`, `film_hairs`,
+`film_leak`, `lid_sheen_px` — were also byte-identical but the report gives no reason and none was
+traced for this pass; their inline notes say "gate not traced".
+
 ## Totals
 
-**412 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **340 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **10 inert or unverified** in the current live preset.
+**412 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **340 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
 

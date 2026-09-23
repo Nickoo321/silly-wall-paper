@@ -102,13 +102,23 @@ kDisplaySrc with d3dcompiler_47.dll (no build) and prints IDENTICAL/DIFFERS per 
 
 ## 4. Current state
 
-Live = `acid-rise-12` on main @ `fd81f49`. Looks = tray presets (`style=fluid|liquid_acid|ink`).
+Live = `acid-rise-12` on main @ `1553a7f`, `dye_lum` reverted to 0 ("black masses back for now" —
+the user's call after BK's "too bubbly" feedback tonight; it ran 0.44 earlier in the day). Looks =
+tray presets (`style=fluid|liquid_acid|ink`).
 Oil look's stack, one line each: sim (racers, coalescence, big rings, conserve_mass, weather,
 residue, crust) · per-droplet depth + tilted focus surface + DOF · real lateral CA · halation ·
 fog/bloom · lid (ghosts/rings/sheen/iris/glint) · V3 motion (shimmer advected by t3, vignette
 wander, pixel-shift orbit, rig readjust) · film grain at 24 fps · hue2 field (second hue, rotation
 not blend, pair rotates, wobble, seeded off screen below the edge and rising) · dyed masses (the
 negative space is a translucent purple wax, not black — dye_hue/sat/lum in the display pass, AG).
+
+Render throttle (supersedes section 1's flat "renders never wait" framing): `--shot-yield 30`
+while the user is at the PC, `8` once idle 25 min, `2` once asleep.
+
+In flight, no code landed yet: `fw-scratch` (branch `scratch`) for BM's scratched-acrylic lid;
+`fw-bk` (branch `bk`) for BK's darkness levers (candidate keys `dye_droplets`/`dye_smoke`, so
+droplets stay dark while masses keep colour). Queued ahead of both: a dye colour-variation sheet
+(hue/sat/lum grid + `dye_hue_follow` + a dark variant), which the brief wants done first.
 
 ## 5. Open items AC-BA (`reference\briefs\NEXT-rings-grain-aberration-refraction.md`)
 

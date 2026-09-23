@@ -795,3 +795,22 @@ reads quieter than the uniform split the user approved on 09-19. Decision: aberr
 (default 0 = uniform), acid-rise-12 ships 1, plus a uniform frame bd-after-coc0.png, so the live
 choice is uniform 1.8 / CoC 1.8 / 0.9 px. Averaged tap source unkeyed. Every acid preset changes
 by the mechanism fixes (expected DIFFERS in preset-identity; fluid must MATCH).
+
+AG DONE (c5e78d3, executor D): dye applied to inkC after the lamp ramp in the display pass (ink_mode
+water: the banded ink ramp was dead code for this preset, hence three failed attempts). acid-rise-12
+ships dye_hue 285 / sat 0.8 / lum 0.30 / follow 0; dye_lum slider 0..0.50. Sheet build2/shots/live/
+dye4-sheet.png, frames dye4-*-frame*.png. Open: dye_hue_follow A/B across the 8-pair sweep (wax
+and film sit close on the violet pair). preset-identity.ps1 timed out once after the reboot
+(needs a look).
+
+EXECUTOR REVIEW 3 of 3 (D, dye): (1) the look is strong: purple wax against magenta/green film is
+the lava-lamp read; (2) main risk = untraced interaction: many features share inkC / col / the rim
+terms, the dye bug was a guess about which path is live; (3) the literal cap and the full cbuffer
+are real limits: named slots or a second constant buffer; (4) parity + preset-identity are the
+most valuable tooling, make identity reliable and diff against a CURRENT baseline; (5) fixed-hue
+choices must be checked across the whole 8-pair sweep, not one frame.
+CONVERGENCE (C, F, D): all three name the same two things: (a) shared pixels / positional slots
+with no trace of what is live (C ring budget + slot table, D untraced interaction, F "same
+complaint in different clothes"); (b) the verification tooling is the thing that works (parity
+md5, identity) and must be made reliable and current. Two of three: the process over-parallelises
+(C, F). => SYSTEMATIC: do BE (named slots) and make preset-identity reliable before more features.

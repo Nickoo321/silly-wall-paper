@@ -894,3 +894,14 @@ CAST SHADOWS chunk of kDisplaySrc has 858 bytes left: split it in BE before any 
 written back, AGENTS.md contradicts the card (bloom, lock). Auditor's minimum for BE = a slot
 checker script run on every merge; for BJ = a scoped md5 loop at 1280x720 / 10 s labelled "inert
 on this frame".
+
+BE DONE (1d2786a, executor H): src/acid_slots.h is the single table of the 129 packed acid
+scalars; C++ writes slot(LA_NAME, v), HLSL reads LA_NAME via D3DCompile defines on the acid PSO
+only; tools/slot-check.ps1 (PASS, -Fix regenerates the cbuffer decl + comment table) runs before
+every merge; CAST SHADOWS chunk split (largest literal 14211). Zero visual change proven three
+ways: parity md5, identity MATCH on all rows, compiled bytecode identical for all six shaders.
+Free components: laP11.w, laP16.w, laP17.w.
+EXECUTOR REVIEW 7 (H): strongest = the checking tools; weakest = ~140 KB of HLSL as C++ strings
+(literal cap, splits, no includes): move to .hlsl files compiled/embedded at build = first change;
+BJ next most valuable; docs heavy and repetitive, turn more into merge-time checks.
+BJ IN PROGRESS (Sonnet, 00:50): tools/key-effect.ps1 + a report on acid-rise-12.

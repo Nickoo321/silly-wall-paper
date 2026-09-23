@@ -209,6 +209,25 @@ struct LiquidAcidConfig {
                                     // ink's own brightness, its width a few %
                                     // of the lens radius. On dark ink the halo
                                     // AND the hairline vanish.   meniscus_from_ink
+    // The meniscus replaces up to `meniscus` (0.85 live) of the boundary
+    // pixel and, at meniscus_from_ink 1, its colour is derived from the INK --
+    // so it is structurally immune to every FILM-hue feature (hue2, the seam
+    // reflect, the sweep), while the two terms that do carry the film's colour
+    // outward peak at 0.098 and 0.072 (AUDIT-2026-09-22 section 3). This mixes
+    // the halo's colour toward the film colour the rim terms already use
+    // (oilR, so it carries a hue2 seam where there is one), lifted exactly the
+    // way the ink path lifts: only the colour SOURCE moves -- the band's
+    // shape, width and centre are untouched. It also opens, by the same
+    // amount, the ink-brightness gate meniscus_from_ink puts on the halo:
+    // that gate exists so a foreign INK colour is never stroked onto black
+    // ink, and once the colour is the film's it is guarding nothing. It has
+    // to open, or the key does nothing here: in acid-rise-12 the ink outside
+    // the oil is black in every pixel, so the gate is 0 everywhere and the
+    // meniscus -- the 0.85 at the top of the ring stack -- paints NOTHING
+    // today (measured 2026-09-22: meniscus 0 is byte-identical to meniscus
+    // 0.85; so is rim_dark 0, which the same gate kills). The dark hairline
+    // keeps the original gate. 0 = today, byte-identical.
+    float meniscusFilmMix = 0.0f;   // 0..1                  meniscus_film_mix
     float oilGlow     = 0.0f;       // diffuse spill of the oil's colour into
                                     // the ink outside it, never a line  oil_glow
     float refractionWidth = 0.0f;   // rim_width multiplier for the refraction

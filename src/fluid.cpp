@@ -5014,7 +5014,8 @@ void FluidRenderer::UploadAcidConstants() {
     // skips the whole probe.
     float p31[4] = { fminf(fmaxf(a.crustHueMix, 0.0f), 1.0f),
                      fmaxf(a.boundaryReflectR, 0.0f),
-                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), 0.0f };
+                     fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f),
+                     fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f) };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the

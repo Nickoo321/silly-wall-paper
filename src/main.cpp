@@ -524,6 +524,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.oilIrid      = getF(S, L"oil_iridescence", a.oilIrid);
         a.swarmLens    = getF(S, L"swarm_lens", a.swarmLens);
         a.meniscusFromInk = getF(S, L"meniscus_from_ink", a.meniscusFromInk);
+        a.meniscusFilmMix = getF(S, L"meniscus_film_mix", a.meniscusFilmMix);
         a.oilGlow      = getF(S, L"oil_glow", a.oilGlow);
         a.refractionWidth = getF(S, L"refraction_width", a.refractionWidth);
         a.oilTransparency = getF(S, L"oil_transparency", a.oilTransparency);
@@ -1731,6 +1732,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"oil_iridescence", a.oilIrid, 3);
         putF(S, L"swarm_lens", a.swarmLens, 3);
         putF(S, L"meniscus_from_ink", a.meniscusFromInk, 3);
+        putF(S, L"meniscus_film_mix", a.meniscusFilmMix, 3);
         putF(S, L"oil_glow", a.oilGlow, 3);
         putF(S, L"refraction_width", a.refractionWidth, 2);
         putF(S, L"oil_transparency", a.oilTransparency, 3);

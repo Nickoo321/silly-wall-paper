@@ -988,3 +988,27 @@ long lines. Over the dark masses they should read like the acrylic photo (visibl
 lit); over the bright film barely. Judge live; a headless sheet at 3 densities x corner weight
 0 / 0.7 first. Relates to note 5 / AP (hairs frequent, small, see-through, clustered around
 corners) and AW (lid weak): AP's film hairs stay a separate stock artefact. Not started.
+
+## BN. Instrument optics: distorted corners, lamp flare, razor-sharp centre (user, 2026-09-23 18:55)
+
+User: "This needs to still look artifacty. Like the corners need to almost look oddly distorted,
+like a real microscope, like the LAPD microscopes and that reader thing; maybe some lens flare or
+something from the light across the screen; but underneath it should still look pretty clear,
+specifically in the center, like it's not out of focus." References: endgoal-ref-13-br2049-lapd-optics
+(six-up: the field edges smear and colour-fringe, a hot lamp bloom, thin bright streaks across the
+glass, the centre content stays readable) and endgoal-ref-8-br2049-denabase-tube (reader: the frame
+edges refract/blur green-blue, the centre stays legible). Ideas, not targets.
+
+Three keyed layers, all default 0 (identity holds), post pass, each with its own A/B sheet:
+1. corner_warp (0..1) + corner_warp_r (start radius 0.4..0.9) + corner_smear (0..1): radial field
+   curvature: outside the radius the image stretches tangentially and blurs along the radius, with a
+   small colour split growing toward the corner (reuse the lateral-CA machinery, rg2). Centre pixels
+   untouched by construction. Not a rim: no visible instrument edge (standing rule).
+2. lamp_flare (0..1) + lamp_flare_len + lamp_flare_hue: an anamorphic streak plus soft bloom from the
+   lamp position (rig rg0 lamp centre, [post] light_z) across the screen, low amplitude, slow drift
+   with the existing V3 motion so it never sits still on the OLED. Occluded a little by the masses.
+3. glass_streaks (0..1): one or two thin bright wavy lines across the frame like the LAPD sheet (light
+   reflecting off the glass lid), tied to the lid layer so they move with the lid tilt.
+Constraints: centre sharpness unchanged (measure a centre crop MAD = 0 at all keys), subtle at
+shipped values, gradable; ABL: keep the flare small in area. Queue after BK (roles) and BL (neon);
+same executor rules. Slots: post rig block is nearly full (rg1.xy free after BM), plan a packed float.

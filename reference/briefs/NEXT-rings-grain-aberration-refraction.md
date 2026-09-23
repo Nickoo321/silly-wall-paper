@@ -746,4 +746,6 @@ is its dye/ink (oil_drag rests the ink beneath islands), racers and weather push
 then test a skeleton fluid (half-res grid and/or every-other-frame step, with the oil reading the
 same velocity) and a fluid-off mode, each judged headless for what the oil loses (advection,
 water motion, mouse). Keys: fluid_res_scale, fluid_step_div, fluid_off (defaults = today).
-Not started.
+User direction (22:05): try the slow-dye haze idea once; if it does not work ("which I doubt"),
+then turn OFF as much of the fluid sim as possible: the oil keeps only what it provably uses
+(velocity for advection) at the cheapest rate that still looks the same. Not started.

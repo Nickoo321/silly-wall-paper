@@ -958,6 +958,24 @@ struct PostConfig {
     // and film_noise quantise their time to this.
     float filmGrainFps   = 24.0f;  // patterns per second     film_grain_fps
     float filmGrainColor = 0.0f;   // 0 mono .. 1 RGB       film_grain_color
+    // ---- brief BD: the grain must not read as high-ISO artifacting -------
+    // NOT the same key as film_grain_color, which asks for three independent
+    // noises. This one is about HOW one noise is applied. Today the grain is
+    // an ADDITIVE offset in the sRGB-encoded domain, the same number on all
+    // three channels -- which is not luminance-only: an equal encoded step on
+    // unequal channels moves the pixel's saturation, and near black it is
+    // clamped at zero, which lifts the mean as well. At 0 the grain instead
+    // SCALES the encoded pixel, so its channel ratios (hue and saturation)
+    // survive exactly, it cannot lift a black pixel, and it cannot clip.
+    // 1 = today, and every existing preset is byte-identical at that value.
+    float filmGrainChroma  = 1.0f; // 1 additive (today) .. 0 hue-preserving   film_grain_chroma
+    // ...and how the amplitude is weighted. Today's curve is full from about
+    // 0.06 encoded up and still has a 0.15 FLOOR on absolute black, so a
+    // 1-nit mass carries the same grain as a 100-nit film -- which measured
+    // at 4-6x pixel-to-pixel brightness in a dark mass against 1.2x on the
+    // open film. At 1 the weight becomes the stock's own D-log-E hump: zero
+    // in the dense shadow, peak in the mid-tones, gone on a clean highlight.
+    float filmGrainDensity = 0.0f; // 0 today's curve .. 1 density hump      film_grain_density
     // Chromatic aberration, LATERAL and per-edge (the reference's warm/cool
     // fringe): R and B displaced in opposite directions along the local edge
     // normal, G untouched, so every hard edge gets one warm and one cool side.
@@ -966,6 +984,14 @@ struct PostConfig {
     float aberration     = 0.0f;   // 0..1 master                aberration
     float aberrationPx   = 0.8f;   // px at 1440p             aberration_px
     float aberrationField= 0.5f;   // extra toward the frame edge  aberration_field
+    // brief BD. The split is a DIFFERENCE of two resamples of the SHARP
+    // source added to a picture that has already been defocused, so at 0 it
+    // stays razor-sharp on a bokeh disc -- which no lens does. At 1 it is
+    // scaled by the pixel's own circle of confusion against the diffraction
+    // floor: full on the sharp slice, gone where the picture is soft.
+    // 0 = the uniform split the user approved on 2026-09-19, so any preset
+    // that does not name this key keeps exactly that.
+    float aberrationCoc  = 0.0f;   // 0 uniform (today) .. 1 fades with the blur  aberration_coc
     // A slight darkening toward the corners -- the field stop, never a circle.
     float vignette       = 0.0f;   // 0..1                         vignette
     // Lens defocus on the isolines themselves (the user: "these edges are way
@@ -1039,6 +1065,14 @@ struct PostConfig {
     // of slow sines gives the frame an idle animation of its own.
     float fog        = 0.0f;      // 0..1 haze master                fog
     float fogPx      = 700.0f;    // 1/e distance, px at 1440p       fog_px
+    // The haze is the WATER, and a dye mass floats in FRONT of it, so the
+    // glow has no business shining through the middle of one (brief BD: the
+    // post lifts were measured at 47% of a dark mass's level). At 0 the haze
+    // lands wherever it is dark, which is today's behaviour; turned up, a
+    // pixel that is dark AND whose wide surroundings are dark -- i.e. deep
+    // inside a mass -- keeps its black, while a dark pixel beside bright film
+    // is the water itself and still glows.
+    float fogMassGate= 0.0f;      // 0 today .. 1 no haze inside masses  fog_mass_gate
     float bloom      = 0.0f;      // 0..1 wide wash master           bloom
     float bloomPx    = 140.0f;    // its radius, px at 1440p         bloom_px
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x

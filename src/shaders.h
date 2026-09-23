@@ -456,7 +456,7 @@ Texture2D<float4> Dye : register(t0);
 cbuffer MirrorCB : register(b3) {
     float4 mrP0;   // x mode     y segments  z aspect         w time
     float4 mrP1;   // xy centre              z rotate_period  w drift
-    float4 mrP2;   // x soft     y source    z -              w -
+    float4 mrP2;   // x soft     y source    z grainChroma    w grainDensity
     // ---- [post]: the final composite trim, shared by every look ----------
     // Same root-constants slot because it is bound on exactly the same draws
     // and needs exactly the same two numbers (time, aspect) that mrP0 already
@@ -2608,6 +2608,16 @@ R"hlsl(
     // in every reference frame the ink is visibly noisy while the flat oil
     // discs are clean, which is what real high-ISO backlit macro looks like.
     // (1 - luma)^2 -- squared, so mid-tones already lose most of the grain.
+    //
+    // brief BD: this is the look's OWN second stock, independent of
+    // [post] film_grain, and two things about it were wrong. It re-rolled
+    // once per REFRESH (frac(time)), i.e. 240 fizz per second rather than a
+    // film cadence -- it now quantises to film_grain_fps like every other
+    // noise in the build. And when the image-space pass runs WITH a grain of
+    // its own ([post] film_grain > 0) it is zeroed on the CPU, because it was
+    // living in the texture that pass resamples: the lateral aberration was taking a first
+    // difference of it on R and B and printing it as colour, which measured
+    // as 72% of all the chroma noise inside a dark mass. One stock at a time.
     float grainAmp = laP5.z;
     if (laP12.w > 0.0005) {
         float gl2 = saturate(1.0 - dot(col, float3(0.2126, 0.7152, 0.0722)));
@@ -2616,7 +2626,9 @@ R"hlsl(
     // The reference halo band is visibly GRAINY (film grain over a bright,
     // thin, refracted band); the shadow weighting above would scrub it clean.
     grainAmp *= 1.0 + haloW * 1.2 * saturate(laP14.y);
-    col += (AcidHash21(floor(i.pos.xy / max(laP5.w, 1.0)) + frac(laP6.z) * 913.7) - 0.5)
+    // ...and the pattern holds for one FRAME OF THE STOCK, not one refresh.
+    float acidGq = frac(floor(laP6.z * max(poP1.z, 1.0)) * 0.0731) * 913.7;
+    col += (AcidHash21(floor(i.pos.xy / max(laP5.w, 1.0)) + acidGq) - 0.5)
          * grainAmp;
     C = saturate(col);
     // HDR: the oil is a flat fill, so give it its own highlight level rather
@@ -2684,7 +2696,23 @@ R"hlsl(
         float lum = dot(C, float3(0.2126, 0.7152, 0.0722));
         float w   = (1.0 - smoothstep(0.55, 1.00, lum))
                   * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
-        C = max(C + (nz - 0.5) * (poP0.x * 0.5 * w), 0.0);
+        // brief BD: the same two knobs Emulsion() takes in the post pass, and
+        // for the same reasons -- this is the copy of that grain that runs
+        // when no image-space pass is on. mrP2.z = film_grain_chroma (1 = the
+        // additive step this always was), mrP2.w = film_grain_density (0 =
+        // the weight above). At the defaults the two lines below are the one
+        // line they replaced.
+        [branch] if (mrP2.w > 0.0005) {
+            float wd = smoothstep(0.10, 0.32, lum) * (1.0 - smoothstep(0.55, 1.00, lum));
+            w = lerp(w, wd, saturate(mrP2.w));
+        }
+        [branch] if (mrP2.z > 0.9995) {
+            C = max(C + (nz - 0.5) * (poP0.x * 0.5 * w), 0.0);
+        } else {
+            float3 mul = max(C * (1.0 + (nz.x - 0.5) * (poP0.x * 0.6667 * w)), 0.0);
+            float3 add = max(C + (nz - 0.5) * (poP0.x * 0.5 * w), 0.0);
+            C = lerp(mul, add, saturate(mrP2.z));
+        }
     }
     float3 lin = SRGBToLinear(saturate(C));
     // Interpret the dye in a wider gamut and convert to the swap chain's 709
@@ -2802,7 +2830,17 @@ cbuffer PostPassCB : register(b0) {
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
     float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
-    float4 rg2;   // x aberration y aberrPx(this res) z aberrField  w -
+    // rg2.w is brief BD's four knobs, PACKED the way the lid packs its own
+    // (b0's 32 constants are full and the root signature is at the 64-DWORD
+    // limit, so a new number has to fit in a slot that already exists):
+    //   grainChroma : 6 | grainDensity : 6 | fogMassGate : 6 | aberrCoc : 6
+    // Four 6-bit fields make an exact integer at most 2^24-1, which float32
+    // carries losslessly. Six bits is 1/63 of a slider that is a taste knob
+    // read once per pixel -- finer than the panel can show. The DEFAULTS are
+    // what matters: 1 / 0 / 0 / 0 quantise to 63 / 0 / 0 / 0 and unpack to
+    // exactly 1.0 / 0.0 / 0.0 / 0.0, so no preset moves by a bit because
+    // this field exists.
+    float4 rg2;   // x aberration y aberrPx(this res) z aberrField  w BD pack
     float4 rg3;   // x shimmer y shimmerPx(this res) z shiftX(uv) w shiftY(uv)
     // rg4 is THE LID (task V2), all of it, PACKED -- rg2 is the lens's
     // chromatic split and rg3 is spoken for, so the lid gets one float4 and
@@ -2857,6 +2895,16 @@ float3 LidU8(float v) {
     float b = floor(r * (1.0 / 256.0));
     return float3(a, b, r - b * 256.0) * (1.0 / 255.0);
 }
+// brief BD's four 6-bit fields, most significant first:
+// grainChroma | grainDensity | fogMassGate | aberrCoc.
+float4 BDU6(float v) {
+    float a = floor(v * (1.0 / 262144.0));
+    float r = v - a * 262144.0;
+    float b = floor(r * (1.0 / 4096.0));
+    r -= b * 4096.0;
+    float c = floor(r * (1.0 / 64.0));
+    return float4(a, b, c, r - c * 64.0) * (1.0 / 63.0);
+}
 float4 LidU7764(float v) {
     float a = floor(v * (1.0 / 131072.0));
     float r = v - a * 131072.0;
@@ -2889,14 +2937,51 @@ float3 ToLinear(float3 c) {
 // whisper), converted back to linear and scaled by whatever HDR gain this
 // pixel carries so it never fizzes on a hot core. Shared by the coarse film
 // grain and the finer, faster film_noise.
-float3 Emulsion(float3 d, float3 nz, float amt, float sdr) {
+//
+// brief BD, measured: at the shipped keys this grain spanned 64-79 PQ10 codes
+// inside a dark mass -- a 4-6x brightness ratio from pixel to pixel -- against
+// 22 codes and 1.2x on the open film. Two reasons, and `chroma` and `density`
+// are the two fixes. Both default to today's numbers and at those values the
+// arithmetic below is character-for-character what it always was, so every
+// preset that does not name them is byte-identical.
+//   chroma 1  the grain is ADDED, the same encoded number on all three
+//             channels. That is not luminance-only: an equal step on unequal
+//             channels moves the pixel's saturation, and near black the
+//             max(...,0) clips the negative half, which lifts the mean.
+//   chroma 0  the grain SCALES the encoded pixel instead. The channel ratios
+//             survive exactly, so it is luminance and nothing else; it cannot
+//             lift a black pixel and it cannot clip. It is also what film
+//             does -- grain is a fluctuation in DENSITY, i.e. in
+//             transmittance, which is multiplicative.
+//   density 0 today's weight: full from ~0.06 encoded upward, with a 0.15
+//             FLOOR on absolute black.
+//   density 1 the stock's own D-log-E hump: exactly zero in the dense shadow,
+//             peak in the mid-tones, gone again on a clean highlight.
+float3 Emulsion(float3 d, float3 nz, float amt, float sdr,
+                float chroma, float density) {
     const float3 EW = float3(0.2126, 0.7152, 0.0722);
     float3 base = d / sdr;
     float3 e    = ToSRGB(base);
     float  lum  = dot(e, EW);
     float  w    = (1.0 - smoothstep(0.55, 1.00, lum))
                 * lerp(0.15, 1.0, smoothstep(0.0, 0.06, lum));
-    float3 e2   = max(e + (nz - 0.5) * (amt * 0.5 * w), 0.0);
+    [branch] if (density > 0.0005) {
+        float wd = smoothstep(0.10, 0.32, lum) * (1.0 - smoothstep(0.55, 1.00, lum));
+        w = lerp(w, wd, saturate(density));
+    }
+    float3 e2;
+    [branch] if (chroma > 0.9995) {
+        e2 = max(e + (nz - 0.5) * (amt * 0.5 * w), 0.0);
+    } else {
+        // 0.6667 = 0.5 / 0.75: calibrated so a pixel at encoded 0.75 -- the
+        // open film in the rising presets, the level the user has already
+        // approved -- gets EXACTLY the swing the additive path gave it, and
+        // everything darker gets proportionally less. That is the whole
+        // point: the film keeps its grain, the shadow stops fizzing.
+        float3 mul = max(e * (1.0 + (nz.x - 0.5) * (amt * 0.6667 * w)), 0.0);
+        float3 add = max(e + (nz - 0.5) * (amt * 0.5 * w), 0.0);
+        e2 = lerp(mul, add, saturate(chroma));
+    }
     float3 l0   = ToLinear(e), l2 = ToLinear(e2);
     float  gain = clamp(dot(base, EW) / max(dot(l0, EW), 1e-4), 1.0, 16.0);
     return max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
@@ -2957,12 +3042,27 @@ float3 Wide(float2 uv, float2 r) {
     }
     return s / w;
 }
+// brief BD: a 2x2 box of bilinear taps, half a texel out on each diagonal --
+// a ~1.5 px average for the price of four samples. The lateral aberration
+// reads the source through this, because the source still carries the display
+// pass's own grain and a first difference of per-pixel noise taken on R and B
+// alone is coloured speckle, not a lens.
+float3 AvgTap(float2 uv, float2 t) {
+    return (Src.SampleLevel(linearClamp, uv + float2( t.x,  t.y), 0).rgb
+          + Src.SampleLevel(linearClamp, uv + float2(-t.x,  t.y), 0).rgb
+          + Src.SampleLevel(linearClamp, uv + float2( t.x, -t.y), 0).rgb
+          + Src.SampleLevel(linearClamp, uv + float2(-t.x, -t.y), 0).rgb) * 0.25;
+}
 
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
 float4 PSMain(VSOut i) : SV_Target {
     const float3 W = float3(0.2126, 0.7152, 0.0722);
+    // brief BD's four knobs, unpacked once: x grain chroma (1 = today),
+    // y grain density curve (0 = today), z fog mass gate (0 = today),
+    // w aberration fades with defocus (0 = today's uniform split).
+    const float4 bdK = BDU6(rg2.w);
     float2 uv = i.uv;
     // ======================= V3: MOTION ====================================
     // The user's rule for this whole family: nothing may sit at a fixed screen
@@ -3088,13 +3188,40 @@ float4 PSMain(VSOut i) : SV_Target {
         float2 duv  = nz * (sp * pp0.y) * float2(1.0 / aspZ, 1.0);
         // Applied as the DIFFERENCE the displacement makes, not as a raw
         // resample: `d` already carries the defocus and the glare, and those
-        // are not in Src. On a sharp edge Src == d and this is exactly the
-        // split; in a defocused region the two samples are nearly equal and
-        // the fringe correctly fades out with the blur, which is what a real
-        // lens does -- you cannot see colour fringing on a bokeh disc.
-        float3 s0 = Src.SampleLevel(linearClamp, uv, 0).rgb;
-        d.r += Src.SampleLevel(linearClamp, uv + duv, 0).r - s0.r;
-        d.b += Src.SampleLevel(linearClamp, uv - duv, 0).b - s0.b;
+        // are not in Src.
+        //
+        // brief BD, two corrections to what this block used to claim and do:
+        //
+        // (1) The comment here said the fringe "correctly fades out with the
+        //     blur, which is what a real lens does". It did not. Both taps
+        //     came from Src, which is the SHARP display output, while `d` is
+        //     the blurred picture -- so a bokeh disc kept a razor-sharp
+        //     colour fringe, exactly backwards. The split is now scaled by
+        //     this pixel's own defocus radius against the diffraction floor,
+        //     so on the sharp slice it is what the user approved on
+        //     2026-09-19 and on an out-of-focus element it goes away.
+        //
+        // (2) Both taps are now a ~1.5 px average (AvgTap) rather than a
+        //     single texel. Src still carries the display pass's own grain,
+        //     and a first difference of per-pixel noise taken on R and B and
+        //     never on G is not a lens -- it is coloured speckle, and it
+        //     measured as 72% of all the chroma noise inside a dark mass.
+        //     Averaging first leaves the SHAPES, which are what a lateral
+        //     split is supposed to act on, and costs eight extra samples.
+        // The reference is the diffraction floor, or one texel where there is
+        // none, so "in focus" means ab = 1 and nothing about the approved
+        // sharp-slice look changes. aberration_coc 0 is the uniform split the
+        // user approved on 2026-09-19 and is the default, so this costs no
+        // preset anything until one asks for it.
+        float  ab = 1.0;
+        [branch] if (bdK.w > 0.0005) {
+            float abR = max(pp6.z, 1.0);
+            ab = lerp(1.0, abR / max(rPx, abR), saturate(bdK.w));
+        }
+        float2 ts = pp0.xy * 0.75;
+        float3 s0 = AvgTap(uv, ts);
+        d.r += (AvgTap(uv + duv, ts).r - s0.r) * ab;
+        d.b += (AvgTap(uv - duv, ts).b - s0.b) * ab;
         d = max(d, 0.0);
     }
 )hlsl"
@@ -3120,7 +3247,15 @@ R"hlsl(
         float2 lean = toL / max(length(toL), 1e-5) * float2(1.0 / asp, 1.0);
         float2 rad  = pp7.z * pp0.xy;
         float2 ctr  = uv + lean * rad * 0.30;
-        float  jt   = 6.2831853 * PHash21(i.pos.xy * 0.0271 + 7.13);
+        // brief BD: this jitter used to be the FULL circle per pixel. Twenty
+        // taps of a spatially varying quantity, angled at random per pixel and
+        // weighted into the dark, is a noisy estimator -- it measured as part
+        // of the 27% of the dark masses' luminance noise that the post lifts
+        // own, and it arrives in this block's warm tint, which is where the
+        // grey-brown speckle came from. The taps already cover the circle at
+        // 45 degrees; a jitter of HALF a tap spacing fills the gaps between
+        // them and leaves nothing else to vary.
+        float  jt   = 0.3926991 * (PHash21(i.pos.xy * 0.0271 + 7.13) - 0.5);
         float3 hot  = float3(0.0, 0.0, 0.0);
         float  hw   = 0.0;
         [unroll] for (int k = 0; k < 8; k++) {
@@ -3139,7 +3274,7 @@ R"hlsl(
             hot += sp * ex; hw += 1.0;
         }
         [unroll] for (int m = 0; m < 12; m++) {
-            float a2 = (float)m * 0.5235988 + jt * 1.7;
+            float a2 = (float)m * 0.5235988 + jt + 0.2617994;
             float3 sp = Src.SampleLevel(linearClamp, ctr + float2(cos(a2), sin(a2)) * rad, 0).rgb;
             float  ex = smoothstep(0.55, 1.05, max(sp.r, max(sp.g, sp.b)) / sdrH);
             hot += sp * ex * 0.6; hw += 0.6;
@@ -3168,6 +3303,26 @@ R"hlsl(
     // Both hang off ONE off-view light position, and that position never sits
     // still: a sum of slow sines, seconds to a minute, so the frame has an
     // idle animation of its own instead of a fixed gradient.
+    // brief BD: ONE "am I deep inside a dye mass?" test, shared by the haze
+    // below and by the lid's sheen and glint halo further down. Four taps
+    // 40 px out: if the WIDE surroundings are dark too, this pixel is inside
+    // something and a lift has no business here; if they take in bright film,
+    // it is the water beside a mass or the LIGHTER BAND along its edge, and
+    // everything stays exactly as it was. The test is spatial, not a test of
+    // the pixel's own level, which is the whole reason it cannot darken that
+    // band (the user, on the panel: "that low-key should stay, it has a cool
+    // effect"). A shape narrower than 40 px never reads as a mass at all, so
+    // droplets keep their reflections too.
+    float massDeep = 1.0;
+    [branch] if (bdK.z > 0.0005 || rg4.z > 0.5 || rg4.w > 0.5) {
+        float  sdrM = max(pp2.z, 1e-3);
+        float2 mr   = (40.0 * pp4.w) * pp0.xy;
+        float3 sw   = (Src.SampleLevel(linearClamp, uv + float2(mr.x, 0.0), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv - float2(mr.x, 0.0), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv + float2(0.0, mr.y), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv - float2(0.0, mr.y), 0).rgb) * 0.25;
+        massDeep = smoothstep(0.02, 0.18, dot(ToSRGB(max(sw, 0.0) / sdrM), W));
+    }
     [branch] if (pp5.y > 0.0005 || pp5.z > 0.0005) {
         float  tq  = pp2.y;
         float  asp = pp0.y / max(pp0.x, 1e-9);           // W/H
@@ -3186,15 +3341,23 @@ R"hlsl(
             float x  = dl / max(pp6.x, 1e-4);
             float hz = max(exp(-x) - 0.050, 0.0) / 0.950;
             float wd = 1.0 - smoothstep(0.02, 0.50, lum0);
+            // brief BD, fog_mass_gate. "Dark" is not the same question as
+            // "water". A dark pixel beside the bright film IS the water and
+            // should glow; a dark pixel deep inside a dye mass is looking at
+            // the mass, which floats in FRONT of the water, and the haze has
+            // no business shining through it. massDeep above is that test. At
+            // 0 the gate does not exist and the haze is what it always was.
+            float mg = lerp(1.0, massDeep, saturate(bdK.z));
             d += float3(1.00, 0.93, 0.86)
-               * (saturate(pp5.y) * 0.16 * hz * hz * wd * sdrL);
+               * (saturate(pp5.y) * 0.16 * hz * hz * wd * mg * sdrL);
         }
-        // (b) BLOOM. Two jittered rings of taps at a radius of 100+ px at
-        // 1440p: too few taps for a clean blur, which does not matter at a
-        // few percent, and the per-pixel angular jitter turns what banding
-        // there would be into the grain that is coming anyway. The radius
-        // breathes, the gather centre creeps, and the wash is stronger on the
-        // lamp's side, so it drifts with the light instead of sitting still.
+        // (b) BLOOM. Rings of taps at a radius of 100+ px at 1440p: too few
+        // taps for a clean blur, which does not matter at a few percent, and
+        // a half-tap-spacing angular jitter breaks up what banding there
+        // would be without turning the gather itself into noise (brief BD).
+        // The radius breathes, the gather centre creeps, and the wash is
+        // stronger on the lamp's side, so it drifts with the light instead of
+        // sitting still.
         [branch] if (pp5.z > 0.0005) {
             float  rad = pp6.y * (1.0 + 0.12 * sin(tq * 0.0197 + 0.9));
             float2 ctr = uv + float2(sin(tq * 0.0131), cos(tq * 0.0173))
@@ -3203,10 +3366,19 @@ R"hlsl(
             // droplet sitting in the black: two rings of taps at fixed radii
             // ARE two circles, and a point source lights each of them up. So
             // the taps now cover the whole disc -- four radii with Gaussian
-            // weights, and the radius itself jittered per pixel -- and a point
+            // weights, jittered in ANGLE by half a tap spacing -- and a point
             // source blooms into a smooth wash, never a halo with edges.
-            float  jit = PHash21(i.pos.xy * 0.37) * 6.2831853;
-            float  rj  = 0.80 + 0.40 * PHash21(i.pos.yx * 0.53 + 17.1);
+            // brief BD: both of these used to vary over their whole range
+            // per pixel. Twenty-four taps spread over 140 px with a per-pixel
+            // RADIUS as well as a per-pixel angle is a very noisy estimate of
+            // a very wide average, and it is weighted into the dark, so what
+            // it printed on a mass was speckle in the film's own colour. The
+            // angle keeps half a tap spacing of jitter, which is all that is
+            // needed to fill the gaps between the six taps; the radius is
+            // fixed. The wash still breathes and still creeps -- those are
+            // `rad` and `ctr` above, and they are per FRAME, not per pixel.
+            float  jit = 0.5235988 * (PHash21(i.pos.xy * 0.37) - 0.5);
+            float  rj  = 1.0;
             float3 bl  = float3(0.0, 0.0, 0.0);
             float  bw  = 0.0;
             [unroll] for (int m = 0; m < 6; m++) {
@@ -3356,8 +3528,16 @@ R"hlsl(
             float2 e2 = float2(q.x * ca + q.y * sa, -q.x * sa + q.y * ca);
             e2.x /= 2.7;                                   // drawn out along the sheet
             sheenE = exp(-dot(e2, e2) / (rs * rs));
+            // brief BD: `massDeep` here is new. The sheen was the one lid
+            // term with no fade to black at all -- a flat warm floor across
+            // the whole frame, masses included, measured at about a third of
+            // a nit of warm lift on pixels that are meant to be black (a
+            // coloured dye is brief AG, a separate feature). It keeps every
+            // bit of itself on the film and along a mass edge and gives up
+            // only the deep interior, where there is nothing for a reflection
+            // to sit on.
             d += float3(1.00, 0.88, 0.70)
-               * (M * lidC.z * 0.075 * sheenE * sdrL);
+               * (M * lidC.z * 0.075 * sheenE * sdrL * massDeep);
         }
 
         // ---- IRIDESCENCE: the thin oil film on the cover ----------------
@@ -3382,8 +3562,14 @@ R"hlsl(
             float  dd   = length((uv - lampR) * float2(aspL, 1.0));
             float  core = exp(-(dd * dd) / (0.030 * 0.030));
             float  halo = exp(-dd / 0.19);
+            // brief BD: the CORE keeps its own rules -- it is the lamp seen
+            // in the cover, a small bright thing, and the user asked for more
+            // of the lid's reflections, not less (brief AF). It is the wide
+            // amber HALO that was the lift: ~2 nits of warm haze over a third
+            // of the frame with nothing to stop it inside a mass, so that one
+            // gives up the deep interior and nothing else.
             d += (float3(1.00, 0.90, 0.72) * (core * 0.55)
-                + float3(1.00, 0.56, 0.20) * (halo * 0.13))
+                + float3(1.00, 0.56, 0.20) * (halo * 0.13 * massDeep))
                  * (M * lidD.x * sdrL);
         }
     }
@@ -3526,10 +3712,14 @@ R"hlsl(
             add += (warm * core + cool * (frng * 0.45))
                  * (bd * env * 0.20 * saturate(pp3.w));
         }
-        // the whole overlay leans into the dark: near-invisible on the film
+        // The whole overlay leans into the dark: near-invisible on the film.
+        // brief BD: the lean used to have a FLOOR of 0.10, so a speck still
+        // landed at a tenth strength on a pixel that was meant to be black.
+        // The floor is now zero -- on the bright film there is nothing to see,
+        // which is what this block's own help text always claimed.
         float sdrA = max(pp2.z, 1e-3);
         float lumA = dot(ToSRGB(d / sdrA), W);
-        d += add * (sdrA * lerp(0.10, 1.0, 1.0 - smoothstep(0.20, 0.80, lumA)));
+        d += add * (sdrA * (1.0 - smoothstep(0.20, 0.80, lumA)));
     }
     // ---- film grain, after the glass ------------------------------------
     [branch] if (pp1.y > 0.0005) {
@@ -3544,7 +3734,7 @@ R"hlsl(
             nz = lerp(nz, float3(n0, PHash21(gc + tj + 37.71),
                                      PHash21(gc + tj + 91.37)), saturate(pp2.x));
         }
-        d = Emulsion(d, nz, pp1.y, max(pp2.z, 1e-3));
+        d = Emulsion(d, nz, pp1.y, max(pp2.z, 1e-3), bdK.x, bdK.y);
     }
     // ---- film_noise: the finer, faster layer under the stock's grain -----
     // A new pattern every FRAME OF THE STOCK (film_grain_fps, ignoring the
@@ -3555,7 +3745,7 @@ R"hlsl(
         float  tq = floor(pp2.y * max(pp6.w, 1.0));
         float2 tj = frac(tq * float2(0.0891, 0.1237)) * 557.0;
         float  n0 = PHash21(nc + tj + 211.7);
-        d = Emulsion(d, float3(n0, n0, n0), pp4.y, max(pp2.z, 1e-3));
+        d = Emulsion(d, float3(n0, n0, n0), pp4.y, max(pp2.z, 1e-3), bdK.x, bdK.y);
     }
     // ---- film_stock: the stock's own colour ------------------------------
     // Lifted teal shadows, warm highlights, a slightly different curve per

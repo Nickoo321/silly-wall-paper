@@ -1656,3 +1656,65 @@ needed there.
 
 ## 2026-09-22 02:45 overnight (Fable)
 AG dye keys merged (7e0050b, e916547); dye_hue defeated by ink_hue_vary + complement lock in the display pass; acid-rise-12 dye_lum back to 0 (9420b10); dye3 fix attempted before the 03:00 stop; AE-c off-screen hue2 seeding merged b09e0bc; user notes filed AK-BA.
+
+## 2026-09-22 22:45 -- Brief BD: the high-ISO speckle in the dark masses (Opus executor, branch noise)
+
+User photo (reference/shots/photos/high-iso-noise-in-mass-phone.jpg): "it doesn't read like film, it looks
+more like high ISO artifacting". Phase 1 diagnosed it with a baseline + four ablations (aberration off, both
+grains off, cellulose off, all post lifts off) measured inside four flat dark-mass patches:
+- lateral aberration = 72% of the mass chroma noise. `d.r += Src(uv+duv).r - Src(uv).r` is a first
+  difference of the SHARP display output on R and B only (never G), so it printed every per-pixel detail --
+  above all the grain -- as colour, and painted crisp red/blue outlines onto an already-defocused picture.
+- two grains = 69% of the luma noise: `[post] film_grain` 0.11 and `[liquid_acid] grain` 0.057 (never
+  deferred, re-rolled every refresh, living in the texture the aberration resamples). Both were an equal
+  ENCODED step on R, G and B (not luminance-only), with a 0.15 amplitude floor on absolute black and full
+  amplitude from ~0.4 nits up: 64-79 PQ10 codes of pixel-to-pixel spread in a mass vs 22 on the open film.
+- post lifts (sheen with no dark fade at all, glint halo, fog, overlay floor 0.10) and per-pixel jitter in
+  the halation and bloom gathers (27% of the luma noise, warm-tinted).
+
+Phase 2 (decisions by Fable; user away):
+- `[post] film_grain_chroma` (default 1 = old additive; 0 = the grain SCALES the encoded pixel, so channel
+  ratios survive -- hue-preserving, cannot lift black, cannot clip; gain 0.6667 = 0.5/0.75 so an encoded-0.75
+  pixel, the open film, gets exactly the old swing). `[post] film_grain_density` (default 0 = old curve;
+  1 = smoothstep(0.10,0.32) x (1-smoothstep(0.55,1)), zero floor). Both in Emulsion() and in the display
+  pass's copy of the grain. At the defaults the old arithmetic runs unchanged behind [branch].
+- Aberration: both taps from a ~1.5 px average (AvgTap, 4 bilinear taps) -- unkeyed, the grain-as-colour
+  fix. `[post] aberration_coc` (default 0 = the uniform split the user approved 2026-09-19; 1 = scaled by
+  the pixel's own CoC against the psf floor). The comment that claimed the old code already faded with the
+  blur is corrected.
+- One shared spatial test `massDeep` (4 taps 40 px out, smoothstep(0.02,0.18) on their encoded luma):
+  gates the lid sheen and the glint's wide halo (unkeyed; the glint core untouched, brief AF) and, through
+  `[post] fog_mass_gate` (default 0), the haze. A level-based gate was tried first and dropped: the mass
+  interior (0.73 nits) and the lighter edge band (1.67 nits) are only 2.4x apart, so any level ramp that
+  clears the interior also darkens the band the user wants kept ("that low-key should stay").
+- Film overlay dark floor 0.10 -> 0. Halation and bloom angular jitter cut to half a tap spacing; the
+  bloom's per-pixel RADIUS jitter removed (the per-frame breathing and creep stay).
+- `[liquid_acid] grain`: dropped where the post pass has a film_grain of its own (not merely where the
+  post pass runs -- the "(80-20, NO lens effects)" twin runs it for dither alone with film_grain 0, and this
+  grain is its only one); paced to film_grain_fps instead of every refresh.
+- The four keys ride rg2.w as four 6-bit fields (b0 is full, root signature at 64 DWORDs); defaults
+  1/0/0/0 -> 63/0/0/0 -> exactly 1.0/0.0/0.0/0.0. The display pass's copy uses mirror-block slots 10-11,
+  which were literal zeros.
+- acid-rise-12: grain 0, film_grain 0.10, film_grain_chroma 0, film_grain_density 1, aberration_coc 1,
+  fog_mass_gate 0.7.
+
+Measured, before = main 5e78022, after = noise, same preset, seed 1234, t=60, --hdr on, same pixels:
+- pixel-scale speckle (3x3 high-pass, flat shadow): luma 9.64 -> 1.26 (-87%), hue 27.0 -> 5.33 (-80%).
+  With aberration_coc 0: 1.47 / 10.3 (-85% / -62%).
+- edge band 2-14 px inside a mass: luma sd 0.0159 -> 0.0015, PQ p5-p95 59 -> 25; level 1.944 -> 1.880 nits
+  (-3.3%), rim/core 1.43 -> 1.40, half-level width ~5 px both. The -3% is the old grain's own lift going
+  away: symmetric noise in the encoded domain raises the LINEAR mean by convexity (predicted +3.7% at the
+  band's level; Phase 1's grain-off ablation measured -2.3..-3.8%).
+- open film flat patch: luma sd 0.0115 -> 0.0102 (-11%; -9% of it is film_grain 0.11 -> 0.10).
+- aberration_coc 1: the split is active (>2/255) on 40.7% of the frame; on 19.2% of the frame it drops by
+  more than half, on ~7% by more than 90%. IT IS NOT A SUBTLE CHANGE: the out-of-focus droplets' crisp
+  outlines were drawn by the aberration (sheet bd-aber-4x: aberration 0 shows them soft), so coc 1 turns
+  them into soft discs. Three-way live choice for the user: bd-after-coc0 (uniform 1.8), bd-after =
+  bd-aber-18 (coc 1, 1.8), bd-aber-09 (coc 1, 0.9).
+- ranges: film_grain_density 0/0.5/1 nearly identical once chroma is 0 (it matters with chroma 1);
+  film_grain_chroma 0/0.5/1 differs only in the mid-tones (hue noise 3.68 / 4.58 / 6.58).
+- the masses are no longer near-black on main (brief AG dye, dye_lum 0.44): the frame's near-black area is
+  0% before AND after, so the "black lift" in this preset is now the dye's by design.
+style=fluid parity md5 `10E36EBF1A74EDFE609065D757300054` held. Every acid preset changes (the averaged
+aberration source, the lid gate, the overlay floor and the gather jitter are unkeyed fixes); 25 of them also
+lose their `[liquid_acid] grain` second stock (every rising config/preset with film_grain 0.11).

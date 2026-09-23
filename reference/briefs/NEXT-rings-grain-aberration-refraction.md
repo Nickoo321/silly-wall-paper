@@ -702,6 +702,13 @@ fading to zero inside masses so the grain has nothing to sit on; then re-dial am
 user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
 rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
 discussion.
+BD status (2026-09-22, branch noise, merged): DONE, see WORKLOG. Speckle in the shadow at pixel scale:
+luma -87%, hue -80%; edge band shape kept (level -3% = the old grain's own lift). New keys film_grain_chroma,
+film_grain_density, fog_mass_gate, aberration_coc. OPEN FOR THE USER, live on the panel: (1) aberration_coc
+-- acid-rise-12 ships 1, which turns the out-of-focus droplets' crisp outlines into soft discs because those
+outlines were being DRAWN by the aberration; three full-res frames in build2/shots/live: bd-after-coc0
+(uniform 1.8, the approved look, still -85% luma / -62% hue speckle), bd-aber-18 (coc 1), bd-aber-09 (coc 1,
+0.9 px). (2) the grain amount on the open film (note 9 / item AT).
 
 BE. **Named cbuffer fields (executor C's review, user: do it).** ~30 packed float4 params reached
 as laP13.x / laP27.z / laP31.y with a comment table 1000 lines away and no check that the shader

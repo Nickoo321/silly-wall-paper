@@ -42,7 +42,7 @@ if ($Presets.Count -eq 0) {
         'reference\configs\acid-rise-2hue.ini',
         'reference\configs\acid-rise-8020.ini',
         'reference\configs\acid-rise-rotate.ini',
-        'reference\presets\Liquid Acid - rising.ini'
+        'reference\presets\Liquid Acid - rising colours (camera medium).ini'
     )
 }
 

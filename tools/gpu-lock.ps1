@@ -13,11 +13,27 @@ param(
     [int]$TimeoutMinutes = 30
 )
 
+# The lock must be shared by every worktree, so it is ALWAYS the MAIN repo's
+# build2\shots\gpu.lock -- never derived from $PSScriptRoot. This script is
+# routinely dot-sourced from a worktree checkout (C:\Users\abg77\fw-*), and
+# build2\ is gitignored, so a path built from the script's own location
+# resolves to a private, worktree-local lock file that guards nothing:
+# every worktree would get its own "lock" and none would exclude the others
+# (see AUDIT-2026-09-22.md finding 4.1). Override with $env:FW_GPU_LOCK for
+# testing (e.g. pointing it at a scratch file instead of the real lock).
+$script:FwMainRepoRoot = 'C:\Users\abg77\OneDrive\Desktop\wall paper engine\claude code'
+
 function Get-GpuLockPaths {
-    $root = Split-Path -Parent $PSScriptRoot
-    [PSCustomObject]@{
-        Lock = Join-Path $root 'build2\shots\gpu.lock'
-        Log  = Join-Path $root 'build2\shots\gpu-lock.log'
+    if ($env:FW_GPU_LOCK) {
+        [PSCustomObject]@{
+            Lock = $env:FW_GPU_LOCK
+            Log  = Join-Path (Split-Path -Parent $env:FW_GPU_LOCK) 'gpu-lock.log'
+        }
+    } else {
+        [PSCustomObject]@{
+            Lock = Join-Path $script:FwMainRepoRoot 'build2\shots\gpu.lock'
+            Log  = Join-Path $script:FwMainRepoRoot 'build2\shots\gpu-lock.log'
+        }
     }
 }
 

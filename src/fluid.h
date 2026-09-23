@@ -671,6 +671,20 @@ struct LiquidAcidConfig {
     //                        on top of the oil's own rise.
     float filmHue2SeedRows = 2.0f;  // hidden rows   film_hue2_seed_rows
     float filmHue2Rise     = 0.25f; // screens/min        film_hue2_rise
+    //   boundary_reflect_r   brief AJ. How far a hue2 SEAM reaches into the
+    //       droplets around it, as a fraction of the SCREEN HEIGHT. Today a
+    //       droplet's lit rim, lens highlight and glow are tinted with the
+    //       film colour at that droplet's own pixel, so a droplet carries
+    //       the seam's magenta only while it is standing in the seam -- about
+    //       one droplet across at film_hue2_scale 0.35. That band width is
+    //       today's reach and 0 keeps exactly it: every existing preset is
+    //       byte-identical until a preset raises this. Raised, the RIMS (never
+    //       the film, and nothing is blurred) rotate toward the seam's own hue
+    //       with a smooth falloff, so the nearest droplets stay strongest.
+    //   boundary_reflect_amt  how much of the seam's hue a rim right next to
+    //       it takes. Only does anything where boundary_reflect_r > 0.
+    float boundaryReflectR   = 0.0f;  // frac of height boundary_reflect_r
+    float boundaryReflectAmt = 1.0f;  // 0..1        boundary_reflect_amt
 
     // --- THE DYE'S OWN DEPTH (item AA) ------------------------------------
     // The user, on the halation frame: "the bottom right blob isn't getting

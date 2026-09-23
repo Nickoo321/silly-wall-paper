@@ -513,7 +513,20 @@ film_hue2_wobble_period (s): hue2 = film_hue2 + wobble * slow two-sine oscillati
 readjust. acid-rise-12: film_hue2 180, wobble 10, period 300, hue_rotate_period slow (10-20 min).
 Executor B on branch hue2b.
 
-AJ. **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
+AJ. **LANDED 2026-09-22 (branch refl).** `boundary_reflect_r` (reach as a fraction of screen
+HEIGHT, 0 = today) + `boundary_reflect_amt`; acid-rise-12 ships 0.33. The term that gave a rim the
+neighbouring film's colour was just `oilC` -- the film colour at the rim's own pixel -- so a
+droplet carried the seam only while it stood inside the mix field's 0.56..0.68 transition band,
+about one droplet across. Now the rim terms (mass_rim, the droplet lens's dome / meniscus /
+specular, the bright-field halo, oil_glow, the swarm caustics) tint with `oilR`, the same colour
+rotated toward the SEAM's own hue (the band's midpoint) by a smooth falloff over the reach. The
+film, and every blur, are untouched. Probe = 8 cbuffer taps of the 20x12 field: 4 central
+differences for the direction, 4 marching it. Sheet `build2\shots\live\refl-sheet.png`; the
+effect is subtle in an SDR still because the rim terms are HDR highlights and the meniscus (0.85,
+ink-derived) dominates the ring -- judge on the panel. If it wants to be stronger, the next lever
+is letting the `oil_thin_edge` band take the seam hue too. Original request below.
+
+AJ (original). **(FUTURE, user said do not do it now) Boundary reflection radius.** With AE-b live the user:
 "whatever algo is mixing the oil boundary is insanely good", "and the way the bubbles reflect it,
 accurately", "chef's kiss". Request: "turn up the radius of effect maybe, so further particles
 also reflect it on the boundary." So: the droplets near a hue2 patch edge pick up the seam / the
@@ -651,3 +664,101 @@ dish so masses glow at the edges and shadow the film toward the camera instead. 
 shadow_len (fraction of screen height), shadow_soft, light_z (behind / in front), all default 0 =
 today. Optional later: light shafts through the dish (volumetric) when the lamp is behind. Judge
 live; stills can show the shadow shape.
+
+BD. **Get rid of the high-ISO noise.** User photo of the panel (reference/shots/photos/high-iso-noise-in-mass-phone.jpg):
+inside a dark mass the picture shows per-pixel speckle on a lifted grey-brown, "it doesn't read like
+film, it looks more like high ISO artifacting". Reading: coloured (per-channel) noise on a black that
+is not black. Directions: grain luminance-only; grain weighted by a mid-tone density curve (near
+zero in dense shadow and clean highlight); the lid sheen's black lift (0.04) and any other lift
+fading to zero inside masses so the grain has nothing to sit on; then re-dial amount live with the
+user (note 9). VHS as a separate, subtle stock mode is a later idea (chroma bleed, line jitter,
+rare dropouts), not this item. Max-effort executor: diagnose and propose first, implement after
+discussion.
+
+BE. **Named cbuffer fields (executor C's review, user: do it).** ~30 packed float4 params reached
+as laP13.x / laP27.z / laP31.y with a comment table 1000 lines away and no check that the shader
+and UploadAcidConstants agree (the AG dye failure was this). Fix: a #define (or struct) per slot
+next to the table, every use in the acid literals replaced, zero runtime cost; byte-identity of
+every preset before/after (tools/preset-identity.ps1, BF). Touches every constant use, so it
+runs ALONE after the in-flight branches (dye4, shadow, noise) have merged.
+
+BF. **Acid preset byte-identity script** = tools/preset-identity.ps1 (Sonnet, in progress):
+renders the preset list with a given exe, saves/compares md5s; required before every merge.
+
+BG. **10-bit HDR shots.** User: "can you render in 10 bit at all? It's low-key important." Both
+--shot PNGs are 8-bit (SDR-mapped and tone-mapped). Executor F adds <stem>.jxr (JPEG XR, half-float
+scRGB via WIC, the Game Bar HDR screenshot format, opens in Windows Photos in true HDR on the OLED)
+and if cheap <stem>-pq.png (16-bit PQ). Then lid on/off pairs (AF/AW) get judged from JXRs on the
+panel, opened only when the user asks.
+
+Design note from executor C (keep in mind for AF/AW lid and AJ): six terms already paint a ring on
+the droplet boundary (mass_rim, droplet_lens b and c, meniscus 0.85, bright-field halo, oil_glow,
+oil_thin_edge) with independent amplitudes; film-derived terms are a minority of the ring. "Weak
+lid" is partly a symptom of that competition, not a missing feature.
+
+BD phase 1 (2026-09-22 21:05, max-effort executor, sheet fw-noise\build2\shots\live\bd-diag-sheet.png):
+ranked causes of the in-mass speckle: (1) lateral aberration = 72% of the chroma noise: a first
+difference of the UNBLURRED output on R and B only, resampling the grain as colour; (2) two
+independent grains ([post] film_grain 0.11 + [liquid_acid] grain 0.057 re-rolled at 240 Hz), additive
+and clamped at 0, weight floor 0.15 at true black = the opposite of film density; (3) post lifts =
+47% of the mass level (lid_sheen and lid_glint with no dark fade, film overlay dark floor 0.10, fog
+through masses, post_glow on dark edges): near-black area 1.9% shipped vs 12.7% with them off;
+(4) per-pixel jitter in halation/bloom gathers = 27% of luma noise; (5) cellulose minor; (6) dither
+INNOCENT. Phase 2 decisions (Fable): grain multiplicative (film_grain_chroma, default 1 = today,
+ships 0) + density hump (film_grain_density, default 0, ships 1); aberration mechanism fixed (averaged
+source, CoC-scaled) but amount/px UNCHANGED (user approved the look), separate A/B 1.8 vs 0.9 px for
+a live verdict; sheen/glint fade inside masses; fog_mass_gate (default 0, ships 0.7); acid grain
+deferred + 0 in acid-rise-12; overlay dark floor 0; gather jitter reduced. Amount re-dial live (AT).
+
+BG DONE (4b291c5): --shot writes .png (8-bit SDR, the md5 file), -hdr.png, .jxr (lossless JPEG XR
+64bpp half scRGB, real HDR in Photos) and -pq.png (16-bit Rec.2020/ST 2084 + cICP); tools\jxr-check.ps1
+verifies. Each shot ~35 MB extra; sweep build2\shots periodically.
+
+EXECUTOR REVIEW 2 of 3 (F, jxr): (1) the verification loop was the weak link: HDR-native post effects
+were tuned through an 8-bit window, which is why so many items read "weak / too distracting"; this
+should have existed before AF/AT/AW were filed. (2) WriteShotPair's single-owner shape made the change
+an hour's work. (3) the parity md5 rule is the best thing in the project. (4) 5-6 executors on one GPU
+and one main worktree is past diminishing returns: a 60 s render took 4x solo time, and an uncommitted
+file collision in main cost a decision; a queue would beat "render anyway". (5) the AC-BA list grows
+faster than it shrinks and much of it is the same complaint ("too weak / too strong"); with real HDR
+captures a batch of those may collapse into a couple of gain curves.
+Convergence so far with review 1 (C): backlog is symptoms not features (both); contention / process
+over-parallelism (both); C: ring budget + positional slots; F: 8-bit verification window.
+
+BH. **Focus breathing.** User (2026-09-22 21:50): "when you focus a camera, the zoom ever so
+slightly changes. Maybe add that to also move once in a while." Real lenses breathe: the field of
+view shifts a fraction of a percent as focus racks. Tie a tiny scale change (order 0.2-0.5% about
+the lens centre, rg0.zw) to the focus spring / rig readjust that already exists (V3 motion), so
+every readjust and every slow focus drift also breathes the frame; plus the occasional deliberate
+rack (note 8 / AS: focus visibly moves at least every 10 s) breathes more. Keys: focus_breath
+(scale per unit focus change, default 0 = today) and breath_readjust (extra on the readjust
+event). Judge live: a still cannot show it. Cheap: one uv scale in the post pass before the CA
+resample. User: "very subtle, but just an idea" (idea tier, not a request; default off; do it only when cheap).
+
+BI. **Compute audit + skeleton fluid.** User (2026-09-22 22:00): (1) "a possible audit of what
+features take a lot of compute"; (2) "this is running on a fluid sim right? if I turned on mouse
+movement it would appear. Is it possible to run it in skeleton mode to save compute, or would it
+interfere, or just turn it off altogether." Reading: the WE-parity fluid sim runs under the oil
+look; the oil uses its velocity (t3) to advect shimmer and the hue2 field, the water under the oil
+is its dye/ink (oil_drag rests the ink beneath islands), racers and weather push it. Audit task
+(auditor or an Opus executor with GPU timestamp queries): per-pass GPU time on the live preset at
+1440p (fluid sim steps, acid sim, acid display, post pass, display pass), which keys change it most,
+then test a skeleton fluid (half-res grid and/or every-other-frame step, with the oil reading the
+same velocity) and a fluid-off mode, each judged headless for what the oil loses (advection,
+water motion, mouse). Keys: fluid_res_scale, fluid_step_div, fluid_off (defaults = today).
+User direction (22:05): try the slow-dye haze idea once; if it does not work ("which I doubt"),
+then turn OFF as much of the fluid sim as possible: the oil keeps only what it provably uses
+(velocity for advection) at the cheapest rate that still looks the same. Not started.
+BD constraint (user, 22:10, photo reference/shots/photos/mass-edge-light-band-keep-phone.jpg): the
+LIGHTER BAND along a big mass's edge (thin-edge translucency: post_glow_dark / cellulose / penumbra /
+mass_rim) must stay. "It has a cool effect, the ISO issue may be doing some of the work, but it's a
+separate thing and needs to stay." Only interior lifts fade to zero. Executor told to measure the
+edge band before/after.
+BD clarification (user, 22:15): the edge band is where the noise is MOST apparent; fixing the noise
+there must not change the band's level or width ("sensitive job"). Edge band = primary test region,
+measured separately from interior and open film; mechanism fixes only, no level change there.
+BD follow-up idea (user, 22:20): COLOURED grain, the film kind: three dye layers (C/M/Y) each with
+its own grain field, coarse soft correlated clouds, blue-sensitive layer coarsest, multiplicative
+per layer so it cannot lift black. Key film_grain_layers (0 = mono, today; 1 = three-layer) with
+per-layer size scale. After phase 2 lands; A/B against mono on the edge band and the open film.
+User (22:30): "a subtle amount of that is probably fine": ship it low when it lands.

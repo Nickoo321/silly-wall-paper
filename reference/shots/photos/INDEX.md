@@ -104,3 +104,5 @@ One line per image in `reference/shots/photos/` and `reference/shots/panel/`. WH
 - 2026-09-19-hue2-cyan-in-magenta-beautiful.png — magenta field, cyan hue-shift patch near the bottom — user: "its beautiful" — 2nd dye-hue field (brief AE) — hue2 keeper, cyan in magenta
 - 2026-09-19-hue2b-boundary-chefs-kiss.png — orange/blue boundary, droplets, magenta seam glow — user: "accurately", "chef's kiss" — boundary keeper — boundary keeper, chefs kiss
 - 2026-09-22-lamp08-magenta-yellow-seam-delightful.png — live panel, lamp base light 0.8, magenta patches with yellow-green seams over a teal film — user: "this is delightful" — TAGS: hue2 seam, lamp falloff, keeper
+- high-iso-noise-in-mass-phone.jpg — phone photo of the panel, dark mass with coloured speckle on a lifted grey — user: "doesn't read like film, more high ISO artifacting" — TAGS: grain, noise, black lift, BD
+- mass-edge-light-band-keep-phone.jpg — phone photo of the panel, teal film, big black mass with a lighter translucent band along its edge and cyan-lit crust inside — user: "that should stay, cool effect" (BD constraint) — TAGS: mass edge, translucency, keep, BD

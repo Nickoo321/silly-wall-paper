@@ -579,7 +579,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP13;        // x oilThinEdge y oilEdgeFrac z oilSpecular w oilIrid
     float4 laP14;        // x swarmLens  y menFromInk  z oilGlow    w refrWidth
     float4 laP15;        // x oilTransp  y oilAbsorb   z filmBump   w refrBody
-    float4 laP16;        // x oilInkBlur y dyeDepthW z - w -
+    float4 laP16;        // x oilInkBlur y dyeDepthW z menFilmMix w -
     float4 laP17;        // x riseBottomLight y postChroma z postLift w -
     float4 laP18;        // x dropsOn    y gridW      z gridH      w edgeMode
     float4 laP19;        // x dropSupport y dropPunch z dropOilW   w ringBase (kAcidMaxDrops)
@@ -2341,8 +2341,21 @@ R"hlsl(
     // In the references this is the brightest thing in the frame (cyan on
     // ref 1) and it is what separates the oil from the ink. Painted with the
     // ramp's bright stop so it reads even over black ink.
+    // ---- meniscus_film_mix, part 1: the ink-brightness GATE --------------
+    // haloInk is the meniscus_from_ink gate: "where the ink just outside is
+    // dark, the halo vanishes", so a foreign colour can never be stroked onto
+    // black ink. In acid-rise-12 the ink outside IS black everywhere, so
+    // haloInk is 0 in every pixel and this whole term -- the 0.85 at the top
+    // of the ring stack -- paints nothing at all (measured: meniscus 0 is
+    // byte-identical to meniscus 0.85). The gate is an INK-SOURCE gate: once
+    // the colour comes from the FILM it is guarding against a danger that no
+    // longer exists, so the mix opens it by the same amount it moves the
+    // colour. Only the meniscus sees this; the dark hairline below keeps the
+    // original haloInk. At mix 0, menInk == haloInk and nothing changes.
+    float menInk = haloInk;
+    [branch] if (laP16.z > 0.0005) menInk = lerp(haloInk, 1.0, saturate(laP16.z));
     float haloW = 0.0;
-    if (laP2.x * haloMul * haloInk > 0.002) {
+    if (laP2.x * haloMul * menInk > 0.002) {
         float hx = (sdf - menCtr) / menHW;
         float halo = exp(-hx * hx);
         // sdf = (field - thresh) / |grad| is only a distance where |grad| is
@@ -2352,8 +2365,24 @@ R"hlsl(
         // no oil under it. Real blob surfaces have |grad| >~ 2 (it scales as
         // 1/radius, and the largest discs here are ~0.4), so gate on it.
         halo *= smoothstep(0.5, 1.5, gl) * isoOk;
-        haloW = saturate(halo * laP2.x * haloMul * haloInk);
-        col = lerp(col, menC, haloW);
+        haloW = saturate(halo * laP2.x * haloMul * menInk);
+        // ---- meniscus_film_mix, part 2: the COLOUR from the FILM ---------
+        // menC above is derived from the INK (meniscus_from_ink), and this
+        // band replaces up to `meniscus` (0.85 live) of the pixel -- so it
+        // sits on top of, and hides, every FILM-hue feature. oilR is the film
+        // colour the rim terms beside it already use, hue-rotated by the seam
+        // reflect where there is a seam, so mixing toward it is what lets a
+        // hue2 seam reach the halo. Lifted by the SAME factors the ink path
+        // uses, so the halo stays a bright caustic and only its colour moves:
+        // haloW (shape, width, amplitude) is computed above and untouched.
+        float3 menCm = menC;
+        [branch] if (laP16.z > 0.0005) {
+            float3 fs = AcidRgb2Hsv(oilR);
+            fs.y = saturate(fs.y * 1.35);
+            fs.z = saturate(fs.z * 1.55 + 0.05);
+            menCm = lerp(menC, AcidHsv2Rgb(fs), saturate(laP16.z));
+        }
+        col = lerp(col, menCm, haloW);
     }
 
     // ---- interface speckle: sparse cellular dots hugging the boundary ----

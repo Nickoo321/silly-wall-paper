@@ -4920,8 +4920,11 @@ void FluidRenderer::UploadAcidConstants() {
                      fmaxf(a.oilFilmBump, 0.0f), fmaxf(a.oilRefractBody, 0.0f) };
     // .y = dye_depth_w: how much the dye layer weighs against the droplets
     // in the per-pixel depth blend (item AA; 0.25 = the old constant prior).
+    // .z = meniscus_film_mix: how much of the meniscus halo's colour (and its
+    // ink-brightness gate) comes from the FILM instead of the ink. 0 = today.
     float p16[4] = { fmaxf(a.oilInkBlur, 0.0f),
-                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f), 0.0f, 0.0f };
+                     fminf(fmaxf(a.dyeDepthW, 0.01f), 4.0f),
+                     fminf(fmaxf(a.meniscusFilmMix, 0.0f), 1.0f), 0.0f };
     float p17[4] = { fmaxf(a.riseBottomLight, 0.0f), fmaxf(a.postChroma, 0.0f),
                      fmaxf(a.postLift, 0.0f), 0.0f };
     float p18[4] = { dropsOn ? 1.0f : 0.0f, (float)kDropGridW, (float)kDropGridH,

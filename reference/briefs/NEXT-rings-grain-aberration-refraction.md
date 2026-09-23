@@ -761,3 +761,4 @@ BD follow-up idea (user, 22:20): COLOURED grain, the film kind: three dye layers
 its own grain field, coarse soft correlated clouds, blue-sensitive layer coarsest, multiplicative
 per layer so it cannot lift black. Key film_grain_layers (0 = mono, today; 1 = three-layer) with
 per-layer size scale. After phase 2 lands; A/B against mono on the edge band and the open film.
+User (22:30): "a subtle amount of that is probably fine": ship it low when it lands.

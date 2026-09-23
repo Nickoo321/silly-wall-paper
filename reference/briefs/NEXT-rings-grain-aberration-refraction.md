@@ -724,3 +724,13 @@ faster than it shrinks and much of it is the same complaint ("too weak / too str
 captures a batch of those may collapse into a couple of gain curves.
 Convergence so far with review 1 (C): backlog is symptoms not features (both); contention / process
 over-parallelism (both); C: ring budget + positional slots; F: 8-bit verification window.
+
+BH. **Focus breathing.** User (2026-09-22 21:50): "when you focus a camera, the zoom ever so
+slightly changes. Maybe add that to also move once in a while." Real lenses breathe: the field of
+view shifts a fraction of a percent as focus racks. Tie a tiny scale change (order 0.2-0.5% about
+the lens centre, rg0.zw) to the focus spring / rig readjust that already exists (V3 motion), so
+every readjust and every slow focus drift also breathes the frame; plus the occasional deliberate
+rack (note 8 / AS: focus visibly moves at least every 10 s) breathes more. Keys: focus_breath
+(scale per unit focus change, default 0 = today) and breath_readjust (extra on the readjust
+event). Judge live: a still cannot show it. Cheap: one uv scale in the post pass before the CA
+resample. Not started.

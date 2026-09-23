@@ -1012,3 +1012,13 @@ Three keyed layers, all default 0 (identity holds), post pass, each with its own
 Constraints: centre sharpness unchanged (measure a centre crop MAD = 0 at all keys), subtle at
 shipped values, gradable; ABL: keep the flare small in area. Queue after BK (roles) and BL (neon);
 same executor rules. Slots: post rig block is nearly full (rg1.xy free after BM), plan a packed float.
+BN addendum (user, 19:00, crop reference/shots/photos/bn-lapd-bloom-tile.png = the bottom-middle
+LAPD tile alone): "The one alone, it should kinda be like that. Plus some of the microscoping
+effects. Like you see here this bloom thing." What the tile has: a warm field lit from below-right
+that goes hot (yellow-white) toward the lamp side and cools to red/magenta away from it; the BLOOM is
+a broad soft glow that veils the whole field near the light, wraps the field edge and lifts the
+darks there, not a small highlight halo; a fine grid/halftone texture stays visible through it (the
+subject stays sharp); the far corner falls to black with a soft, slightly ragged field edge. So
+layer 2 (lamp_flare) is primarily this veiling bloom from the lamp side, keyed for amount, reach,
+warmth; the streak is secondary. The existing keyed post bloom (acid-rise-12 ships 0.30) is the
+starting point: A/B it first at 0.3 / 0.6 / 1.0 with a warm hue before adding code.

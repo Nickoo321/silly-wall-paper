@@ -112,3 +112,4 @@ One line per image in `reference/shots/photos/` and `reference/shots/panel/`. WH
 - bl-biolum-ref-1.jpg / bl-biolum-ref-2.jpg — bioluminescent plankton beaches at night, electric blue glow in the water edges, near-black surround — user: "almost like this" for the lighting model (BL: fluorescent oil, ambient fluid) — TAGS: emissive, darkness, glow edges, BL
 - lid-scratch-ref-1.jpg — scratched acrylic PC side panel lit by an LED strip, swirl micro-scratches catching light — user: "like this, in the corners" (BM lid scratches) — TAGS: lid, scratches, acrylic, BM
 - lid-scratch-ref-2.jpg / -3.jpg / -4.jpg — stock close-ups of scratched plastic: hairline swirls, long gouges, brightest near the light — user: the plastic effect he meant (BM) — TAGS: lid, scratches, BM
+| bn-lapd-bloom-tile.png | BN | 2026-09-23 | LAPD optics bottom-middle tile alone: warm veiling bloom from the lamp side, sharp texture under it, black far corner |

@@ -114,11 +114,31 @@ function Get-CamelCase {
     return $result
 }
 
+function Resolve-NamedConstant {
+    # A default that is a bare identifier (e.g. "kSweepPairs") is a named constant, not a
+    # literal -- writing the identifier itself into a temp ini would silently parse as 0 and
+    # test the wrong thing. Resolve one level via a file-wide static const / constexpr / #define.
+    param([string]$Ident)
+    $pattern = '(?:static\s+const\s+\w+|constexpr\s+\w+)\s+' + [regex]::Escape($Ident) + '\s*=\s*([^,;]+)[,;]'
+    $m = [regex]::Match(($fluidLines -join "`n"), $pattern)
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    $m2 = [regex]::Match(($fluidLines -join "`n"), '#define\s+' + [regex]::Escape($Ident) + '\s+([^\r\n]+)')
+    if ($m2.Success) { return $m2.Groups[1].Value.Trim() }
+    return $null
+}
+
 function Normalize-Default {
     param([string]$Raw)
     $v = $Raw.Trim()
     if ($v -match '^(true)$') { return '1' }
     if ($v -match '^(false)$') { return '0' }
+    if ($v -match '^[A-Za-z_]\w*$') {
+        # bare identifier -- a named constant, not a literal. Resolve or give up (caller
+        # treats a null return as "no default found" rather than writing the name verbatim).
+        $resolved = Resolve-NamedConstant -Ident $v
+        if ($null -eq $resolved) { return $null }
+        $v = $resolved
+    }
     $v = $v -replace '(?i)f$', ''
     return $v.Trim()
 }

@@ -881,3 +881,16 @@ Sheet build2/shots/live/shadow-sheet.png + shadow-full-*.png. Rote: ms cost at 1
 rising presets at 0.3-0.4; laP32 into the slot table; fresh preset-identity baseline. Needs the
 user: backlit mode live.
 EXECUTOR REVIEW 6 (E): short and content-free ("the lamp now blocks light; next steps are rote").
+
+AUDIT 2 (1bdf5ad, auditor C) summary: three top ring rows are INERT in acid-rise-12 (meniscus,
+rim_dark by the ink gate; swarm_lens because the swarm layers are off when droplets are on). Live
+boundary = ~1.4 of darkening (thin edge 0.70, shadow 0.40, penumbra 0.30) vs ~0.3 of lift, all lift
+terms already colour from oilR (so AJ's reach is carried; it looks small because lift is small).
+The lid is a post-pass layer, NOT a ring term: the ring story never explained AF/AW. What does
+affect AF/AW: BD's spatial fade of lid sheen + glint halo inside masses is UNKEYED -> add
+lid_mass_fade (default 1 = today) so AF can turn it off; judge AF/AW on film and mass edges.
+CAST SHADOWS chunk of kDisplaySrc has 858 bytes left: split it in BE before any edit. Hygiene
+(Sonnet booking in progress): dye_hue 285 outside its -180..180 slider (+2 more), gravity keys never
+written back, AGENTS.md contradicts the card (bloom, lock). Auditor's minimum for BE = a slot
+checker script run on every merge; for BJ = a scoped md5 loop at 1280x720 / 10 s labelled "inert
+on this frame".

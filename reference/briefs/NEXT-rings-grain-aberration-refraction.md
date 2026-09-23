@@ -695,3 +695,17 @@ Design note from executor C (keep in mind for AF/AW lid and AJ): six terms alrea
 the droplet boundary (mass_rim, droplet_lens b and c, meniscus 0.85, bright-field halo, oil_glow,
 oil_thin_edge) with independent amplitudes; film-derived terms are a minority of the ring. "Weak
 lid" is partly a symptom of that competition, not a missing feature.
+
+BD phase 1 (2026-09-22 21:05, max-effort executor, sheet fw-noise\build2\shots\live\bd-diag-sheet.png):
+ranked causes of the in-mass speckle: (1) lateral aberration = 72% of the chroma noise: a first
+difference of the UNBLURRED output on R and B only, resampling the grain as colour; (2) two
+independent grains ([post] film_grain 0.11 + [liquid_acid] grain 0.057 re-rolled at 240 Hz), additive
+and clamped at 0, weight floor 0.15 at true black = the opposite of film density; (3) post lifts =
+47% of the mass level (lid_sheen and lid_glint with no dark fade, film overlay dark floor 0.10, fog
+through masses, post_glow on dark edges): near-black area 1.9% shipped vs 12.7% with them off;
+(4) per-pixel jitter in halation/bloom gathers = 27% of luma noise; (5) cellulose minor; (6) dither
+INNOCENT. Phase 2 decisions (Fable): grain multiplicative (film_grain_chroma, default 1 = today,
+ships 0) + density hump (film_grain_density, default 0, ships 1); aberration mechanism fixed (averaged
+source, CoC-scaled) but amount/px UNCHANGED (user approved the look), separate A/B 1.8 vs 0.9 px for
+a live verdict; sheen/glint fade inside masses; fog_mass_gate (default 0, ships 0.7); acid grain
+deferred + 0 in acid-rise-12; overlay dark floor 0; gather jitter reduced. Amount re-dial live (AT).

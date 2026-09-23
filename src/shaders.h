@@ -599,6 +599,8 @@ cbuffer AcidCB : register(b1) {
     // --- multicolour oil (brief AE) ---------------------------------------
     float4 laP30;        // x hue2Amt  y hue2Deg   z hue3Amt   w hue3Deg
     float4 laP31;        // x crustHueMix  y boundaryReflectR  z boundaryReflectAmt  w -
+    // --- CAST SHADOWS (brief BC) ------------------------------------------
+    float4 laP32;        // x shadowAmt y shadowLen(p-units) z shadowSoft w lightZ
     // The 20x12 mix field, four cells per float4. Small on purpose: the
     // patches the reference shows are a quarter to a half of the frame, so
     // this carries them with room to spare and costs one cbuffer fetch and a
@@ -2372,6 +2374,169 @@ R"hlsl(
         col += n * (0.28 * laP23.x * (1.0 - alpha) * th * isoOk);
         col *= 1.0 + n * (0.45 * laP23.y * alpha);
     }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- CAST SHADOWS (shadow_amt / shadow_len / shadow_soft / light_z) --
+    // The user, brief BC: "idk if this is a feature, volumetric lighting, or
+    // some implementation of it. The light should cast shadows essentially...
+    // it can be from behind, or the bottom, or the top or side." Until now the
+    // lamp drove the specular, the mass rim, the penumbra, the haze and the
+    // bloom, and nothing in the frame blocked a single photon.
+    //
+    // WHAT CASTS. In this look the black "masses" are the NEGATIVE space of
+    // the blob field -- the film is the blobs -- so a mass shadow cannot be
+    // written per caster the way a rim can. It is SAMPLED instead: four taps
+    // from this pixel TOWARD the lamp, each re-evaluating the blob field
+    // alone (no gradient, no colour, no comb -- a shadow is low frequency and
+    // none of that would survive the softening). A tap that lands on the dark
+    // side of the isoline is a tap where the light never got through. The
+    // droplets are the other caster and they are done ANALYTICALLY, in a walk
+    // of the same 3x3 cells the field uses, because a droplet's shadow is
+    // short: a capsule from its own centre is exact, and cheaper than four
+    // more taps per droplet.
+    //
+    // LIGHT_Z is the lamp's stand-off from the plane of the dish:
+    //   > 0  in front of / above it -- the shadow rakes away from the lamp,
+    //        and the higher the lamp stands the shorter it is;
+    //   = 0  in the plane -- the longest shadows this key can make;
+    //   < 0  behind the dish: BACKLIT. There is no direction left to rake
+    //        toward, so the shadow spills evenly round every caster onto the
+    //        film in front of it, which is what a body lit from behind does
+    //        (and the caster's own edge keeps the mass_rim / meniscus glow).
+    //
+    // WHERE. It MULTIPLIES the composed film, here -- after every shading
+    // term, before the grain and before the post pass -- so halation, fog and
+    // bloom all see a darker source and a shadow reads as LESS LIGHT rather
+    // than as a grey overlay dropped on the picture. Over the black it is a
+    // no-op by construction: a multiplier cannot darken a zero.
+    float shadowMul = 1.0;
+    [branch] if (laP32.x > 0.0005) {
+        float2 lampS = float2(laP28.x * aspect, laP28.y);
+        float2 toLv  = lampS - pp;
+        float2 toLd  = toLv / max(length(toLv), 1e-5);
+        float  lz    = clamp(laP32.w, -1.0, 1.0);
+        // 1.0 at light_z 0.35 (a lamp a little in front of the dish), up to
+        // 5x as the lamp sinks into the plane, half as it rises over it.
+        float  elong = min(0.35 / max(lz, 0.07), 5.0);
+        float  dirW  = saturate(lz * 4.0);            // 0 at and below zero
+        float  sft   = saturate(laP32.z);
+        float  L0    = max(laP32.y, 0.0);
+        float  lenD  = L0 * elong * dirW;             // the raked length
+        float  lenI  = L0 * (1.0 - dirW) * 0.55;      // the backlit spill
+        // Four taps, near to far. The near one is tight and counts most, the
+        // far ones are wide and weak: "darkest and tightest at the caster,
+        // fading and softening with distance".
+        const float4 fk = float4(0.30, 0.58, 0.82, 1.00);
+        const float4 wk = float4(1.00, 0.76, 0.52, 0.32);
+        float2 o0 = toLd * (lenD * fk.x) + float2( 0.7071,  0.7071) * (lenI * fk.x);
+        float2 o1 = toLd * (lenD * fk.y) + float2(-0.7071,  0.7071) * (lenI * fk.y);
+        float2 o2 = toLd * (lenD * fk.z) + float2(-0.7071, -0.7071) * (lenI * fk.z);
+        float2 o3 = toLd * (lenD * fk.w) + float2( 0.7071, -0.7071) * (lenI * fk.w);
+        // One bounding disc round all four taps, so a blob nowhere near this
+        // pixel's light path costs a dot product and nothing else.
+        float2 cB = pp + toLd * (lenD * 0.64);
+        float  rB = lenD * 0.64 + lenI + 1e-4;
+        float4 ft = float4(0.0, 0.0, 0.0, 0.0);
+        [loop]
+        for (int si = 0; si < nb; si++) {
+            AcidBlobGPU S = AcidBlobs[si];
+            float2 sc  = float2(S.a.x * aspect, S.a.y);
+            float  e   = 1.0 + S.b.w;
+            float  sup = S.a.z * laP0.z;
+            float  reach = sup * e + rB;
+            float2 qb  = cB - sc;
+            if (dot(qb, qb) >= reach * reach) continue;
+            float  s2 = sup * sup;
+            float2 q; float d2, u;
+            q = pp + o0 - sc; q.y /= e; d2 = dot(q, q);
+            if (d2 < s2) { u = 1.0 - d2 / s2; ft.x += u * u * u * S.a.w; }
+            q = pp + o1 - sc; q.y /= e; d2 = dot(q, q);
+            if (d2 < s2) { u = 1.0 - d2 / s2; ft.y += u * u * u * S.a.w; }
+            q = pp + o2 - sc; q.y /= e; d2 = dot(q, q);
+            if (d2 < s2) { u = 1.0 - d2 / s2; ft.z += u * u * u * S.a.w; }
+            q = pp + o3 - sc; q.y /= e; d2 = dot(q, q);
+            if (d2 < s2) { u = 1.0 - d2 / s2; ft.w += u * u * u * S.a.w; }
+        }
+        // The far taps read the occluder through a WIDER threshold band --
+        // that is the penumbra, and it costs one madd each. A weighted mean,
+        // not a max: the max of four taps walks down four steps as the pixel
+        // leaves a mass, and prints them as bands.
+        float4 bk = thresh * (0.18 + sft * (0.35 + 1.9 * fk));
+        float4 oc;
+        oc.x = 1.0 - smoothstep(thresh - bk.x, thresh + bk.x, ft.x);
+        oc.y = 1.0 - smoothstep(thresh - bk.y, thresh + bk.y, ft.y);
+        oc.z = 1.0 - smoothstep(thresh - bk.z, thresh + bk.z, ft.z);
+        oc.w = 1.0 - smoothstep(thresh - bk.w, thresh + bk.w, ft.w);
+        float occ = dot(oc, wk) / dot(wk, float4(1.0, 1.0, 1.0, 1.0));
+        // ---- the droplets, analytically ----------------------------------
+        float dOcc = 0.0;
+        [branch] if (laP18.x > 0.5) {
+            const int gw2 = (int)laP18.y, gh2 = (int)laP18.z;
+            float cellP = min(aspect / max((float)gw2, 1.0), 1.0 / max((float)gh2, 1.0));
+            int cx2 = clamp((int)floor(uv.x * gw2), 0, gw2 - 1);
+            int cy2 = clamp((int)floor(uv.y * gh2), 0, gh2 - 1);
+            float2 sdir = -toLd;                       // away from the lamp
+            [loop]
+            for (int oy2 = -1; oy2 <= 1; oy2++) {
+                int yy2 = cy2 + oy2;
+                if (yy2 < 0 || yy2 >= gh2) continue;
+                [loop]
+                for (int ox2 = -1; ox2 <= 1; ox2++) {
+                    int xx2 = cx2 + ox2;
+                    if (xx2 < 0 || xx2 >= gw2) continue;
+                    uint2 cl = DropCells[yy2 * gw2 + xx2];
+                    [loop]
+                    for (uint dj = 0; dj < cl.y; dj++) {
+                        float4 D = AcidDrops[cl.x + dj];
+                        float dqz = floor(D.w * 0.25);
+                        float dwr = D.w - 4.0 * dqz;
+                        float rng = (dwr > 1.5) ? 1.0 : 0.0;
+                        float gate = dwr - 2.0 * rng;
+                        if (gate <= 0.002) continue;
+                        float R = abs(D.z);
+                        // A droplet is a body, and its HEIGHT is its own
+                        // radius: a 3-px speck throws a 3-px shadow and a big
+                        // ring a long one. Capped at half a grid cell, which
+                        // is as far as the 3x3 walk can see a caster at all.
+                        float hN = saturate(R / 0.012);
+                        float dl = min(lenD * hN, cellP * 0.55);
+                        // The capsule starts just BEYOND the droplet's own
+                        // rim, not at its centre. Centred, a droplet's shadow
+                        // came out concentric -- a dark collar all round it,
+                        // including on the side facing the lamp, which is the
+                        // one side that cannot be in shadow. Pushed out by
+                        // three quarters of the radius it leaves the lamp
+                        // side clean and the lobe emerges on the far side,
+                        // which is what makes it read as a shadow and not as
+                        // a halo.
+                        float2 dc = float2(D.x * aspect, D.y) + sdir * (R * 0.75);
+                        float2 v = pp - dc;
+                        float  t = clamp(dot(v, sdir), 0.0, dl);
+                        float2 pe = v - sdir * t;
+                        float  f  = (dl > 1e-6) ? (t / dl) : 0.0;
+                        // A hollow droplet is a BUBBLE: its middle is film,
+                        // so it shadows with its WALL and not with a disc.
+                        float core  = rng * R;
+                        float wallR = lerp(min(R, cellP * 0.5),
+                                           max(R * saturate(laP20.x), 0.0008), rng);
+                        float rd = length(pe) - core;
+                        if (rng < 0.5) rd = max(rd, 0.0);
+                        float rad = wallR * (0.90 + sft * (0.30 + 1.5 * f))
+                                  + min(lenI * hN, cellP * 0.45);
+                        // ...and a droplet is a LENS, not a plug: it bends
+                        // the light aside rather than eating it, so it never
+                        // throws the full umbra a mass does.
+                        float s = 0.85 * exp(-2.0 * f) * gate
+                                * exp(-(rd * rd) / max(rad * rad, 1e-12));
+                        dOcc = max(dOcc, s);
+                    }
+                }
+            }
+        }
+        shadowMul = 1.0 - saturate(laP32.x) * saturate(max(occ, dOcc));
+        col *= shadowMul;
+    }
     // ---- ink-tinted toe (toe_tint) ---------------------------------------
     // The genre's darkest ink is #180808 / #2c1506 — a lifted, HUE-TINTED toe,
     // never a crush to neutral black. Lift only the bottom of the range, and
@@ -2419,7 +2584,7 @@ R"hlsl(
     // film is driven to oil_hdr. filmOp is 1 when transparency is off.
     // lampG carries rise_bottom_light into the HDR level too: the base of the
     // lamp should be the hot part of the frame, not merely the pale part.
-    if (laP7.x > 0.001) m = lerp(m, laP7.x * lampG, alpha * filmOp);
+    if (laP7.x > 0.001) m = lerp(m, laP7.x * lampG * shadowMul, alpha * filmOp);
     if (laP7.y > 0.001) m = max(m, laP7.y * rimB * alpha);
     // a specular on a real oil surface is a highlight, not a paler fill
     if (laP7.x > 0.001 && specAmt > 0.0005)

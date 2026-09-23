@@ -2381,9 +2381,12 @@ struct AcidParamsGPU {
     // float4. It rides the cbuffer's slack -- no new texture, no descriptor,
     // and nothing added to a root signature already at its 64-DWORD limit.
     float p30[4], p31[4];
+    // brief BC: the cast-shadow block. Cbuffer slack again -- the root
+    // signature is at its 64-DWORD limit and a shadow needs no texture.
+    float p32[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1616, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1632, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -5016,6 +5019,17 @@ void FluidRenderer::UploadAcidConstants() {
                      fmaxf(a.boundaryReflectR, 0.0f),
                      fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f), 0.0f };
     memcpy(p.p30, p30, 16); memcpy(p.p31, p31, 16);
+    // ---- CAST SHADOWS (brief BC) ----------------------------------------
+    // shadow_len is a fraction of the screen HEIGHT, which is exactly the
+    // unit the shader's p-space y carries, so it goes across untouched.
+    // light_z lives in [post] beside light_x / light_y -- it is a property
+    // of the lamp, not of the oil -- and rides over here because the only
+    // pass that can see an occluder is the acid display pass.
+    float p32[4] = { fminf(fmaxf(a.shadowAmt, 0.0f), 1.0f),
+                     fmaxf(a.shadowLen, 0.0f),
+                     fminf(fmaxf(a.shadowSoft, 0.0f), 1.0f),
+                     fminf(fmaxf(po.lightZ, -1.0f), 1.0f) };
+    memcpy(p.p32, p32, 16);
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

@@ -403,6 +403,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.lightX         = getF(S, L"light_x", po.lightX);
         po.lightY         = getF(S, L"light_y", po.lightY);
         po.lightDrift     = getF(S, L"light_drift", po.lightDrift);
+        po.lightZ         = getF(S, L"light_z",     po.lightZ);
         po.cameraFov      = getF(S, L"camera_fov", po.cameraFov);
         po.cameraFocus    = getF(S, L"camera_focus", po.cameraFocus);
         po.cameraFieldCurve = getF(S, L"camera_field_curve", po.cameraFieldCurve);
@@ -602,6 +603,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dropletCrustDens   = getF(S, L"droplet_crust_density", a.dropletCrustDens);
         a.dropletCrustR      = getF(S, L"droplet_crust_r",       a.dropletCrustR);
         a.massRim            = getF(S, L"mass_rim",              a.massRim);
+        a.shadowAmt          = getF(S, L"shadow_amt",            a.shadowAmt);
+        a.shadowLen          = getF(S, L"shadow_len",            a.shadowLen);
+        a.shadowSoft         = getF(S, L"shadow_soft",           a.shadowSoft);
         a.dropletRacerFrac   = getF(S, L"droplet_racer_frac",   a.dropletRacerFrac);
         a.dropletRacerSpeed  = getF(S, L"droplet_racer_speed",  a.dropletRacerSpeed);
         a.dropletRacerWobble = getF(S, L"droplet_racer_wobble", a.dropletRacerWobble);
@@ -1622,6 +1626,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"light_x", po.lightX, 3);
         putF(S, L"light_y", po.lightY, 3);
         putF(S, L"light_drift", po.lightDrift, 3);
+        putF(S, L"light_z", po.lightZ, 3);
         putF(S, L"camera_fov", po.cameraFov, 2);
         putF(S, L"camera_focus", po.cameraFocus, 3);
         putF(S, L"camera_field_curve", po.cameraFieldCurve, 3);
@@ -1805,6 +1810,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"droplet_crust_density", a.dropletCrustDens, 3);
         putF(S, L"droplet_crust_r", a.dropletCrustR, 3);
         putF(S, L"mass_rim", a.massRim, 3);
+        putF(S, L"shadow_amt", a.shadowAmt, 3);
+        putF(S, L"shadow_len", a.shadowLen, 3);
+        putF(S, L"shadow_soft", a.shadowSoft, 3);
         putF(S, L"droplet_racer_frac", a.dropletRacerFrac, 3);
         putF(S, L"droplet_racer_speed", a.dropletRacerSpeed, 3);
         putF(S, L"droplet_racer_wobble", a.dropletRacerWobble, 3);

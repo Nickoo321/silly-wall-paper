@@ -757,3 +757,7 @@ edge band before/after.
 BD clarification (user, 22:15): the edge band is where the noise is MOST apparent; fixing the noise
 there must not change the band's level or width ("sensitive job"). Edge band = primary test region,
 measured separately from interior and open film; mechanism fixes only, no level change there.
+BD follow-up idea (user, 22:20): COLOURED grain, the film kind: three dye layers (C/M/Y) each with
+its own grain field, coarse soft correlated clouds, blue-sensitive layer coarsest, multiplicative
+per layer so it cannot lift black. Key film_grain_layers (0 = mono, today; 1 = three-layer) with
+per-layer size scale. After phase 2 lands; A/B against mono on the edge band and the open film.

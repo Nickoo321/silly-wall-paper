@@ -871,3 +871,13 @@ keys, render at the key's live value and at its default/0, flag byte-identical p
 and report MAD otherwise; run over every [liquid_acid]/[post] key of acid-rise-12 once, then before
 every merge for the keys touched. Superset: the ablation harness of review 4 (noise per tone band
 with each post effect off). Headless, no user needed: NIGHT candidate after BE.
+
+BC DONE (c68c0bf, executor E): masses and droplets darken the film away from the lamp, applied
+before grain/post; keys shadow_amt (0..1, default 0), shadow_len (0..0.30, default 0.12),
+shadow_soft (0..1, 0.50), [post] light_z (-1..1, default 0.35; <0 = backlit, tight even dark band
+round every edge). acid-rise-12: 0.40 / 0.12 / 0.55 / 0.35. New float4 laP32 (layout 1632 bytes).
+Sheet build2/shots/live/shadow-sheet.png + shadow-full-*.png. Rote: ms cost at 1440p (amt 0 vs
+0.4); sheets for shadow_len / shadow_soft / light_z then tighten ranges; keys into the other
+rising presets at 0.3-0.4; laP32 into the slot table; fresh preset-identity baseline. Needs the
+user: backlit mode live.
+EXECUTOR REVIEW 6 (E): short and content-free ("the lamp now blocks light; next steps are rote").

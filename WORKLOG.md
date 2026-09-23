@@ -1718,3 +1718,294 @@ Measured, before = main 5e78022, after = noise, same preset, seed 1234, t=60, --
 style=fluid parity md5 `10E36EBF1A74EDFE609065D757300054` held. Every acid preset changes (the averaged
 aberration source, the lid gate, the overlay floor and the gather jitter are unkeyed fixes); 25 of them also
 lose their `[liquid_acid] grain` second stock (every rising config/preset with film_grain 0.11).
+## 2026-09-22 -- Photos: INDEX.md for every reference/panel photo (Sonnet, afdeed1)
+
+Every file under `reference/shots/photos/` and `reference/shots/panel/` gets one line in a new
+`reference/shots/photos/INDEX.md`: what it shows and why it was kept (a user verdict, a markup, a
+measurement target). Docs only, no renders, no code.
+
+## 2026-09-22 -- FEATURES.md: the complete key manual (Sonnet, 1b7901b)
+
+Generated, not hand-written: parsed `src/settings.cpp`'s slider table (label, range, step, section,
+key, help text) grouped by section, cross-checked against `src/fluid.h` defaults and the live
+`acid-rise-12.ini` values. First complete manual of every exposed key in one place instead of
+scattered across briefs; this is the doc that step 4 of the 2026-09-23 booking session regenerates
+with the day's new keys folded in (dye, shadow, boundary reflect, meniscus_film_mix, the grain/
+aberration/fog keys) and the inert ones flagged from the audit.
+
+## 2026-09-22 -- Audit 2026-09-22: acid cbuffer slot table, literal budget, ring-amplitude ordering, card defects (Opus auditor, 5d271d4)
+
+Auditor pass on `main @ 1ea3611`, no feature code touched. Findings, in order of severity:
+- **Cbuffer packing is sound** -- all 128 slots of `p0`-`p31` cross-checked between
+  `UploadAcidConstants` and every `laP*.xyzw` read in `src/shaders.h`: no slot misread, unwritten,
+  or double-meaning. Every defect found was in the comment table 1000 lines away from the code it
+  documents: `laP31.y/.z` stale (the auditor's own AJ commit), `laP19.w` stale, `laP11.w` documents
+  a `sweepDeg` that is hard-written 0 and read nowhere, `laP29.y`/`laP26.y` advertise keys that are
+  actually hardcoded magic constants. 7 slots genuinely free (`laP11.w`, `laP16.z/.w`, `laP17.w`,
+  `laP29.z/.w`, `laP31.w`).
+- **Literal budget**: 24 HLSL string literals, none over MSVC's 16380-byte cap, but the top three
+  have only 2299 / 2771 / 2798 bytes of headroom -- `kDisplaySrc` is tightest, and it is the chunk
+  nobody was currently editing, so the next person to touch it gets a surprise build break.
+- **The ring competition**: nine terms paint the same droplet-boundary pixels with independent
+  amplitudes. The meniscus halo replaces up to 0.85 of the pixel and is ink-derived
+  (`meniscus_from_ink` 1.0), so it sits on top of and hides every film-hue feature; the two terms
+  that actually carry the film's colour outward (`mass_rim`, the bright-field halo) peak at 0.098
+  and 0.072. Proposal: AF ("weak lid"), AW ("weak lid effect") and AJ (boundary reflect radius) are
+  three requests for the same ~0.17 of ring budget and should be judged as one stack after a
+  solo-term sheet, not tuned one key at a time -- this became `meniscus_film_mix` (branch `menis`,
+  see below).
+- **EXECUTOR-CARD.md, 7 issues found**, the critical one (finding 4.1) a live concurrency bug: the
+  card's own GPU-lock recipe dot-sources `tools\gpu-lock.ps1`, which at the time resolved the lock
+  path from **its own repo root** (`Split-Path -Parent $PSScriptRoot`) -- so a worktree checkout
+  locked `<worktree>\build2\shots\gpu.lock`, a gitignored, worktree-private path that excluded
+  nothing. With four branches in flight that day, every "lock" any executor took was guarding
+  against itself alone. Also: the 2026-09-15 OLED-grey incident line had been deleted in the same
+  edit that relaxed the wait policy to "2 min then render anyway", `SendUserFile` is not in the
+  executor toolset (the rule was unactionable and silently skipped), and `build-wt.cmd` was
+  `.git\info\exclude`d so every fresh worktree had to reinvent it. **Lesson for the stuck-lock
+  class of bug**: a shared resource guarded by a path derived from "where am I" instead of a single
+  hardcoded shared root is not actually shared the moment more than one checkout of the repo
+  exists -- fixed the same day in `ddf8500` (`tools/gpu-lock.ps1` now hardcodes the main repo's
+  absolute path, `$env:FW_GPU_LOCK` only for tests) and in `5c07720` (incident line restored,
+  `SendUserFile` instruction removed, `tools/build-wt.cmd` tracked).
+
+## 2026-09-22 -- AJ lands: boundary_reflect_r, a hue2 seam reaches the droplet rims around it (branch refl, 1ea3611)
+
+The user, watching the hue2 seam live: "whatever algo is mixing the oil boundary is insanely good...
+and the way the bubbles reflect it, accurately... chef's kiss" -- then asked to widen the reach,
+and on a marked-up panel photo (`reference/shots/photos/aj-reflection-radius-markup.jpg`) drew two
+lines: the seam's colour should reach droplets up to about a THIRD of the screen height above it,
+fading with distance. Before this key, a droplet's lit rim, lens highlight and glow were tinted
+with the film colour AT THE DROPLET'S OWN PIXEL (`oilC`), so a droplet only carried the seam's
+colour while it stood inside the hue2 field's 0.56..0.68 transition band -- about one droplet
+across. New `boundary_reflect_r` (reach, fraction of screen HEIGHT, 0 = today) and
+`boundary_reflect_amt`; the rim terms (`mass_rim`, the droplet lens's dome/meniscus/specular, the
+bright-field halo, `oil_glow`, the swarm caustics) now tint with `oilR`, the same colour sampled and
+rotated toward the seam's own hue (the transition band's midpoint) by a smooth falloff over the
+reach, leaving the film and every blur untouched. Probe: 8 cbuffer taps of the 20x12 hue2 field (4
+central differences for direction, 4 marching along it). acid-rise-12 ships `boundary_reflect_r`
+0.33 / `boundary_reflect_amt` 1.0. Sheet `build2/shots/live/refl-sheet.png`; subtle in an SDR
+still (the rim terms are HDR highlights and the 0.85 ink-derived meniscus dominates the ring in a
+tone-mapped capture) -- judged live on the panel, not from the sheet. style=fluid parity md5
+`10E36EBF1A74EDFE609065D757300054` held.
+
+## 2026-09-22 -- BG lands: --shot also writes a lossless scRGB-half .jxr and a 16-bit PQ png (branch jxr, 4b291c5)
+
+User: "can you render in 10 bit at all? It's low-key important." Both `--shot` PNGs were 8-bit,
+SDR-mapped and tone-mapped, so an HDR-only effect (a lid ghost, a highlight rolloff) was being
+judged through a window that could not show it. `WriteShotPair` now writes four files per shot:
+the original 8-bit `.png` (still the md5 file for parity/identity), `-hdr.png`, a lossless
+JPEG XR (`64bpp` half-float scRGB via WIC -- the same format the Windows Game Bar HDR screenshot
+uses, opens in Windows Photos in true HDR on the OLED) and a 16-bit Rec.2020/ST 2084 `-pq.png`
+with a cICP chunk. `tools\jxr-check.ps1` verifies the shipped file. Cost: ~35 MB extra per shot
+(measured breakdown in audit (2): `.jxr` 12.4 MB + `-pq.png` 21.2 MB + `.png` 5.1 MB + `-hdr.png`
+4.7 MB = 43 MB for one 2560x1440 shot) -- `build2\shots` needs periodic sweeping, and since the
+main repo's `build2\` lives inside OneDrive (unlike a worktree's), OneDrive syncs every one of
+these gitignored bytes.
+
+Audit (2) (`5da0e87`) verified the colour maths independently rather than assuming it: the 709->
+2020 matrix sums each row to 1.000000 against BT.2087, the PQ curve constants match ST 2084
+exactly, the cICP chunk reads back `[9,16,0,1]` with a valid CRC and no leftover `sRGB`/`gAMA`,
+`FloatToHalf` is correct to <=1 ULP, no COM leak (every interface a `ComPtr`), and the shipped
+`.jxr` genuinely carries negative scRGB values (3.76% of pixels, min -0.0607) instead of silently
+clamping them away. Two failure modes flagged for a follow-up, not yet fixed as of this session:
+partial files are left on disk if a later WIC step fails (the file is created/truncated before
+anything can fail), and `PngSetCicpPq` can report FAILED while leaving a valid but unmarked PQ png
+on disk -- an unmarked PQ png is read as sRGB, exactly the "looks like fog" failure the function
+exists to prevent.
+
+## 2026-09-22 -- BC lands: the lamp casts shadows (branch shadow, c68c0bf)
+
+User: "the light should cast shadows essentially... it can be from behind, or the bottom, or the
+top or side." Until now the lamp drove specular/mass_rim/penumbra/haze/bloom but nothing in the
+frame blocked its own light. Every mass and droplet now darkens the film on the side AWAY from the
+lamp, tightest and darkest against the caster and softening with distance; a droplet's shadow is as
+short as the droplet is tall. New `[liquid_acid]` keys `shadow_amt` (0..1), `shadow_len` (fraction
+of screen height, 0..0.30) and `shadow_soft` (0..1), plus `[post] light_z` (-1..1) for how far the
+lamp stands off the plane of the dish -- negative puts the lamp BEHIND the dish for a backlit mode
+(tight even dark band around every edge instead of a directional cast shadow). acid-rise-12 ships
+0.40 / 0.12 / 0.55 / 0.35. New float4 `laP32` in the packed acid cbuffer (layout now 1632 bytes).
+Sheets `build2/shots/live/shadow-sheet.png` + `shadow-full-*.png`. Rote follow-ups logged: measure
+the ms cost at 1440p (amt 0 vs 0.4), sheets for `shadow_len`/`shadow_soft`/`light_z` to tighten the
+ranges, the keys into the other rising presets at 0.3-0.4, `laP32` into the slot table, a fresh
+preset-identity baseline. Still needs the user: the backlit mode judged live.
+
+## 2026-09-22 -- AG/AM lands for real: the dark masses are dyed, in the display pass on inkC (branch dye4, c5e78d3)
+
+User: "add ability to dye the black ink" / note 11, "make the currently black oil mostly purple".
+Three attempts before this one landed, traced end to end rather than guessed at each time:
+1. The first attempt (`7e0050b`/`e916547`, keys `dye_hue`/`dye_sat`/`dye_lum`/`dye_hue_follow`
+   merged) dyed the ink RAMP. `dye_hue` never reached the frame -- only the dye's VALUE survived,
+   reading as brown -- because the display pass rewrites the ink ramp's hue twice downstream
+   (`ink_hue_vary` rotates it by the sim's own chroma direction, then a complement-lock clamps it
+   to a window round the oil hue).
+2. The second attempt (branch `dye3`, `993747f`, NOT merged) restored the ramp hue after both of
+   those steps. Delta: **0**. Hypothesis logged for the next session rather than guessed further:
+   acid-rise-12 runs `ink_mode = water`, whose dark-mass shading might be a different code path
+   from the banded ink ramp entirely.
+3. Reading the water path end to end (not guessing) found the real cause: inside a mass the oil
+   field is below threshold so `alpha -> 0` and the pixel IS `inkC`; `ink_mode = water` routes
+   `inkC` through `InkWater()`, which for a mass pixel (sim dye density ~0) ends at
+   `ikPaper.rgb = [ink] paper_color = 0 0 0` -- the black the user sees. The ink ramp the first two
+   attempts patched (`laInk[]`/`effInk`) is read in exactly two places in the whole shader, and
+   BOTH are dead for this preset (the bands branch is unreachable under `ink_mode=water`; the other
+   reader, `toe_tint`, is 0 by default) -- so no edit to the ramp, in any order, could ever have
+   changed one bit of acid-rise-12's output. This is also what the "byte-identical four-hue sheet"
+   from the first attempt was actually measuring.
+
+Fix: the dye is applied in the display pass directly on `inkC`, right after the lamp ramp, as a
+translucent wax -- thickness = depth into the mass (`-sdf`), transmitted light =
+`exp(-depth/0.055)` with a 0.42 floor, gated by `(1 - cov)` so the film is untouched. Rides
+`laP29.z/.w` (amount, hue) and `laP31.w` (saturation) -- no new root params, no new keys beyond the
+four already merged. Proof: acid-rise-12, seed 1234, t=60s, `dye_sat 0.8 dye_lum 0.30
+dye_hue_follow 0`, `dye_hue 285` vs `0` -> max|delta| 143/255, 43% of pixels differ by more than 2
+(it was 0 on `dye3`); `dye_sat 0` renders byte-identical to the pre-change build
+(md5 `CA1B5B2977964C112CEAD7D414815643` both), style=fluid parity md5
+`10E36EBF1A74EDFE609065D757300054` held. Sheet `build2/shots/live/dye4-sheet.png` (3 hues x 3
+lums). Shipped in acid-rise-12: `dye_hue` 285, `dye_sat` 0.8, `dye_lum` 0.30, `dye_hue_follow` 0;
+`dye_lum`'s slider re-ranged 0..0.50 step 0.02 from the sheet (under ~0.10 still black, past ~0.45
+the mass stops reading as dark). Open follow-up logged: with `dye_hue_follow 0` the wax stays
+purple while the 8-pair sweep turns the film, so the two sit close when the sweep reaches its own
+violet pair (`sweep_oil_3`) -- wants its own A/B against `dye_hue_follow 1`.
+
+## 2026-09-22 -- BD follow-up: the edge band measured separately, aberration_coc back to 0 (53c9252, b7dc031)
+
+Two user constraints landed after the `noise` merge (42ae2eb) that the phase-1/phase-2 numbers in
+the prior entry didn't yet cover, because the user flagged the mass-edge lighter band
+(`reference/shots/photos/mass-edge-light-band-keep-phone.jpg`) as a keeper, not part of the noise
+problem: "It has a cool effect, the ISO issue may be doing some of the work, but it's a separate
+thing and needs to stay" -- and "the edge band is where the noise is MOST apparent; fixing the
+noise there must not change the band's level or width" (a "sensitive job"). Measured separately
+from the interior and the open film, before/after the noise fixes: edge band level 1.944 -> 1.880
+nits (-3.3%, the old grain's own Jensen lift going away, not a deliberate darkening),
+half-level width ~5 px unchanged both sides, rim/core ratio 1.43 -> 1.40. Edge-band noise itself
+dropped ~90% alongside the interior's -87% luma / -80% chroma.
+
+Separately, the CoC-scaled aberration (`aberration_coc 1`, physically correct: no lateral CA on a
+bokeh disc) read quieter than the uniform 1.8 px split the user had approved on 2026-09-19: turning
+it on had been drawing the out-of-focus droplets' crisp outlines (verified with a frame showing
+them go soft when aberration was disabled entirely), an artefact the noise fix was not supposed to
+remove. `acid-rise-12` shipped `aberration_coc 1` when `noise` first merged; `53c9252` set it back
+to **0** (the uniform split) so the approved crisp droplet outlines are unaffected -- the fluid.h
+default is also 0, so this is "today's behaviour" for every other preset. Three-way live choice
+left open for the user (note 9 / item AT): `bd-after-coc0.png` (uniform 1.8), `bd-aber-18.png`
+(coc 1, 1.8 px), `bd-aber-09.png` (coc 1, 0.9 px), all full-res in `build2/shots/live/`.
+
+## 2026-09-22 -- meniscus_film_mix A/B: the meniscus and rim_dark are inert in acid-rise-12 (branch menis, 86d1fd3)
+
+Follow-up to the auditor's ring-competition proposal (5d271d4): rather than adding a tenth
+boundary-amplitude key, `meniscus_film_mix` (default 0, `laP16.z`) answers whether the meniscus
+halo should take a share of the FILM's colour instead of the ink's. Executor G's A/B turned up a
+correction to the audit's own ring table: in acid-rise-12 the meniscus and `rim_dark` paint
+**nothing today**. Both are gated by `meniscus_from_ink`'s ink-brightness read just outside the
+oil, and the ink outside the oil is black everywhere in this preset, so the gate evaluates to 0 at
+every pixel -- `meniscus = 0` already renders byte-identical to `meniscus = 0.85`, and so does
+`rim_dark = 0`. The premise that "the 0.85 meniscus dominates the ring" was wrong; the film-derived
+rim terms (mass_rim, the bright-field halo, oil_glow, the droplet lens rim) are what actually
+shows. `meniscus_film_mix` both recolours the halo from the film (the same `oilR` its lit rim
+already uses, so a hue2 seam reaches the halos too) AND opens the ink gate for the meniscus only --
+at the shipped default 0 this changes nothing (accepted going in: the A/B is the judge, not the
+default). A/B/C = 0 / 0.5 / 1.0, `build2/shots/live/menis-*.{png,jxr}` + `menis-sheet.png`; MAD
+A-B 0.92, B-C 3.68 -- G's read: B is subtle, C is strong but washes out the purple dye in seam
+droplets; would pick 0.3-0.5, left for the user to judge live. Rote follow-ups: ship
+`meniscus_film_mix 0` into the tray presets (folded into this session's step-1 preset-parity
+commit), fix the audit's ring table (done in audit (3), 1bdf5ad), re-point `preset-identity.ps1`
+at yield 8 + the main-repo lock (done in this session's step 2).
+
+## 2026-09-22 -- Diagrams: camera geometry to scale from the live preset (Sonnet, d921886)
+
+A script + SVG + PNG laying out the perspective-camera/DOF/tilt rig (`camera_fov`, `camera_focus`,
+`focus_tilt`, `focus_band_px`, `dof_max_px` etc.) to scale from acid-rise-12's own live values, so
+the geometry briefs (N, R) have a picture to check claims against instead of prose alone. Docs
+only, no code or render changes.
+
+## 2026-09-22 -- Audit 2026-09-22 (3): slot table clean, one literal near the cap, ring table corrected (Opus auditor, 1bdf5ad)
+
+Re-run after `shadow`, `dye4`, `noise` and `menis` all merged. Slot table: **0 mismatches** across
+every `laP0`-`laP32` component; C++ (`AcidParamsGPU`) and HLSL (`AcidCB`) now agree on order as
+well as size (`static_assert == 1632` bytes on both sides, which is the check that matters when a
+float4 is inserted before `laMix` -- a mismatch there would shift all 240 hue2 cells silently). 3
+free scalars left (`laP11.w`, `laP16.w`, `laP17.w`) -- not a crisis, since `AcidCB` is a CBV and can
+grow by a float4 at no cost to the 64-DWORD root signature (root *constants* are the scarce
+resource, not the cbuffer). `rg2.w`'s packed 6/6/6/6-bit fields verified exact over all 625 edge
+combinations of {0,1,31,62,63} in float32: 0 round-trip failures.
+
+Literal budget: the CAST SHADOWS chunk of `kDisplaySrc` (lines 2450-2703) is down to **858 bytes**
+of headroom under the MSVC 16380-byte cap -- about 11 lines of this project's commented HLSL. Flagged
+to split before the next shadow-adjacent edit.
+
+Ring table corrected: executor G's finding (above) was right and the audit's first table (5d271d4)
+ranked nominal amplitudes instead of effective ones. With the `haloInk` gate at 0 everywhere in
+acid-rise-12, the meniscus and `rim_dark` are dead, and by code `swarm_lens` is dead too (swarms
+are forced off wherever the droplet particle sim is running, which acid-rise-12 does at 950
+droplets). The live boundary is dominated by darkening (thin edge 0.70, shadow 0.40, penumbra
+0.30, roughly 1.4 of budget) against ~0.3 of lift, and every live lifting term already takes its
+colour from `oilR` -- so `boundary_reflect_r`'s effect being small is a budget problem, not a
+hiding problem. Also corrected: the lid is a post-pass layer, not a ring term, so the audit's earlier
+explanation of "weak lid" (AF/AW) via ring competition was wrong; what actually bears on it is the
+`noise` merge's unkeyed `massDeep` gate on the lid sheen and iridescence halo, which lifted the
+lid's warm floor away from every mass interior -- the opposite direction from "raise the lid",
+landed deliberately for the noise fix and not yet re-judged against AF/AW.
+
+Hygiene items filed for this booking session to fix (see the 2026-09-23 hygiene entry below):
+`gravity`/`gravity_pow`/`gravity_blur` read but never written back by `WriteConfigToIni`, so every
+mood/preset save silently dropped them; `dye_hue` 285, `hue_rotate_period` 3600 and `ink_soft` 0.6
+all sat outside their Settings sliders' ranges (the first nudge of `dye_hue` would have jumped it
+105 degrees toward its clamped -180..180 range).
+
+## 2026-09-22 -- tools/preset-identity.ps1: acid-side equivalent of the fluid parity check (Sonnet, 94e1f2b)
+
+No acid-side byte-identity check existed before this; every executor either rebuilt a clean `main`
+by hand to prove existing presets were untouched, or skipped the step. Renders a preset list
+headless with a given exe, md5's the PNGs, and either saves a baseline or compares an exe's output
+against one (`-Save`/`-Baseline`). The fluid look (`we-look-live.ini`) is always rendered first and
+reported separately, because that check is sacred and independent of whatever acid presets are
+under test. Tested against a clean worktree build (`fd81f49`): fluid line matched the parity md5
+`10E36EBF1A74EDFE609065D757300054`; baseline saved to
+`build2/shots/preset-identity-baseline-48f6e95.txt` (gitignored). Lesson from the GUI-app side of
+this tool: `FluidWallpaper.exe` is a windowed-subsystem app whose `--shot` mode writes its PNG
+asynchronously with no signal back to the launching process (and `--console`'s stdout re-attachment
+means shell redirection goes silent per AGENTS.md), so the script cannot simply wait on the process
+exiting -- it has to poll the output file for a stable size instead, and that poll needs its own
+bounded timeout with a clear failure line rather than either hanging forever or throwing an
+unhandled exception out of the GPU-lock `try`/`finally` (fixed in this booking session, see below).
+
+## 2026-09-23 -- Booking: preset parity + audit hygiene fixes (Sonnet, b44991e, 43dfbf8)
+
+Rote/hygiene pass called for by EXECUTOR-CARD.md and the two 2026-09-22 audits, with the GPU lock
+held by another agent's lid render until ~00:10, so this ran config/docs-only steps first and left
+the build+render for last (see the build/verify entry below).
+
+**Preset parity (b44991e).** The ten `[liquid_acid]` keys and five `[post]` keys that landed
+2026-09-22 (`meniscus_film_mix`, `boundary_reflect_r/amt`, `dye_hue/sat/lum/hue_follow`,
+`shadow_amt/len/soft`; `light_z`, `film_grain_chroma`, `film_grain_density`, `aberration_coc`,
+`fog_mass_gate`) were only in `acid-rise-12.ini`. Added at their `src/fluid.h` DEFAULTS (confirmed
+against `src/main.cpp` getF/putF too) to the same 33 files `f840685`/`6e4a81c`/`2011d8a` used,
+with the acid-rise-12 comment blocks copied verbatim, each key placed after its nearest existing
+neighbour in acid-rise-12's own order (`meniscus_from_ink`, `mass_rim`, `crust_hue_mix`,
+`film_grain_color`, `aberration_field`, `fog_px`, `light_drift`). Two of those neighbours
+(`meniscus_from_ink`, `mass_rim`) are missing from 11 of the sparser "Liquid Acid A"/"oil on ink
+water" presets; for those the block goes immediately before the MULTICOLOUR OIL comment instead,
+preserving the same relative order. 7 of the 33 have no `[post]` section at all (by design, a
+partial overlay), so the 5 `[post]` keys are not added there. 3235 insertions, 0 deletions across
+33 files; each file's own CRLF and no-BOM verified byte-for-byte before and after.
+
+**Audit hygiene (43dfbf8).** From AUDIT-2026-09-22.md section 13/14 and audit (3)'s hygiene list:
+`src/settings.cpp` sliders widened to contain their own live values (`dye_hue` -180..180 ->
+0..360, live 285; `hue_rotate_period` 0..1800 -> 0..3600, live 3600; `ink_soft` 0.01..0.5 ->
+0.01..1.0, live 0.6 -- the old `dye_hue` range meant the first Settings-window nudge would have
+silently jumped it 105 degrees on clamp). `src/main.cpp`'s `WriteConfigToIni` now writes back
+`[sim] gravity`/`gravity_pow`/`gravity_blur` next to `shadow_knee` (mirroring their read order),
+since they were read but never written -- every mood save and tray save that went through it was
+silently dropping them. `AGENTS.md`'s "Bloom: never" corrected to describe the keyed post bloom
+(default 0, acid-rise-12 ships 0.30) vs. the still-banned old full-screen bloom, and "Builds need
+no lock" corrected to "Builds AND renders take build2\shots\gpu.lock ... one render at a
+time with --shot-yield 8" (EXECUTOR-CARD.md already carried the newer "renders never wait"
+policy; AGENTS.md had not been updated to match either policy and needed a real value, not a
+stale one). `tools/preset-identity.ps1`: `--shot-yield` 2 -> 8 (menis executor G's follow-up);
+`Wait-StablePng` bounded at 20 minutes (was 180 s) and no longer throws past the GPU-lock
+try/finally on timeout -- it returns false, `Get-PresetMd5` prints a "<name> TIMEOUT" line and
+the caller moves on instead of hanging or crashing with a bare stack trace. Confirmed (no code
+change needed): `tools/gpu-lock.ps1` has resolved to the main repo's hardcoded absolute path
+since `ddf8500`, so `preset-identity.ps1`'s dot-source already gets the shared lock regardless of
+which worktree it runs from.

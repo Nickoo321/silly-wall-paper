@@ -605,6 +605,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP30;     // x HUE2_AMT  y HUE2_DEG  z HUE3_AMT  w HUE3_DEG
     float4 laP31;     // x CRUST_HUE_MIX  y REFLECT_R  z REFLECT_AMT  w DYE_SAT
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
+    float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -683,6 +684,58 @@ float3 AcidHueShift(float3 c, float deg) {
     float3 hsv = AcidRgb2Hsv(c);
     hsv.x = frac(hsv.x + deg * 0.0027777778);
     return AcidHsv2Rgb(hsv);
+}
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+// ---- dark_sat (brief BP): darker must mean MORE saturated ----------------
+// The user: "it reduces colours and then reduces saturation as well, when
+// those should be inversely proportional." A chroma gain that grows as the
+// ELEMENT's level falls (film_level for the film, the dye level for a mass
+// or a droplet -- never per-pixel luminance, which would re-grade every
+// shadow), applied about the pixel's own LINEAR luminance: the colours here
+// are sRGB-encoded, and a gain about the encoded luma (the first version)
+// raised the displayed luminance by 10-40% through the decode's curvature
+// (measured on the .jxr), so it decodes, scales about linear Y, re-encodes.
+// Y is kept, so mean_lum, the HDR peak and the panel's ABL do not move. The
+// only clamps are the gamut edges: no channel below 0, and no channel pushed
+// past 1 that was not already there (the composite is saturate()d later, so a
+// clipped channel would lose luminance), so HDR on and off agree. Callers
+// skip it at dark_sat 0, so today's frame is untouched.
+float3 DsToLin(float3 c) {
+    c = max(c, 0.0);
+    return lerp(c / 12.92, pow((c + 0.055) / 1.055, 2.4), step(0.04045, c));
+}
+float3 DsToSrgb(float3 l) {
+    l = max(l, 0.0);
+    return lerp(l * 12.92, 1.055 * pow(l, 1.0 / 2.4) - 0.055, step(0.0031308, l));
+}
+float3 DarkSat(float3 c, float lvl) {
+    float3 l = DsToLin(c);
+    float Y = dot(l, float3(0.2126, 0.7152, 0.0722));
+    float m = min(l.r, min(l.g, l.b));
+    float M = max(l.r, max(l.g, l.b));
+    float k = 1.0 + LA_DARK_SAT * (1.0 - saturate(lvl));
+    k = min(k, Y / max(Y - m, 1e-6));
+    k = min(k, max((1.0 - Y) / max(M - Y, 1e-6), 1.0));
+    float3 o = DsToSrgb(Y + (l - Y) * k);
+    // post_chroma (acid-rise-12: 1.2) later scales chroma about the ENCODED
+    // luma and clamps at 0, which turns extra chroma back into luminance
+    // (measured +3..8% mean_lum at dark_sat 1 without this). So hold the
+    // luminance the pixel will have AFTER that trim: two fixed-point steps of
+    // a linear-light gain, each within a fraction of a percent of the last.
+    [branch] if (abs(LA_POST_CHROMA - 1.0) > 0.001) {
+        const float3 W = float3(0.2126, 0.7152, 0.0722);
+        float  pc = LA_POST_CHROMA;
+        float  y0 = dot(c, W);
+        float  t0 = dot(DsToLin(max(y0 + (c - y0) * pc, 0.0)), W);
+        [unroll] for (int it = 0; it < 2; it++) {
+            float y1 = dot(o, W);
+            float t1 = dot(DsToLin(max(y1 + (o - y1) * pc, 0.0)), W);
+            o = DsToSrgb(DsToLin(o) * (t0 / max(t1, 1e-8)));
+        }
+    }
+    return o;
 }
 
 // ---- the 20x12 hue2 MIX FIELD, one bilinear fetch (brief AE / AJ) --------
@@ -1860,10 +1913,24 @@ R"hlsl(
         float3 dyeC = InkHsv2Rgb(float3(LA_DYE_HUE, LA_DYE_SAT, 1.0));
         float dIn  = max(-sdf, 0.0);                 // p-units into the mass
         float Tw   = exp(-dIn / 0.055);              // light left after the wax
+        // ---- brief BL: dye_lamp_follow (ambient dye) ---------------------
+        // The lamp lights the OIL; the fluid under it should only see a dim
+        // ambient. At 1 (today) the dye rides lampG (rise_bottom_light) and
+        // the thin-edge profile lerp(0.42, 1, Tw); toward 0 both fade out and
+        // the dye sits at its thick-core level everywhere: a flat colour the
+        // lamp never lifts. At 1 the branch is skipped and lampGd IS lampG.
+        float lampGd = lampG;
+        [branch] if (LA_DYE_LAMP_FOLLOW < 0.9995) {
+            float fl = saturate(LA_DYE_LAMP_FOLLOW);
+            lampGd = lerp(1.0, lampG, fl);
+            Tw *= fl;
+        }
         float inkL = max(inkC.r, max(inkC.g, inkC.b));
         float dkG  = 1.0 - smoothstep(0.0, 0.55, inkL);
         float wD   = (1.0 - cov) * dkG;
-        float3 dyeAdd = dyeC * (LA_DYE_AMT * lerp(0.42, 1.0, Tw) * lampG * wD);
+        float3 dyeAdd = dyeC * (LA_DYE_AMT * lerp(0.42, 1.0, Tw) * lampGd * wD);
+        [branch] if (LA_DARK_SAT > 0.0005)
+            dyeAdd = DarkSat(dyeC * LA_DYE_AMT, LA_DYE_AMT) * (lerp(0.42, 1.0, Tw) * lampGd * wD);
         // ---- brief BK: masses vs droplets, and smoke ---------------------
         // "Too bubbly": the dye on EVERY droplet is what reads as bubbles.
         // Mass vs droplet is decided by WHICH sim object made the dark, not
@@ -1898,23 +1965,40 @@ R"hlsl(
             float mK   = 1.0 - smoothstep(0.0, 3.0 * PX1440 + wOut, sB);
             float prof = lerp(0.42, 1.0, Tw);
             float gate = 1.0 - cov;
+            float leakK = 0.0;
             [branch] if (s > 0.0005) {
                 float n  = saturate(AcidFbm(pp * 6.0 + float2(LA_TIME * 0.007,
                                                               -LA_TIME * 0.011)) * 1.143);
                 float dS = -sdf + s * 0.030 * (n - 0.5);
                 gate = lerp(gate, smoothstep(-wOut, 0.010 + 0.080 * s, dS), isoOk * mK);
                 prof = lerp(prof, lerp(prof, 0.75, s) * lerp(1.0, 0.30 + 1.40 * n, s), mK);
+                // brief BP: the LEAK (the smoke under the film, cov > 0) takes
+                // the FILM's hue. A dye of another hue seen through the film
+                // mixes additively toward grey -- the "middle values bad" of
+                // the smoke sheet. Inside the mass (cov = 0) nothing changes.
+                leakK = cov * mK;
             }
             float3 massC = dyeC * LA_DYE_AMT;
-            float3 dropC = massC;
-            [branch] if (LA_DYE_DROP_RGB > -0.5) {
-                float v  = LA_DYE_DROP_RGB;
-                float cb = floor(v * (1.0 / 65536.0));
-                float cg = floor((v - cb * 65536.0) * (1.0 / 256.0));
-                float cr = v - cb * 65536.0 - cg * 256.0;
-                dropC = float3(cr, cg, cb) * (1.0 / 255.0);
+            [branch] if (leakK > 0.0005) {
+                float3 fhs = AcidRgb2Hsv(oilC);
+                massC = lerp(massC, InkHsv2Rgb(float3(fhs.x, LA_DYE_SAT, 1.0)) * LA_DYE_AMT, leakK);
             }
-            dyeAdd = lerp(dropC, massC, mK) * (prof * lampG * gate * dkG);
+            float3 dropC = massC;
+            float  dropL = LA_DYE_AMT;
+            [branch] if (LA_DYE_DROP_RGB > -0.5) {
+                // hue8 + 256 sat8 + 65536 lum8 (brief BP; was 8-bit RGB)
+                float v  = LA_DYE_DROP_RGB;
+                float cl = floor(v * (1.0 / 65536.0));
+                float cs = floor((v - cl * 65536.0) * (1.0 / 256.0));
+                float ch = v - cl * 65536.0 - cs * 256.0;
+                dropL = cl * (1.0 / 255.0);
+                dropC = InkHsv2Rgb(float3(ch * (1.0 / 256.0), cs * (1.0 / 255.0), 1.0)) * dropL;
+            }
+            [branch] if (LA_DARK_SAT > 0.0005) {
+                massC = DarkSat(massC, LA_DYE_AMT);
+                dropC = DarkSat(dropC, dropL);
+            }
+            dyeAdd = lerp(dropC, massC, mK) * (prof * lampGd * gate * dkG);
         }
         inkC += dyeAdd;
     }
@@ -2158,8 +2242,57 @@ R"hlsl(
     // oil_glow, the bright-field halo and the lens highlights keep the full
     // palette -- brief BL's "brightness at the edges, the flat field dark".
     // The dye on the masses/droplets rides on inkC and is untouched.
-    if (LA_FILM_LEVEL < 0.9995) oilC *= LA_FILM_LEVEL;
+    if (LA_FILM_LEVEL < 0.9995) {
+        oilC *= LA_FILM_LEVEL;
+        // brief BP: the dimmed film keeps its luma and gains chroma
+        [branch] if (LA_DARK_SAT > 0.0005) oilC = DarkSat(oilC, LA_FILM_LEVEL);
+    }
     float3 col = lerp(inkC, oilC, alpha);
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- FLUORESCENT OIL UNDER THE LAMP (oil_fluor, brief BL) ------------
+    // The user: "What if the lamp lights up the oil, and it's like
+    // fluorescent? And the ambient light brightens the fluid?" -- refs
+    // bl-biolum-ref-1/-2: water that GLOWS in its own electric colour,
+    // brightest in the churned edges, everything else near black.
+    // So the oil EMITS: its own hue at full saturation (no hue key -- the
+    // palette rotates, the glow rotates with it), driven by the rig's lamp
+    // (the same LAMP_X/Y the rim, the shadows and the specular use) with a
+    // Gaussian falloff over oil_fluor_reach screen heights. The profile is
+    // edge-weighted the way a fluorescent acrylic sheet is: the light it
+    // makes is trapped inside and leaks out where the sheet ends, so the thin
+    // film at a MASS edge glows most and the flat body only a little. The
+    // edge is measured on the blob-only surface (fieldB/gradB), so the 950
+    // droplet holes do not each grow a glowing ring ("too bubbly", BK) --
+    // they sit in the body term. Added AFTER film_level, so film_level 0.3 +
+    // oil_fluor = dark sheet, glowing lamp-side edges; weighted by alpha, so
+    // the masses themselves emit nothing (the shadow pass below still
+    // multiplies it: an occluded film is not excited). The edge band alone
+    // gets HDR headroom further down (fluorM), which keeps the hot area small
+    // for the panel's ABL. oil_fluor 0 skips all of it: byte-identical.
+    float fluorM = 0.0;
+    [branch] if (LA_OIL_FLUOR > 0.0005) {
+        float2 lampF = float2(LA_LAMP_X * aspect, LA_LAMP_Y);
+        float  dL    = length(pp - lampF) / max(LA_OIL_FLUOR_REACH, 0.05);
+        float  fall  = exp(-dL * dL);
+        float  glBf  = length(gradB) + 1e-6;
+        float  sBf   = (fieldB - thresh) / glBf;
+        float  wE    = max(edgeW * 1.5, bmin * 4.0 * PX1440);
+        float  edgeP = exp(-max(sBf, 0.0) / wE) * smoothstep(0.5, 1.5, glBf) * isoOk;
+        float  prof  = 0.20 + 0.80 * edgeP;
+        // the film's own hue, value 1, saturation pushed: it glows, it does
+        // not whiten (peak channel, the mass_rim convention)
+        float3 fh = AcidRgb2Hsv(oilR);
+        fh.y = saturate(fh.y * 1.25);
+        fh.z = 1.0;
+        float  k  = saturate(LA_OIL_FLUOR) * fall * alpha;
+        col += AcidHsv2Rgb(fh) * (0.80 * k * prof);
+        fluorM = saturate(k * edgeP);
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- BACKLIGHT PENUMBRA (oil_penumbra) -------------------------------
     // The lamp is under the middle of the dish: the oil right next to a black
     // mass receives less of it than the open sheet does, and a pigment lit
@@ -2738,6 +2871,9 @@ R"hlsl(
     // lamp should be the hot part of the frame, not merely the pale part.
     if (LA_OIL_HDR > 0.001) m = lerp(m, LA_OIL_HDR * lampG * shadowMul, alpha * filmOp);
     if (LA_RIM_HDR > 0.001) m = max(m, LA_RIM_HDR * rimB * alpha);
+    // brief BL: the fluorescent edge band runs into the HDR headroom (knee ->
+    // capBright = up to peak_nits); shadowed film is not excited.
+    [branch] if (fluorM > 0.0005) m = max(m, lerp(knee, capBright, fluorM * shadowMul));
     // a specular on a real oil surface is a highlight, not a paler fill
     if (LA_OIL_HDR > 0.001 && specAmt > 0.0005)
         m = max(m, min(LA_OIL_HDR * (1.0 + 2.5 * specAmt), 1.6) * alpha);

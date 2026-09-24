@@ -2445,9 +2445,11 @@ struct AcidParamsGPU {
     // brief BC: the cast-shadow block. Cbuffer slack again -- the root
     // signature is at its 64-DWORD limit and a shadow needs no texture.
     float p32[4];
+    // brief BL: the fluorescent-oil / ambient-dye block (the cbuffer was full).
+    float p33[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1632, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1648, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -4838,9 +4840,13 @@ void FluidRenderer::UploadAcidConstants() {
     // ---- brief BK: masses and droplets as two elements -------------------
     // The droplet holes take their own dye (dye_droplet_hue/sat/lum, each -1
     // = inherit the mass dye) times dye_droplets, and the masses take theirs
-    // times dye_masses. The droplet colour is built HERE and packed as three
-    // 8-bit channels in one float (r + 256 g + 65536 b, exact below 2^24) --
-    // the acid cbuffer has one scalar left, not a vector. -1 = split off, and
+    // times dye_masses. The droplet colour is packed as HUE, SATURATION and
+    // LEVEL, 8 bits each, in one float (h8 + 256 s8 + 65536 l8, exact below
+    // 2^24) -- the acid cbuffer has one scalar left, not a vector -- and the
+    // shader rebuilds it as InkHsv2Rgb(h, s, 1) * l. Brief BP: it used to be
+    // quantised to 8-bit RGB AFTER the level multiply, i.e. a 0.3-level dye
+    // had ~77 codes per channel and a 10-20% hue/sat error; HSV keeps the hue
+    // to 1.4 deg and the saturation to 1/255 at any level. -1 = split off, and
     // then the shader runs exactly the old dye line. While the split is on,
     // dye_masses rides on DYE_AMT, which the shader's split path reads as the
     // mass colour's level and nothing else.
@@ -4850,7 +4856,8 @@ void FluidRenderer::UploadAcidConstants() {
     if (dyeSplit) {
         const float dSat = (a.dyeDropSat >= 0.0f) ? a.dyeDropSat : a.dyeSat;
         const float dLum = (a.dyeDropLum >= 0.0f) ? a.dyeDropLum : a.dyeLum;
-        float r = 0.0f, g = 0.0f, b = 0.0f;
+        float h8 = 0.0f, s8 = 0.0f, l8 = 0.0f;
+        auto q8 = [](float v) { return floorf(fminf(fmaxf(v, 0.0f), 1.0f) * 255.0f + 0.5f); };
         if (dSat > 1e-4f && dLum > 1e-4f) {
             float hue = (a.dyeDropHue >= 0.0f) ? a.dyeDropHue : a.dyeHue;
             if (a.dyeHueFollow) {
@@ -4860,12 +4867,12 @@ void FluidRenderer::UploadAcidConstants() {
             }
             float hn = fmodf(hue, 360.0f);
             if (hn < 0.0f) hn += 360.0f;
-            RGB c = HSVtoRGB(hn / 360.0f, fminf(fmaxf(dSat, 0.0f), 1.0f), 1.0f);
             const float k = fminf(fmaxf(dLum, 0.0f), 1.0f) * fminf(fmaxf(a.dyeDroplets, 0.0f), 1.0f);
-            r = c.r * k; g = c.g * k; b = c.b * k;
+            h8 = fmodf(floorf(hn / 360.0f * 256.0f + 0.5f), 256.0f);   // hue = h8 / 256
+            s8 = q8(dSat);
+            l8 = q8(k);
         }
-        auto q8 = [](float v) { return floorf(fminf(fmaxf(v, 0.0f), 1.0f) * 255.0f + 0.5f); };
-        dyeDropRgb = q8(r) + 256.0f * q8(g) + 65536.0f * q8(b);
+        dyeDropRgb = h8 + 256.0f * s8 + 65536.0f * l8;
         dyeAmt *= fminf(fmaxf(a.dyeMasses, 0.0f), 1.0f);
     }
 
@@ -4945,7 +4952,7 @@ void FluidRenderer::UploadAcidConstants() {
         p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
         p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
         p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
-        p.p30, p.p31, p.p32 };
+        p.p30, p.p31, p.p32, p.p33 };
     auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
 
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
@@ -5199,6 +5206,17 @@ void FluidRenderer::UploadAcidConstants() {
     slot(LA_SHADOW_LEN,   fmaxf(a.shadowLen, 0.0f));
     slot(LA_SHADOW_SOFT,  fminf(fmaxf(a.shadowSoft, 0.0f), 1.0f));
     slot(LA_LIGHT_Z,      fminf(fmaxf(po.lightZ, -1.0f), 1.0f));
+    // ---- brief BL: fluorescent oil under the lamp, ambient dye ----------
+    // oil_fluor 0 and dye_lamp_follow 1 are today: the shader skips both
+    // branches, so every existing preset is byte-identical. The reach is in
+    // screen heights (p-space y), the unit the lamp distance is measured in.
+    slot(LA_OIL_FLUOR,       fminf(fmaxf(a.oilFluor, 0.0f), 1.0f));
+    slot(LA_OIL_FLUOR_REACH, fmaxf(a.oilFluorReach, 0.05f));
+    slot(LA_DYE_LAMP_FOLLOW, fminf(fmaxf(a.dyeLampFollow, 0.0f), 1.0f));
+    // brief BP: dark_sat, chroma compensation keyed on each element's LEVEL
+    // (film_level for the film, the dye level for masses / droplets). 0 =
+    // today and the shader skips it.
+    slot(LA_DARK_SAT,        fminf(fmaxf(a.darkSat, 0.0f), 1.0f));
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

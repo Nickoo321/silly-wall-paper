@@ -1262,3 +1262,32 @@ Spec: one key dye_core (0..1, default = today's 0.42 ratio, exact identity) = co
 ratio; 1 = even fill. Display pass, laP35.x (BB/BH take .y/.z). Proof: crops of a mass at 0.42 /
 0.7 / 1.0 on the LAPD candidate (core luminance ratio measured), identity on all presets, mean_lum.
 Pre-flight, then a small Opus executor; belongs to the LAPD LOOK, bundle with BQ if both are code.
+
+BR + BQ auditor pre-flight (2026-09-24 14:05), executor spec:
+BR dye_core: cause confirmed: Tw = exp(-dIn/0.055) (shaders.h:1930), lerp(0.42, 1.0, Tw) at :1993,
+:1995 (dark_sat path) and :2028 (droplet/smoke path, prof); rim 1.0, deep core exactly 0.42; nothing
+else sets the core. Key = the core floor itself: dye_core default 0.42, 1.0 = even fill; replace the
+literal at all three sites with lerp(LA_DYE_CORE, 1.0, Tw); CPU uploads 0.42f unmodified (a clamp
+alone keeps the bits) => bit-identical at default. Slot laP35.x (add laP35). Slider 0.42..1.
+Interactions: dark_sat keyed before the profile multiply (unchanged; a fuller core stops cores
+reading muddier than rims); dye_thick_hue uses 1-Tw (hue only); dye_smoke pulls prof toward 0.75 so
+with smoke up dye_core has less effect (document, do not gate); dye_lamp_follow's lampGd separate;
+droplets have Tw ~ 1 so barely change. Proof: core/rim luminance ratio on one mass crop at 0.42 /
+0.7 / 1.0 (~0.42/0.7/1.0 x lampG); mean_lum with the ABL note (LAPD dye_lum 0.50 -> candidate is
+0.8 now); preset-identity all presets + parity at default.
+BQ dark circles: TRIAGE WITH VALUES FIRST. The rings are the film's own coverage/thickness at near-
+threshold contours of the blob field (droplet dents, blob saddles): alpha = aS^2 (:2298), col =
+lerp(inkC, oilC, alpha) (:2311) shows the ink where the film thins; the thin-edge darkening prod
+(:2097) and oil_penumbra darken there too; under a 5% film the ink beneath is darker than the film,
+so thin spots read as dark rings and real holes as dark filled discs. Ruled out: boundary_reflect/
+oilR (hue only, lifts), hue2 (amt 0), lid ghosts (lamp-centred, these follow the flow). Tiles of the
+loop crop, same frame: base / film_level 0 / oil_thin_edge 0 / oil_penumbra 0 / droplet_lens 0.
+Prediction: film_level 0 removes the rings and fills (film = ink = black) leaving masses and droplets
+alone (their colour rides inkC + dye) => a values fix, film_level 0.0 in the LAPD candidate. THEN the
+key only adds the missing edge light: film_schlieren (default 0, laP35.w) = a signed knife-edge light
+from the gradient of the film coverage/thickness (grad alpha or grad thk) dotted with the lamp
+direction, scaled by the lamp term (lampG, rise_bottom_light), NOT by the pixel's own luminance (~0
+on a black film); a background-refraction offset only shows over a mass/droplet, keep it small and
+secondary; film pixels only (fieldB >= thresh, away from masses) so the red mass rims do not change.
+Proof: loop crop at 0/0.5/1 (fill = ground, edge peak rises, ring width <= 3 px); acid-rise-12
+unchanged at 0; 5-frame series, loops travel with the flow; mean_lum within 1%.

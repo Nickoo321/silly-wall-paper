@@ -1594,3 +1594,29 @@ check (at most one corner region active > 0.1). Split tone: OKLab hue of the oil
 180 +- 10 deg across three hue phases, oil L lift <= shadow_tone_lift, film/rims unchanged, a
 series across an on/off crossfade with no step, the gear ratio verified (on/off phase vs hue phase
 over one hue period never repeats the same pairing).
+
+BU DECISION auditor pre-flight (2026-09-24 evening), executor spec: both in the DISPLAY pass (acid
+PSO; lamp = LA_LAMP_X/Y = laP28.xy, same rig lamp as post rg0.xy; free acid slots; style=fluid never
+runs it). LAMP GREY: pick the corner on the CPU (a continuous far-from-lamp weight lights two corners
+at once): corner = the one diagonally opposite the lamp, sign(lampX - 0.5) AND sign(lampY - 0.5)
+with hysteresis +-0.04 (NOTE: the live ini has light_x -0.78 / light_y -0.76, lamp top-left, so the
+far corner is bottom-right; with the default light_y 1.2 only the top corners ever grey), and SLIDE
+the region centre between corners over ~90 s (one lobe always exists, so the one-corner test holds
+mid-change). Weight w = 1 - smoothstep(0.35*S, S, length(pp - Cc)), S = lamp_grey_size in screen
+heights, Cc the corner in p-units (centre ~1.02 H from any corner > the 0.6 max => centre MAD = 0).
+Apply to col right after col = lerp(inkC, oilC, alpha) (shaders.h ~2313): c' = Y + (c - Y)*(1 -
+0.6*w*k), then a Y-normalised cool; before the rim terms so rims stay coloured, black stays black.
+SPLIT TONE: fold on the CPU: main hue = effOil[0] after hue_rotate and the sweep (fluid.cpp
+~4855-4858) -> HSV hue + 0.5 -> toneAdd = HSVtoRGB(h+0.5, shadow_tone_sat, 1) * shadow_tone_lift *
+gate * shadow_tone, one pre-multiplied float3; gate = 50% duty with smoothstep edges of
+shadow_tone_fade on frac(m_time / shadow_tone_period); mask = (1 - alpha) * (1 - smoothstep(0.02,
+0.15, Y(col))) at the same point as the grey (film and bright dyed bodies excluded, black bodies
+tinted, before the rims). Period: 3600:2160 = 5:3 repeats every 10800 s; the golden ratio (3600 x
+0.618 ~ 2225 s) never repeats and samples the hue phases evenly => default shadow_tone_period 2225.
+SLOTS: laP36 = {grey_k (= 0.6*lamp_grey), lamp_grey_size, lamp_grey_cool, grey_cx}; laP37 =
+{toneAdd.rgb, grey_cy}; defaults grey_k 0 / toneAdd 0 skip both branches. PROOF: grey mean_lum
+within 0.5%; across a series spanning a readjust the one-corner test (at most one region > 0.1)
+holds on EVERY frame of the slide; tone: oil hue = main + 180 +- 10 deg over three hue phases, oil L
+lift <= shadow_tone_lift, film-mask MAD = 0, rim-band MAD <= 0.1 x lift; gear: a CPU-only log over
+3 simulated hours of the hue phase at each gate edge, pairings spread evenly, no early repeat;
+preset-identity at defaults.

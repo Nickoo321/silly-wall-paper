@@ -1301,3 +1301,166 @@ in the LAPD candidate r8). film_schlieren NOT landed: four iterations (grad of c
 0.25 / 0.7, with and without droplet / mass masks) never traced those loops, only droplet halos and arcs near masses
 (MAD <= 0.3). The code is parked on branch core-schlieren-wip. Next pass needs a DEBUG view first: write the term-(a)
 lift, sdf sign and fieldB-vs-thresh to the output for one shot, then design the edge from what the loops really are.
+LAPD LOOK addendum (user, 2026-09-24 14:20, ref lapd-ref-solar-lava-ultramarine-pigment.jpg): "maybe
+try something like this, I was kinda imagining this." What the ref has: PIGMENT density (opaque,
+matte-dense, faintly granular, no wash), a fluorescent orange-red that glows at the edge, and deep
+ultramarine as the second colour. For the look: main = solar-lava orange-red (dye hue ~10-15, sat 1,
+dye_core high), accent = ultramarine (droplet hue ~235-245, deep, not cyan), black ground; the body
+reads as pigment, not liquid dye: even fill (dye_core), tiny grain inside the mass allowed (that is
+the one place artefact_lum_gate should NOT clean). Idea, not target. The user may send drawings.
+
+## BS. Black-light scene: bold but dim, black oil with 5% luminescent pigment, "a light in muddy water" (user, 2026-09-24 14:30)
+
+User, with two photos of his own panel (blacklight-ref-1 blue film / black oil, blacklight-ref-2 pink
+film / black mass) and the solar-lava pigment ref: "Maybe some dark scene like this, but reduce the
+luminance, and replace 5% of the dark oil with the previous example of the very luminescent pigment.
+The light should probably look like a black light, and illuminate the blue in that circumstance
+background. So I guess that means you need to fix how that works. But again it should still look
+bold I guess, just dimmer. Recent renderings have looked paperish/thin. This should read more like a
+light in muddy water maybe."
+Reading (to confirm with the user): (1) start from the bold saturated film + pitch-black oil of the
+old panel looks, not from the black-film LAPD candidate; (2) overall luminance down (film dim but
+still saturated and BOLD, never paperish/thin); (3) most oil stays black, a small share (~5%) of the
+masses/droplets is the luminescent pigment (solar lava orange-red), glowing; (4) the lamp is a BLACK
+LIGHT (UV): what you see is fluorescence, not reflection: the film fluoresces (deep blue/ultramarine
+under UV, falling off with distance from the lamp), the pigment fluoresces hot, black oil stays
+black, nothing is lit by bounce; (5) "a light in muddy water" = a dense medium: the light scatters
+through murk (volumetric haze that CARRIES the lamp, soft, not the paper-thin flat film).
+Levers that exist: film_level (dim), dark_sat (bold when dim), oil_fluor (emissive under the lamp:
+currently lights the film green = wrong hue source; needs a UV response hue = the film's own deep
+blue), dye_* + per-mass identity from AG-b (select WHICH masses take the pigment: new key
+dye_fraction 0..1 using the hole-blob id hash, default 1 = today), fog/halation/bloom (murk; the
+haze idea BI: a volumetric term that carries the lamp through the medium). Code likely needed: (a)
+dye_fraction (small), (b) UV fluorescence model: film emission = fluor_amount * film_hue_response *
+lamp_reach, no diffuse term (BL rework: oil_fluor hue from the film palette, not green), (c) murk:
+lamp-carrying volumetric haze (BI). Pre-flight before anything; this is the next LAPD LOOK step
+after dye_core/schlieren land. Ideas, not targets.
+BS addendum (user 14:35, blacklight-ref-3-murky-water-divers.jpg): "Like that, but with glowing oil."
+The murk photo is the model for the MEDIUM: a hot light source (above / off-frame) whose light
+scatters through a dense green-yellow murk with a broad falloff, everything solid is a pitch-black
+silhouette, no detail inside the silhouettes, the murk itself carries the colour and the gradient.
+So: the film becomes the murk (volumetric, lamp-carrying, dim but saturated), the oil is black
+silhouette, and the ~5% pigment masses GLOW (emissive) inside that murk. This is BI's haze idea
+made concrete: a lamp-driven volumetric term, not a flat film level.
+BS addendum 2 (user 14:40): "randomly pick a continuous thing of oil, probably one in 20 to be lit
+up." CONFIRMED: whole connected bodies (a mass or a droplet as one continuous thing), chosen at
+random by identity, about 1 in 20 glowing, the rest pitch black. Key dye_fraction (0..1, default 1
+= today = every body dyed): a body glows when hash(id) < dye_fraction; the LAPD/BS value is 0.05.
+Identity: AG-b's hole-blob id (c.w) where a hole carves the mass; for bodies without a hole id
+(gaps between oil blobs, droplets) the executor must find a stable per-body id (droplet hash, blob
+seed) so a body does not flicker in and out; a glowing body stays glowing for its life.
+BS addendum 3 (user 14:45): the 1-in-20 is "a starting estimate, idk how it's gonna end up" =>
+dye_fraction is a slider, 0.05 is only the first value. Ref blacklight-ref-4-glowstick-jars.jpg,
+"maybe like this?": the GLOWING bodies look like glow-stick liquid under UV: self-luminous volume
+(not a lit surface), brighter toward the core, glowing particles/bubbles inside, soft bleed of the
+glow into the dark surround (bloom/halation carry it), magenta / pink / blue palette in the ref.
+
+BS auditor pre-flight (2026-09-24 15:00), executor spec:
+(1) dye_fraction: id differs per body type. Hole-carved masses: c.w = dyeId (fluid.cpp:2894/3443),
+accumulated at shaders.h:1116; in the same loop add idG += step(frac(B.c.w*7.13), LA_DYE_FRACTION)
+* w4 for a.w < 0, glowM = idG/idW (re-hashed so "glows" is not tied to AG-b's hue/lum offset; the w^4
+blend fades across a merge, no pop). Gap masses (idW ~ 0): AG-b's fallback id drifts (DYE_ID_RISE),
+so they stay black whenever fraction < 1 (document). Droplets: AcidDrop.seed (fluid.h:1968) is not on
+the GPU and w is packed (4dq+2ring+gate, decoded :1207-1209 and :2826): encode the glow bit in the
+radius, z = sign*(r + 2*glow), only when fraction < 1 (z unchanged at default); decode at both
+sites: glow = |z| > 1, r = |z| - 2*glow; loop keeps glowD = max(glowD, glow*coverage). Gate in the
+dye block inside [branch] fraction < 0.9995: massC *= glowM; dropC *= glowD.
+(2) oil_fluor hue: OK, no rework: it takes the film's own colour per pixel (oilR, :2348; sat x1.25,
+V = 1); green only where the film is green. For BS use a blue palette, film_hue2_amt 0, and
+rise_bottom_light 0 (the diffuse lamp term) so the lamp shows only as fluorescence. The 0.20 flat
+base in prof (:2345) is volume emission, right under UV, keep. A fixed pigment hue would need
+oil_fluor_hue (-1 = today) in laP37.x.
+(3) Murk: a small display-pass term. The post fog (:3940-3951) is already a lamp-carrying scatter
+with an exact-zero falloff and fog_mass_gate keeps mass interiors black; it lacks colour (hardwired
+warm-white :3951) and extinction. Spec, after oil_fluor, film pixels only: T = exp(-murk_amt * dL /
+murk_falloff); col = lerp(murkC * fall, col, lerp(1, T, alpha)); masses stay black, rims on top,
+post bloom/grain after; fog 0 in the BS preset. ABL: mean_lum <= BS baseline, murk brightness <=
+film level. Slots laP36 = {dye_fraction, murk_amt, murk_hue, murk_falloff}, defaults 1/0/-/- keep
+every preset identical; no sim changes. Proof: dye_fraction 0.05: 5-frame 10 s series, same bodies
+glow every frame, no pop at merges, count of glowing masses/droplets per frame; murk: luminance /
+OKLab profile along the lamp axis at 0/0.3/0.6 with mass-interior mean ~ 0; mean_lum table; HDR
+on/off pair.
+AUDITOR'S OPINION (verbatim, relayed to the user 15:00): "The glow half is right; the murk half is a
+detour. r7's red body already proves it: a saturated emissive shape against true black is what a
+1000-nit OLED does best, with a small bright area, no ABL, and real black around it. The glow-stick
+jars are the same idea. Murk is the opposite: a broad lit veil. It triggers ABL, it softens the
+sharp centre, and it pulls colour toward one haze tone, which is the 'muddy/paper' look you just
+rejected. Wide smooth gradients also band on the panel. One in twenty is also the wrong count. With
+about a dozen masses on screen, 5% often means no glowing mass at all, while 5% of ~950 droplets is
+~47 specks, which reads as confetti rather than one body. Use a mass fraction that guarantees one
+or two glowing bodies on screen, and keep the droplets at 0 or near it. The biggest risk is losing
+the bold saturated film you loved. What I'd do differently: build the glowing bodies on your
+blue-film panel look (ref-1) first, with no murk. If it then lacks depth, add extinction only
+(darker with distance), never an added veil. The drifting lamp keeps the image moving, so burn-in
+is fine."
+
+## BT. Fluorescent particles: the physical analogue of the second hue (user, 2026-09-24 15:10)
+
+User, with five photos of his own panel (bt-panel-1..5): "Those blue and magenta screenshots already
+have the murkiness in a way. I suppose it's not a technical feature, more a vibe. This sort of soft
+opposite colour shading works very well, but I feel like it needs a physical analogue. Popping up
+green randomly isn't ideal, and mixing it in off screen leads to dilution. Anyways the plain old
+monotone shots still miss detail when you look closer, it's just a plain colour background. The
+floaters already help a lot, but I believe we can kill 2 birds with one stone. Light + fluorescent
+particles can add those elements while still having the same composition as the photos."
+Reading: (1) murk is NOT a separate term (BS item 3 is dropped; the vibe is already there in the
+soft gradients). (2) The hue2 second-hue patches (the soft opposite-colour blobs, AE) stay as the
+COMPOSITION, but get a physical cause: fluorescent PARTICLES suspended in the film, lit by the lamp
+(black light), whose local density IS the hue2 mix field (the existing 20x12 CPU field advected by
+velocity, t3); where they concentrate, their aggregate glow makes the soft patch; where sparse, they
+show as individual small sharp glowing specks (the detail the plain background lacks, and the
+"pigment grain" of the solar-lava ref). So one system gives both the patches and the close-up
+detail, and the second colour no longer "pops up randomly" or dilutes: particles drift in with the
+flow, always present, visible as specks before they become a patch. (3) The glowing bodies (BS
+dye_fraction, photos 4/5: teal / red glowing droplets inside the black mass) are the same
+fluorescence, same lamp. (4) The film stays bold and saturated (photos 1-3, 5), black masses stay
+black. Ideas, not targets.
+Spec sketch (pre-flight first): particle layer in the display pass, film pixels and mass interiors:
+a hashed point field (2-3 sizes, sharp 1-3 px specks, count key) advected by the same velocity as
+the hue2 field, each speck's brightness = hue2 field density x lamp reach x fluor amount, colour =
+the hue2 hue (the opposite colour); the existing hue2 patch term becomes the low-frequency glow of
+the same field (keep AE's rotation/wobble/period so the composition of the photos is unchanged);
+keys particle_amt (0 = today), particle_size, particle_count, particle_lamp (reach); defaults =
+identity; ABL: specks are tiny, the patch is unchanged. Fluid look untouched (acid PSO only).
+BT addendum (user 15:15, bt-panel-6/7 "more photos that show murkiness"): what reads as murk in the
+photos is the SOFT PENUMBRA of the masses (edges that dissolve into the film as if submerged), the
+slight translucency at thin edges, and the smooth low-contrast film gradient; not a haze layer.
+Levers that exist: oil_penumbra, oil_thin_edge, camera focus band / dof, shadow_soft, film level
+gradients. The LAPD look must keep these soft edges (r5/r7 have harder rims); the particles add the
+detail on top.
+
+BT auditor pre-flight (2026-09-24 15:25): NOT a hashed point field (cannot follow an arbitrary
+velocity; reseeding = the same "pops up" problem). Real CPU particles: a grain list next to the
+droplets, advected by the same 64x36 velocity readback StepHueField uses (specks and patches move
+together); spawn only in the hidden rows below the frame at a rate proportional to the mix field
+there (AL rule) so they drift in visible before a patch forms; brightness = mixField(x,y) (CPU
+bilinear) x lamp reach x particle_amt; colour = the hue2 hue. Much exists already: the glowing
+specks in the black mass (bt-panel-2/5) are droplets inside masses taking the film colour rotated by
+the local mix field (k2 x crust_hue_mix, MULTICOLOUR OIL block); what is missing is specks on the
+film itself. Patch stays AE's term (k2 = smoothstep(0.56,0.68,mixV) unchanged, so rotation/wobble/
+period and the photos' composition hold at every particle_amt); do not make it a low-pass of the
+particles. Cost: bin grains in the droplet grid (3x3 cell walk), ~3000 grains ~ 13 tests/pixel;
+bind the grain buffer by extending the SRV table next to t2/t4, not a new root parameter (64 DWORD
+limit). Anti-aliasing: analytic Gaussian speck, sigma >= 0.6 px at 1440p, area-normalised, else
+sub-pixel twinkle. Slots laP36 = {dye_fraction, particle_amt, particle_size, particle_lamp};
+particle_count CPU-only; amt 0 = no grains, branch skipped, presets unchanged; ABL negligible.
+Proof: speck count/size histogram from connected components of (render - amt 0) on a crop; patch
+unchanged (32 px low-pass of the difference ~ 0); 5-frame series, specks move with the flow and
+NONE are born inside the frame; shimmer check --shot-series 5:0.007, per-speck brightness std < 5%;
+mean_lum.
+AUDITOR'S OPINION (verbatim): "Yes, this answers my murk objection. It adds detail instead of a veil,
+and the 'vibe' stays in the soft patches you already have. It fixes the green popping up randomly
+only if the specks are real particles that drift in from below the frame with the same flow as the
+patches. Specks generated in place would pop in and out just like the patches do now. Look at your
+own photos, though. The green specks in the black (panel 2) and the red ones (panel 5) are your
+existing droplets inside the masses, coloured by the same second-hue field. You already have the
+physical version you're describing, and it's the part you love. The risk is glitter. Thousands of
+even, bright specks over the bright film read as a starfield. In your photos they're few, varied in
+size, and sit in the dark, where a glow means something. On the film itself, emissive on emissive
+barely shows. The OLED angle is fine: tiny drifting points are the safest content there is. What I'd
+do differently: first push what exists (more crust droplets, crust_hue_mix, the glowing bodies) and
+look at it on the panel. Add film specks only if the plain background still bothers you, and keep
+them sparse."
+BT/BS ORDER (user 13:50: "Auditor's"): 1. dye_fraction executor (BS item 1 spec) after BR/BQ merge;
+2. values round on the magenta/blue film: in-mass glowing droplets (crust droplets, crust_hue_mix),
+glowing bodies, soft penumbra edges; panel judgement (swap); 3. BT film specks only if still needed.

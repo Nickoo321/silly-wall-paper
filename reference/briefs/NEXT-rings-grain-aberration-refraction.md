@@ -1464,3 +1464,28 @@ them sparse."
 BT/BS ORDER (user 13:50: "Auditor's"): 1. dye_fraction executor (BS item 1 spec) after BR/BQ merge;
 2. values round on the magenta/blue film: in-mass glowing droplets (crust droplets, crust_hue_mix),
 glowing bodies, soft penumbra edges; panel judgement (swap); 3. BT film specks only if still needed.
+
+## BU. Graded effects: a graduated filter across the frame, cycling like the hue (user, 2026-09-24 evening)
+
+User, from Lightroom edits of hq-mono-0924 (refs bu-lr-1..4): "I was looking for gold and found
+silver. I was thinking of cycling through effects, as we already cycled through hues. I honestly
+thought that the light would do a similar gradient effect. I suppose you can line it up with it.
+Idk what effect yet." What the edits show: (1) a GRADUATED filter across the frame, one effect
+fading in along an axis: saturation -100 on one half (pink -> grey), or temp -54 + saturation -50 +
+dehaze +100 + blacks -20 (pink-purple -> cool desaturated grey with a mottled, dehazed film);
+(2) split toning: the shadows (the black oil) tinted deep teal at full saturation on the pink film,
+a two-role frame from one tint. Reading: a spatial gradient of an EFFECT, not of the hue: colour
+alive on one side of the frame and dying across it, the way colour dies with distance from a light
+in murky water (blacklight-ref-3). Line the axis up with the lamp (full effect far from the lamp,
+none near it) or let it drift; cycle WHICH effect and its direction slowly, the way hue_rotate
+cycles the hue. Ideas, not targets.
+Spec sketch (pre-flight first, auditor opinion required): post pass, after the look and before
+grain: grade_amount (0..1, default 0 = today), grade_axis (degrees; -1 = follow the lamp direction),
+grade_width (0.2..1.5 screen), grade_effect = a small set applied along the ramp: desaturate, cool
+(temperature), lift-blacks/dehaze (local contrast), and shadow_tint hue/sat (the split tone, on the
+oil's dark tones only); grade_cycle_period (s, 0 = fixed) rotating the axis and crossfading between
+effects on the hue_rotate clock so nothing sits still on the OLED. Ramp = smoothstep along the axis
+through the frame centre with drift. ABL: desaturate/cool do not raise luminance; dehaze must not.
+Proof per effect: OKLab C and L profile along the axis at 0/0.5/1 (monotone ramp), centre sharpness
+unchanged, mean_lum, a 5-frame series across a cycle step. Slots: rg1.y spare fields are gone after
+AP; the post rig block needs a new packing or a small cbuffer row (the rig slot table item).

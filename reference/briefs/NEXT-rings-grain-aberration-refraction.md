@@ -1181,3 +1181,22 @@ on a reel boundary, report the max over the series; relabel the FEATURES.md rows
 film_leak from INERT to "time-gated". Proof: 12-frame series at 2560x1440 per key 0 vs live, MAD and
 max over the series, a 5-frame 2x crop of a hair appearing/fluttering/leaving, DIFFERENCE + WHAT
 ADDS, preset identity on the 25 affected inis with the new keys at 0.
+
+BB auditor pre-flight (2026-09-24 10:50), executor spec: rise_bottom_light lives in the display pass
+(shaders.h ~1871): lampG = lerp(1, 0.80+0.50*smoothstep(uv.y), saturate(k)) multiplies oilC, hue2
+applied before it, oilR copied after it (film, hue2 patches and rims all pick the shift up); no
+interaction with CssHueRotate (fluid look only). (1) "stronger falloff" is capped by saturate(k):
+change to lerp(1, ramp, min(k, 2)), slider 0..2, identical for k <= 1. (2) "warm near, cooler far" =
+colour TEMPERATURE, not hue rotation: key rise_bottom_temp (-1..1, default 0), w = 2*smoothstep(0,1,
+uv.y) - 1; t = float3(1+0.25*T*w, 1, 1-0.25*T*w); oilC *= t / dot(t, W709) (Y unchanged, no ABL).
+rise_bottom_hue (degrees x w via AcidHueShift) optional, second. Nothing existing covers it
+(bloom_warmth/halation_warmth tint the glows, not the film). Slot: display pass -> laP34.w (spare in
+AG-b's plan; if AG-b has not landed, add laP34 = {rise_bottom_temp, rise_bottom_hue, -, -}). Proof:
+OKLab hue and C on the film mask in bands uv.y 0.1..0.9 at temp 0/0.3/0.6 (hue 0/30/60 if kept);
+bottom/top luminance ratio at rise_bottom_light 0.8/1.4/2.0; mean_lum (temp within 1%) and peak
+nits (falloff > 1 lifts the film bottom up to 60%); one HDR on/off pair.
+
+lid_mass_fade: DROPPED (auditor 10:50). Not a duplicate of artefact_lum_gate, but BD's in-mass fade
+was signed off by the user ("noise fix is fire"), BO asks for fewer artefacts on black masses, and
+rg1.y's last two fields are promised to AP. FEATURES.md line to add: "BD's in-mass lid fade is
+unkeyed by design (user sign-off 09-23)."

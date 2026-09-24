@@ -240,3 +240,35 @@ Rote (hand to a cheaper model): keymeta seeding review, tray grouping, thumbnail
   and the gates remove the "unusable" complaints; undo/compare/colour wheels are comfort (phase 2);
   thumbnails and sequences are optional. If the user refuses ImGui, the phase 1 feature list stays and
   only the cost doubles.
+
+## AUDITOR PRE-FLIGHT (2026-09-24, main f17e020) — binding additions
+Code claims spot-checked: all hold (moods.cpp:469/:500/:593, settings.cpp:108/:572-577/:1087/:1112-1120,
+main.cpp:1054/:1990/:2768-2772/:2829/:3194; 67 moods).
+1. Offset trick is valid only for pointers inside FluidConfig: assert every fval/ival lies in
+   [&Config(), &Config()+1) and list the exceptions (globals, ival pointers) explicitly.
+2. Before deleting settings.cpp, grep and list EVERY hook it calls on change (ReinitWanderers,
+   EnsureLookResources, MoodsRefreshUiCache, hue commands, peak-nits/HDR path, ...) and route each
+   through the new per-key write path. Undo/redo use that same path.
+3. Freeze also moods.cpp's conductor (UpdateMoods, MoodsApplyBase). The Neon fix lives in the NAME
+   accessor only (no mood name unless [moods] enabled=1). Keep today's restart behaviour until Q3 is
+   answered. --shot returns before mutex/tray/moods/UI so the parity md5 cannot see a UI regression:
+   the real guards are the empty render-file diff + preset-identity.
+4. DX11 island rules: main thread inside the existing pump; draw only on input / timer / dirty flag,
+   never per wallpaper frame; SetMaximumFrameLatency(1), FLIP_DISCARD, R8G8B8A8_UNORM (not _SRGB,
+   ImGui colours are gamma-space); recreate on device-removed; SDR swapchain on the HDR desktop is
+   fine; per-monitor v2 already set (main.cpp:2822): handle WM_DPICHANGED + rebuild the font atlas,
+   do not call ImGui's DPI enabler.
+5. Second launch: the second instance calls AllowSetForegroundWindow(runningPid) before posting
+   CMD_SETTINGS. The window must NEVER appear on its own (the user games). Confirm the fullscreen
+   pause path keeps pumping messages so the UI works while paused.
+6. Keymeta: put the meta IN THE SAME X-macro row as SliderDef (label, range, pointer, section, key,
+   help, group, looks, gate, flags) so it cannot be forgotten; keymeta-check joins the merge checklist
+   next to slot-check; looks/gate re-verified with key-effect.ps1 on a schedule (rote, cheaper model).
+7. --ui-shot returns before the mutex like --shot and uses g_configReadOnly; tests never write
+   %APPDATA% (MSIX sandbox shadows it).
+8. Regression checklist of every current control: autostart, analyzer, fps limit, second monitor,
+   pause rules, HDR/peak, hue commands, mirror.
+9. SPLIT phase 1: 1a = island + generated All-settings page + header + the Neon/clamp/apply/tray
+   fixes (merge on its own); 1b = Effects + Modes pages. Validity matrix cells stay "?" until
+   key-effect has verified them.
+Opinion: ImGui is the right call (relayed to the user verbatim).

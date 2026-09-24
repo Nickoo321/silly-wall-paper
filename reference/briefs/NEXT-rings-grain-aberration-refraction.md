@@ -1383,3 +1383,32 @@ the bold saturated film you loved. What I'd do differently: build the glowing bo
 blue-film panel look (ref-1) first, with no murk. If it then lacks depth, add extinction only
 (darker with distance), never an added veil. The drifting lamp keeps the image moving, so burn-in
 is fine."
+
+## BT. Fluorescent particles: the physical analogue of the second hue (user, 2026-09-24 15:10)
+
+User, with five photos of his own panel (bt-panel-1..5): "Those blue and magenta screenshots already
+have the murkiness in a way. I suppose it's not a technical feature, more a vibe. This sort of soft
+opposite colour shading works very well, but I feel like it needs a physical analogue. Popping up
+green randomly isn't ideal, and mixing it in off screen leads to dilution. Anyways the plain old
+monotone shots still miss detail when you look closer, it's just a plain colour background. The
+floaters already help a lot, but I believe we can kill 2 birds with one stone. Light + fluorescent
+particles can add those elements while still having the same composition as the photos."
+Reading: (1) murk is NOT a separate term (BS item 3 is dropped; the vibe is already there in the
+soft gradients). (2) The hue2 second-hue patches (the soft opposite-colour blobs, AE) stay as the
+COMPOSITION, but get a physical cause: fluorescent PARTICLES suspended in the film, lit by the lamp
+(black light), whose local density IS the hue2 mix field (the existing 20x12 CPU field advected by
+velocity, t3); where they concentrate, their aggregate glow makes the soft patch; where sparse, they
+show as individual small sharp glowing specks (the detail the plain background lacks, and the
+"pigment grain" of the solar-lava ref). So one system gives both the patches and the close-up
+detail, and the second colour no longer "pops up randomly" or dilutes: particles drift in with the
+flow, always present, visible as specks before they become a patch. (3) The glowing bodies (BS
+dye_fraction, photos 4/5: teal / red glowing droplets inside the black mass) are the same
+fluorescence, same lamp. (4) The film stays bold and saturated (photos 1-3, 5), black masses stay
+black. Ideas, not targets.
+Spec sketch (pre-flight first): particle layer in the display pass, film pixels and mass interiors:
+a hashed point field (2-3 sizes, sharp 1-3 px specks, count key) advected by the same velocity as
+the hue2 field, each speck's brightness = hue2 field density x lamp reach x fluor amount, colour =
+the hue2 hue (the opposite colour); the existing hue2 patch term becomes the low-frequency glow of
+the same field (keep AE's rotation/wobble/period so the composition of the photos is unchanged);
+keys particle_amt (0 = today), particle_size, particle_count, particle_lamp (reach); defaults =
+identity; ABL: specks are tiny, the patch is unchanged. Fluid look untouched (acid PSO only).

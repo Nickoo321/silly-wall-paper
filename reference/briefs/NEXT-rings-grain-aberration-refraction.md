@@ -1564,3 +1564,33 @@ cycle, so the corner grade answers the colour (cooler corners when the palette r
 example). Then it reads as the lens and the light responding, not as modes switching. A second
 independent cycle is what turns a wallpaper into a screensaver. Before any cycling, live with one
 fixed subtle corner grade for a day. If you don't miss it when it's off, don't build the cycle."
+
+## BU DECISION (user, 2026-09-24 evening): two features, build both
+1. LAMP GREY: "do the graying out from the lamp. It should appear as if the dye is getting less
+   light or something. Very subtle; it should only be grey in, um, rule of thirds, one corner at a
+   time." => Y-flat desaturation (plus at most a hint of cool) weighted by a soft region on the
+   corner FARTHEST from the lamp, about a third of the frame (rule of thirds), never the centre;
+   moves with the lamp (rg0.xy) so as the lamp drifts/readjusts the grey corner crossfades to the
+   new far corner, one corner at a time. Keys: lamp_grey (0..1, default 0; 1 = ~60% desaturation at
+   the corner peak, subtle by design), lamp_grey_size (0.25..0.6 screen, default 0.4), lamp_grey_cool
+   (0..1, default 0.2). The user's read of it: the dye far from the lamp gets less light.
+2. SPLIT TONE: "do it. Make it the opposite of the main hue, and obviously rotate with the main
+   hue. Make it turn on/off, out of sync with the hue, the same way gears are like 3 and 5 so they
+   always switch teeth." => tint the DARK tones (the oil) with the complement of the current main
+   hue (main + 180, following hue_rotate so it stays opposite), gated on/off on its own clock with a
+   period coprime to the hue period (gear ratio 3:5, e.g. hue 3600 s -> tone 2160 s, or the
+   executor's better pick), smooth on/off crossfade (minutes), 50% duty. The auditor's objection
+   stands and is overridden by the user: this LIFTS true black; so the lift is a key and small.
+   Keys: shadow_tone (0..1, default 0 = off), shadow_tone_lift (0..0.15 of SDR white, default 0.06:
+   how far black is lifted at full tone), shadow_tone_sat (0..1, default 0.8), shadow_tone_period
+   (s, default 2160), shadow_tone_fade (s, default 120). Dark tones only (Y below a soft threshold),
+   droplet rims and the film untouched.
+Placement suggestion: BOTH in the display pass (acid PSO only): the dye block knows the main hue,
+inkC/oilC and the lamp, and the acid cbuffer has laP36 free (BS parked) => no post-slot plumbing.
+Grain/aberration/lid come after in post as today. Pre-flight decides. Proof: lamp grey: radial OKLab
+C profile from the far corner (C falls toward the corner, L flat within 1%, centre MAD = 0), the
+region moves with the lamp (series across a readjust), mean_lum unchanged, one-corner-at-a-time
+check (at most one corner region active > 0.1). Split tone: OKLab hue of the oil pixels = main hue +
+180 +- 10 deg across three hue phases, oil L lift <= shadow_tone_lift, film/rims unchanged, a
+series across an on/off crossfade with no step, the gear ratio verified (on/off phase vs hue phase
+over one hue period never repeats the same pairing).

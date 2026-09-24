@@ -1233,3 +1233,20 @@ and the black-mass gate as needed. Values first (the Opus look composer, 09-24 a
 picks, the values go into acid-rise-12, then "new build, swap?". Local executors AP (hairs/grain)
 and BB/BH (lamp temp, breathing) add on top of the picked look; cloud items (key pass, HLSL, slot
 table, tour, identity coverage) are independent. This is the priority task; it is not gated on them.
+
+## BQ. Schlieren: the film structures on a dark ground must read as floaters, not grey (user, 2026-09-24 13:25)
+
+User, zoomed into lapd-look r5: "these grey/black things: originally they looked like eye floaters /
+heat [shimmer], like when you see the fluid move around. Can you continue to try to get those things
+looking like that?" On the lit film the marbled structures (seams, rims, hue2 boundaries) read as
+floaters because they REFRACTED the bright film. On the black film there is nothing to refract, so
+the same terms show as faint flat grey lifts and loops. Wanted: schlieren, a clear fluid that
+displaces/refracts what is behind it (the droplet glows, the bloom, the lamp gradient), with a thin
+edge-light (bright on the lamp side, dark on the far side), and NO flat fill. Spec: one key
+film_schlieren (0..1, default 0 = today) in the display pass (water mode): use the film structure
+gradient (the seam/rim field already computed for oilR) as a refraction offset on the background
+sample plus a signed edge term scaled by the local light, and fade the existing grey fill by the
+same key; ABL none (redistributes light). Proof: crops of a loop on the black ground at 0/0.5/1 (the
+fill luminance must fall to the ground level, the edge must stay), the same on the lit preset
+(must look like today within MAD 0.5 at key 0), a 5-frame series showing the loop moving with the
+flow. Pre-flight first. Belongs to the LAPD LOOK; after the thicker-dye round and the swap.

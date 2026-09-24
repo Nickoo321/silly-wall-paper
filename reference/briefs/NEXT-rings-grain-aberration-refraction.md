@@ -1451,3 +1451,6 @@ barely shows. The OLED angle is fine: tiny drifting points are the safest conten
 do differently: first push what exists (more crust droplets, crust_hue_mix, the glowing bodies) and
 look at it on the panel. Add film specks only if the plain background still bothers you, and keep
 them sparse."
+BT/BS ORDER (user 13:50: "Auditor's"): 1. dye_fraction executor (BS item 1 spec) after BR/BQ merge;
+2. values round on the magenta/blue film: in-mass glowing droplets (crust droplets, crust_hue_mix),
+glowing bodies, soft penumbra edges; panel judgement (swap); 3. BT film specks only if still needed.

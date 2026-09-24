@@ -1223,3 +1223,13 @@ the Dye texture's clamped edges show; compute s on the CPU, upload one scalar. S
 has not taken it, else laP35.x; default 0 => s = 1 exactly. Proof: at one time t, breathe 0 vs 1:
 MAD of a +-32 px crop around the axis ~ 0, edge-crop MAD > 0, edge feature displacement = s*r; a
 12-frame series across a readjust (log m_rig.focus to pick the window) plotting s(t) vs focus.
+
+## LAPD LOOK (user, 2026-09-24 12:30: "name it lapd look, the task is called that")
+The full effect from the references, composed from the keys that now exist: the LAPD bloom tile
+(bn-lapd-bloom-tile.png): warm veiling bloom from the lamp side, corners that misbehave (corner_warp,
+field curve, aberration), haze over a sharp centre (halation), streaks in the glass, on the dark
+film with black / main / accent roles (film_level, dye roles, dark_sat, dye_lamp_follow), scratches
+and the black-mass gate as needed. Values first (the Opus look composer, 09-24 afternoon), the user
+picks, the values go into acid-rise-12, then "new build, swap?". Local executors AP (hairs/grain)
+and BB/BH (lamp temp, breathing) add on top of the picked look; cloud items (key pass, HLSL, slot
+table, tour, identity coverage) are independent. This is the priority task; it is not gated on them.

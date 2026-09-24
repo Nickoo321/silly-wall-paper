@@ -136,7 +136,19 @@ AV some colour slots should go grayscale · AW weak lid effect, add global motio
 weak heat haze · AY curve mix speed for large-distance colour merges · AZ +5% motion for big
 globs · BA small bubbles: rise-only, constant stream of 2-5, stronger (plate ~45 deg or flatter).
 
-## 6. Report format (5 lines)
+## 6. Report format (5 lines + the proof block)
 
 1. Hash + one-line summary. 2. Parity md5 (or "N/A — style=fluid untouched"). 3. Sheet path(s) in
 `build2\shots\live\`. 4. Values shipped and why (the A/B result). 5. Rote list, or "none".
+
+PROOF BLOCK (user rule, 2026-09-23 19:05: "don't just implement a feature: check that it works,
+note the difference, what setting actually adds to the effect"). For EVERY new key, before you
+report done:
+- WORKS: tools\key-effect.ps1 style evidence that the key is not inert at its test value on the
+  live preset: MAD / max-diff numbers vs the key at default. A key that reads INERT is not done.
+- DIFFERENCE: a difference image or a 2x crop pair (default vs test value) and ONE sentence in
+  plain words of what changed on screen (where, how much, what it looks like).
+- WHAT ADDS: per key, which values move the look and which do nothing (e.g. "0..0.3 nothing
+  visible, 0.3..0.7 the effect, above 0.7 only brightness"); if two keys do the same thing, say
+  so and propose dropping one. Slider range = the useful range (policy).
+No proof block, no merge.

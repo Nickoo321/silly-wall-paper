@@ -1520,3 +1520,15 @@ can see it switch, it's a gimmick. Build order: the lamp-aligned desaturate + co
 key. Add cycling after you've lived with it."
 BUILD 1 (user "let's lowkey add this feature"): grade_amount (0..1), grade_axis (-1 lamp | degrees),
 grade_width (0.2..1.5), grade_cool (0..1, temperature channel share); cycle later.
+
+BU CORRECTED (user, 2026-09-24 evening): "I'm literally not saying I want that effect. I only used
+the gradient to show you the before and after + the settings. I think maybe a subtle gradient +
+some effect, sort of vignette type thing." Confirmed reading: an EFFECT CYCLE. One post effect at a
+time applied to the whole frame with a subtle spatial falloff shaped like a vignette (strongest at
+the edges/corners, none at the centre; optionally biased so the lamp side stays cleaner), and WHICH
+effect it is cycles slowly over time like the hue cycle (minutes, crossfaded, never a visible
+switch). The effects are still open; first candidates from the Lightroom edits: A "cool grade" =
+temp -54, saturation -50, dehaze +100, blacks -20 (bu-lr-3); B "grey" = saturation -100 (bu-lr-4);
+C "teal shadows" split tone (bu-lr-1, lifts the black oil: conflicts with true black). BUILD 1 above
+(the linear lamp ramp) is WITHDRAWN. The user wants the pros/cons, the implementation difficulty,
+and whether it can be graded headlessly, from the auditor and the coordinator, before any build.

@@ -1298,3 +1298,30 @@ ultramarine as the second colour. For the look: main = solar-lava orange-red (dy
 dye_core high), accent = ultramarine (droplet hue ~235-245, deep, not cyan), black ground; the body
 reads as pigment, not liquid dye: even fill (dye_core), tiny grain inside the mass allowed (that is
 the one place artefact_lum_gate should NOT clean). Idea, not target. The user may send drawings.
+
+## BS. Black-light scene: bold but dim, black oil with 5% luminescent pigment, "a light in muddy water" (user, 2026-09-24 14:30)
+
+User, with two photos of his own panel (blacklight-ref-1 blue film / black oil, blacklight-ref-2 pink
+film / black mass) and the solar-lava pigment ref: "Maybe some dark scene like this, but reduce the
+luminance, and replace 5% of the dark oil with the previous example of the very luminescent pigment.
+The light should probably look like a black light, and illuminate the blue in that circumstance
+background. So I guess that means you need to fix how that works. But again it should still look
+bold I guess, just dimmer. Recent renderings have looked paperish/thin. This should read more like a
+light in muddy water maybe."
+Reading (to confirm with the user): (1) start from the bold saturated film + pitch-black oil of the
+old panel looks, not from the black-film LAPD candidate; (2) overall luminance down (film dim but
+still saturated and BOLD, never paperish/thin); (3) most oil stays black, a small share (~5%) of the
+masses/droplets is the luminescent pigment (solar lava orange-red), glowing; (4) the lamp is a BLACK
+LIGHT (UV): what you see is fluorescence, not reflection: the film fluoresces (deep blue/ultramarine
+under UV, falling off with distance from the lamp), the pigment fluoresces hot, black oil stays
+black, nothing is lit by bounce; (5) "a light in muddy water" = a dense medium: the light scatters
+through murk (volumetric haze that CARRIES the lamp, soft, not the paper-thin flat film).
+Levers that exist: film_level (dim), dark_sat (bold when dim), oil_fluor (emissive under the lamp:
+currently lights the film green = wrong hue source; needs a UV response hue = the film's own deep
+blue), dye_* + per-mass identity from AG-b (select WHICH masses take the pigment: new key
+dye_fraction 0..1 using the hole-blob id hash, default 1 = today), fog/halation/bloom (murk; the
+haze idea BI: a volumetric term that carries the lamp through the medium). Code likely needed: (a)
+dye_fraction (small), (b) UV fluorescence model: film emission = fluor_amount * film_hue_response *
+lamp_reach, no diffuse term (BL rework: oil_fluor hue from the film palette, not green), (c) murk:
+lamp-carrying volumetric haze (BI). Pre-flight before anything; this is the next LAPD LOOK step
+after dye_core/schlieren land. Ideas, not targets.

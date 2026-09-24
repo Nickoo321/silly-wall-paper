@@ -1250,3 +1250,15 @@ same key; ABL none (redistributes light). Proof: crops of a loop on the black gr
 fill luminance must fall to the ground level, the edge must stay), the same on the lit preset
 (must look like today within MAD 0.5 at key 0), a 5-frame series showing the loop moving with the
 flow. Pre-flight first. Belongs to the LAPD LOOK; after the thicker-dye round and the swap.
+BQ addendum (user 13:30, on the r5 crop): "This reads more like dark circles than floaters." The loops
+are DARK rings with a fill, not clear refractions; the schlieren key must remove the dark fill and
+keep only a thin refracted edge.
+
+## BR. Dye core brightness (composer finding, 2026-09-24 13:35, LAPD look "make the fluids more thick")
+The mass core is hard-wired to ~42% of the rim brightness in the water-mode dye block, so no value
+makes the mass read as a dense, opaque, dye-filled body: dye_lum/dye_sat only thicken the rim,
+dye_thick_hue 40 turns the core khaki, oil_absorb/oil_transparency act on the (black) film only.
+Spec: one key dye_core (0..1, default = today's 0.42 ratio, exact identity) = core-to-rim brightness
+ratio; 1 = even fill. Display pass, laP35.x (BB/BH take .y/.z). Proof: crops of a mass at 0.42 /
+0.7 / 1.0 on the LAPD candidate (core luminance ratio measured), identity on all presets, mean_lum.
+Pre-flight, then a small Opus executor; belongs to the LAPD LOOK, bundle with BQ if both are code.

@@ -1339,3 +1339,8 @@ random by identity, about 1 in 20 glowing, the rest pitch black. Key dye_fractio
 Identity: AG-b's hole-blob id (c.w) where a hole carves the mass; for bodies without a hole id
 (gaps between oil blobs, droplets) the executor must find a stable per-body id (droplet hash, blob
 seed) so a body does not flicker in and out; a glowing body stays glowing for its life.
+BS addendum 3 (user 14:45): the 1-in-20 is "a starting estimate, idk how it's gonna end up" =>
+dye_fraction is a slider, 0.05 is only the first value. Ref blacklight-ref-4-glowstick-jars.jpg,
+"maybe like this?": the GLOWING bodies look like glow-stick liquid under UV: self-luminous volume
+(not a lit surface), brighter toward the core, glowing particles/bubbles inside, soft bleed of the
+glow into the dark surround (bloom/halation carry it), magenta / pink / blue palette in the ref.

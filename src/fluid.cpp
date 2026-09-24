@@ -2472,6 +2472,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 // GPU mirrors â€” must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
 // .c = the comb anisotropy (mouse_oil_mode 2): x = stretch amount along the
 // drag direction, yz = that direction. All zero unless the comb is running.
+// .c.w = the blob's dye identity in (0,1) (brief AG-b; read for holes only).
 struct AcidBlobGPU { float a[4]; float b[4]; float c[4]; };
 struct AcidParamsGPU {
     float oil[4][4];
@@ -2489,9 +2490,11 @@ struct AcidParamsGPU {
     float p32[4];
     // brief BL: the fluorescent-oil / ambient-dye block (the cbuffer was full).
     float p33[4];
+    // brief AG-b: per-mass dye variation (the cbuffer was full again).
+    float p34[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1648, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1664, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -2519,6 +2522,13 @@ static float AcidAccentHash(uint32_t i, uint32_t salt) {
     h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
     h *= 3266489917u; h ^= h >> 16;
     return (h >> 8) * (1.0f / 16777216.0f);
+}
+// brief AG-b: the next dye identity, strictly inside (0,1). A hash of a serial
+// number rather than a draw from the seeding / respawn RNGs, so turning the
+// dye variation on (or adding this at all) moves no blob by a bit.
+float FluidRenderer::NextAcidDyeId() {
+    const float u = AcidAccentHash(m_acidDyeSerial++, m_acidDyeSalt ^ 0xD7E1D00Du);
+    return 0.002f + 0.996f * u;
 }
 // Must match StructuredBuffer<uint2> DropCells: (first index, count).
 struct DropCellGPU { uint32_t first, count; };
@@ -2805,8 +2815,13 @@ void FluidRenderer::SeedAcidBlobs() {
     // is exactly the stagger rise_respawn needs: the column is populated from
     // the first frame and never empties, instead of one batch marching up
     // together and leaving a bare screen behind it.
-    for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
+    // brief AG-b: a fresh dye identity per blob (hash of a serial, no RNG draw).
+    m_acidDyeSalt   = g_randSeed ? g_randSeed * 2246822519u : GetTickCount();
+    m_acidDyeSerial = 0;
+    for (size_t bi = 0; bi < m_acidBlobs.size(); bi++) {
         m_acidBlobs[bi].rTarget = m_acidBlobs[bi].baseR;   // nothing pending
+        m_acidBlobs[bi].dyeId   = NextAcidDyeId();
+    }
     m_acidRespawnRng = rng.next() | 1u;
     m_acidWantBlobs = n;
     m_acidSeeded = true;
@@ -2876,6 +2891,7 @@ void FluidRenderer::AdjustAcidBlobCount(int want) {
         b.breathRate = 0.08f + rf() * 0.24f;
         b.s1 = rf() * TWO_PI;
         b.s2 = rf() * TWO_PI;
+        b.dyeId = NextAcidDyeId();                // brief AG-b: a new blob, a new identity
         m_acidBlobs.push_back(b);
         live++;
     }
@@ -2955,6 +2971,14 @@ void FluidRenderer::DumpAcidCsv(const wchar_t* path) const {
         const AcidBlob& b = m_acidBlobs[i];
         fprintf(f, "blob,%d,%.6f,%.6f,%.6f,%.4f,%.6f,%.6f,%d\n",
                 (int)i, b.x, b.y, b.baseR, b.wgt, b.vx, b.vy, b.kind);
+    }
+    // brief AG-b: the blob records exactly as the shader read them on the
+    // captured frame: x, y (uv), r = breathing radius, wgt, vx = rise_stretch
+    // anisotropy (b.w), vy = dye identity (c.w), extra = comb active.
+    for (size_t i = 0; i + 12 <= m_acidBlobGpuCopy.size(); i += 12) {
+        const float* g = &m_acidBlobGpuCopy[i];
+        fprintf(f, "gblob,%d,%.6f,%.6f,%.6f,%.4f,%.6f,%.6f,%d\n",
+                (int)(i / 12), g[0], g[1], g[2], g[3], g[7], g[11], g[8] > 0.0f ? 1 : 0);
     }
     for (size_t i = 0; i < m_acidDrops.size(); i++) {
         const AcidDrop& d = m_acidDrops[i];
@@ -3414,6 +3438,9 @@ void FluidRenderer::StepAcidBlobs(float dt) {
             b.vy = 0.0f;
             b.s1 = rf() * 6.2831853f;
             b.s2 = rf() * 6.2831853f;
+            // brief AG-b: re-rolled here, while the blob is parked off-screen
+            // under the bottom edge -- a mass never changes dye in view.
+            b.dyeId = NextAcidDyeId();
         } else if (!respawnMode) {
             if (b.y < -my)        b.y += 1.0f + 2.0f * my;
             if (b.y > 1.0f + my)  b.y -= 1.0f + 2.0f * my;
@@ -4972,7 +4999,20 @@ void FluidRenderer::UploadAcidConstants() {
         dst[i].c[0] = b.comb;
         dst[i].c[1] = b.cdx;
         dst[i].c[2] = b.cdy;
-        dst[i].c[3] = 0.0f;
+        // brief AG-b: the blob's dye identity. Read by the shader for HOLE
+        // blobs only, and only while dye_lum_vary / dye_hue_vary are on.
+        dst[i].c[3] = b.dyeId;
+    }
+
+    // DIAGNOSTIC ONLY (FW_ACID_DUMP, brief AG-b): keep what was uploaded so
+    // DumpAcidCsv can write the shader's own blob records. Off = no cost.
+    static const bool kAcidDumpOn = [] {
+        wchar_t e[8] = {};
+        return GetEnvironmentVariableW(L"FW_ACID_DUMP", e, 8) > 0 && e[0] != L'0';
+    }();
+    if (kAcidDumpOn) {
+        const int nc = n < kAcidMaxBlobs ? n : kAcidMaxBlobs;
+        m_acidBlobGpuCopy.assign((const float*)dst, (const float*)dst + (size_t)nc * 12);
     }
 
     AcidParamsGPU p = {};
@@ -4994,7 +5034,7 @@ void FluidRenderer::UploadAcidConstants() {
         p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
         p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
         p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
-        p.p30, p.p31, p.p32, p.p33 };
+        p.p30, p.p31, p.p32, p.p33, p.p34 };
     auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
 
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
@@ -5259,6 +5299,15 @@ void FluidRenderer::UploadAcidConstants() {
     // (film_level for the film, the dye level for masses / droplets). 0 =
     // today and the shader skips it.
     slot(LA_DARK_SAT,        fminf(fmaxf(a.darkSat, 0.0f), 1.0f));
+    // brief AG-b: per-mass dye variation. All three 0 = today and the shader
+    // skips both the identity accumulation and the variation block. The
+    // rise speed (uv/s) drifts the identity fallback with the column, so a
+    // gap-mass keeps its shade while it climbs instead of rising through a
+    // fixed screen-space pattern.
+    slot(LA_DYE_LUM_VARY,  fminf(fmaxf(a.dyeLumVary, 0.0f), 0.5f));
+    slot(LA_DYE_HUE_VARY,  fminf(fmaxf(a.dyeHueVary, 0.0f), 180.0f));
+    slot(LA_DYE_THICK_HUE, fminf(fmaxf(a.dyeThickHue, -180.0f), 180.0f));
+    slot(LA_DYE_ID_RISE,   fmaxf(a.riseSpeed, 0.0f));
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

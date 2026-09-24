@@ -32,6 +32,8 @@
 // into an existing scalar the way DYE_DROP_RGB does.
 // Brief BL added laP33 = {oil_fluor, oil_fluor_reach, dye_lamp_follow,
 // dark_sat (brief BP)}: full again; the next key needs laP34.
+// Brief AG-b added laP34 = {dye_lum_vary, dye_hue_vary, dye_thick_hue,
+// rise_speed for the identity fallback's drift}: full; the next key needs laP35.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -174,7 +176,11 @@
     X(OIL_FLUOR,           33, x, "oil_fluor, 0..1 (brief BL)") \
     X(OIL_FLUOR_REACH,     33, y, "oil_fluor_reach, screen heights, >= 0.05 (brief BL)") \
     X(DYE_LAMP_FOLLOW,     33, z, "dye_lamp_follow, 0..1 (brief BL)") \
-    X(DARK_SAT,            33, w, "dark_sat, 0..1 (brief BP)")
+    X(DARK_SAT,            33, w, "dark_sat, 0..1 (brief BP)") \
+    X(DYE_LUM_VARY,        34, x, "dye_lum_vary, relative +-, 0..0.5 (brief AG-b)") \
+    X(DYE_HUE_VARY,        34, y, "dye_hue_vary, degrees, 0..90 (brief AG-b)") \
+    X(DYE_THICK_HUE,       34, z, "dye_thick_hue, degrees, -90..90 (brief AG-b)") \
+    X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -189,5 +195,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP33).
-static const int kAcidSlotVecs = 34;
+// Number of laP<n> float4s (laP0 .. laP34).
+static const int kAcidSlotVecs = 35;

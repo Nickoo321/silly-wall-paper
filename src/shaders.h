@@ -606,6 +606,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP31;     // x CRUST_HUE_MIX  y REFLECT_R  z REFLECT_AMT  w DYE_SAT
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
+    float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -615,6 +616,8 @@ cbuffer AcidCB : register(b1) {
 // (0 = off, and then the whole comb branch is skipped and the round/rise
 // path below is the original code), yz = that direction as a unit vector in
 // p-space. Zero for every blob unless the comb is actually running.
+// .c.w = the blob's dye IDENTITY in (0,1), a CPU hash fixed for the blob's
+// life (brief AG-b). Read for hole blobs only, and only with dye variation on.
 struct AcidBlobGPU { float4 a; float4 b; float4 c; };
 StructuredBuffer<AcidBlobGPU> AcidBlobs : register(t1);
 
@@ -1038,6 +1041,13 @@ float4 PSMain(VSOut i) : SV_Target {
     // How deep inside a hollow droplet's interior this pixel is; 0 unless
     // droplet_ring_frac is on.
     float  ringIn = 0.0;
+    // brief AG-b: the dye IDENTITY of the mass under this pixel, soft-maxed
+    // (w^4, the oil colour's trick) over the HOLE blobs' hashes in c.w, so two
+    // merging holes blend smoothly. Accumulated only while dye_lum_vary or
+    // dye_hue_vary is on; otherwise the loop below is the old loop.
+    float  idS = 0.0, idW = 0.0, idH = 0.0;   // idH = the holes' own (negative) field
+    const bool dyeIdOn = LA_DYE_AMT > 0.0005 &&
+                         (LA_DYE_LUM_VARY > 0.0005 || LA_DYE_HUE_VARY > 0.0005);
     int nb = (int)LA_BLOB_COUNT;
     const float thresh = LA_THRESHOLD;
     [loop]
@@ -1101,6 +1111,11 @@ float4 PSMain(VSOut i) : SV_Target {
             float w2 = w * w, w4 = w2 * w2;
             colSum += B.b.rgb * w4;
             colW   += w4;
+        } else if (dyeIdOn) {
+            float w2 = w * w, w4 = w2 * w2;
+            idS += B.c.w * w4;
+            idW += w4;
+            idH += w * B.a.w;
         }
     }
 )hlsl"
@@ -1913,6 +1928,53 @@ R"hlsl(
         float3 dyeC = InkHsv2Rgb(float3(LA_DYE_HUE, LA_DYE_SAT, 1.0));
         float dIn  = max(-sdf, 0.0);                 // p-units into the mass
         float Tw   = exp(-dIn / 0.055);              // light left after the wax
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+        // ---- brief AG-b: dye GRADIENTS, so the masses are not all one wax --
+        // User: "there should probably be gradients or something, so they
+        // aren't all the same." Every mass gets an IDENTITY id in 0..1:
+        //   * a hole blob carries a hash in c.w (CPU, fixed for its life,
+        //     re-rolled only when it respawns off-screen); the blob loop
+        //     soft-maxed them with w^4 into idS / idW, so merging holes blend;
+        //   * a gap between oil blobs has no hole near it (idW ~ 0) and falls
+        //     back to a slow fbm at mass scale (~0.4 screen) that climbs with
+        //     rise_speed, so a mass keeps its shade while it rises. NOT the
+        //     hue2 field: that would couple the dye to the film's second hue.
+        // dye_lum_vary scales the level by 1 +- value, dye_hue_vary turns the
+        // hue by +- value degrees, and dye_thick_hue turns it with thickness
+        // (thin edge = dye_hue, thick core = dye_hue + value; Tw saturates in
+        // a small mass, so it stays edge-coloured and a big one gets a core).
+        // MASSES only: mKv is BK's mass-territory test (the blob-only surface,
+        // 3 px into the sheet), 0 on a droplet hole, so droplets keep dyeC.
+        // All three 0 skips the block and dyeC is the old line.
+        [branch] if (LA_DYE_LUM_VARY > 0.0005 || LA_DYE_HUE_VARY > 0.0005 ||
+                     abs(LA_DYE_THICK_HUE) > 0.05) {
+            float sBv = (fieldB - thresh) / max(length(gradB), 1e-6);
+            float mKv = 1.0 - smoothstep(0.0, 3.0 * PX1440 + saturate(LA_DYE_SMOKE) * 0.030, sBv);
+            float dh = LA_DYE_THICK_HUE * (1.0 - Tw);    // Tw = 1 at the edge
+            float lk = 1.0;
+            [branch] if (dyeIdOn) {
+                float  fb  = AcidFbm(float2(pp.x, pp.y + LA_TIME * LA_DYE_ID_RISE) * 2.5
+                                     + float2(7.31, 1.93));
+                float  idF = saturate(0.5 + (fb * 1.143 - 0.5) * 2.2);
+                // A hole's identity counts only where that hole CARVED the
+                // mass: the oil-only field (fieldB minus the holes' own) is
+                // above the isoline there. A hole that has drifted into a gap
+                // carves nothing, and would otherwise print a disc of its own
+                // colour inside that gap's mass (first sheet, hue_vary 90).
+                float  kH  = smoothstep(0.0, 0.02, idW) *
+                             smoothstep(thresh - 0.05, thresh + 0.20, fieldB - idH);
+                float  id  = lerp(idF, idS / max(idW, 1e-20), kH);
+                float  sg  = 2.0 * id - 1.0;
+                dh += LA_DYE_HUE_VARY * sg;
+                lk  = 1.0 + LA_DYE_LUM_VARY * sg;          // 0.5 .. 1.5
+            }
+            dyeC = lerp(dyeC, InkHsv2Rgb(float3(LA_DYE_HUE + dh * (1.0 / 360.0), LA_DYE_SAT, lk)), mKv);
+        }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
         // ---- brief BL: dye_lamp_follow (ambient dye) ---------------------
         // The lamp lights the OIL; the fluid under it should only see a dim
         // ambient. At 1 (today) the dye rides lampG (rise_bottom_light) and

@@ -30,6 +30,8 @@
 // NEXT key needs a new float4 laP33 (bump kAcidSlotVecs, add p33 to
 // AcidParamsGPU and laP33 to cbuffer AcidCB in the same position), or packs
 // into an existing scalar the way DYE_DROP_RGB does.
+// Brief BL added laP33 = {oil_fluor, oil_fluor_reach, dye_lamp_follow,
+// dark_sat (brief BP)}: full again; the next key needs laP34.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -84,7 +86,7 @@
     X(INK_LOCK,            11, x, "ink_complement_lock, 0/1") \
     X(INK_LOCK_SPAN,       11, y, "ink_complement_span, degrees") \
     X(INK_TARGET_HUE,      11, z, "oil mean hue + 180, degrees (computed)") \
-    X(DYE_DROP_RGB,        11, w, "droplet dye r+256g+65536b (8-bit each), -1 = split off; dye_droplet_* x dye_droplets (brief BK)") \
+    X(DYE_DROP_RGB,        11, w, "droplet dye hue8+256sat8+65536lum8, -1 = split off; dye_droplet_* x dye_droplets (brief BK, packed HSV since BP)") \
     X(RIM_VARY,            12, x, "rim_vary") \
     X(RIM_INK_FOLLOW,      12, y, "rim_ink_follow") \
     X(RIM_ORDER,           12, z, "rim_order, 0/1") \
@@ -168,7 +170,11 @@
     X(SHADOW_AMT,          32, x, "shadow_amt") \
     X(SHADOW_LEN,          32, y, "shadow_len, screen heights") \
     X(SHADOW_SOFT,         32, z, "shadow_soft") \
-    X(LIGHT_Z,             32, w, "[post] light_z")
+    X(LIGHT_Z,             32, w, "[post] light_z") \
+    X(OIL_FLUOR,           33, x, "oil_fluor, 0..1 (brief BL)") \
+    X(OIL_FLUOR_REACH,     33, y, "oil_fluor_reach, screen heights, >= 0.05 (brief BL)") \
+    X(DYE_LAMP_FOLLOW,     33, z, "dye_lamp_follow, 0..1 (brief BL)") \
+    X(DARK_SAT,            33, w, "dark_sat, 0..1 (brief BP)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -183,5 +189,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP32).
-static const int kAcidSlotVecs = 33;
+// Number of laP<n> float4s (laP0 .. laP33).
+static const int kAcidSlotVecs = 34;

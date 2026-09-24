@@ -773,6 +773,30 @@ struct LiquidAcidConfig {
     // (mass_rim, oil_glow, halo, lens highlights) keeps the full palette and
     // the mass/droplet dye is untouched. 1 = today; ~0.05 = film pitch black.
     float filmLevel    = 1.0f;      // 0..1, 1 = today            film_level
+    // --- brief BL: fluorescent oil under the lamp, ambient-lit fluid -------
+    // oil_fluor: EMISSIVE gain on the oil film from the rig lamp (the same
+    //   lamp position the rim / shadows / specular use). The film glows in
+    //   its OWN saturated hue (no hue key: the palette rotates), strongest at
+    //   its thin edge -- fluorescent sheet traps its light and leaks it at
+    //   the edges -- and near the lamp, falling off over oil_fluor_reach.
+    //   Added after film_level, so a dimmed film + fluor = dark sheet, lit
+    //   edges. The edge band also gets HDR headroom (small area, ABL).
+    // oil_fluor_reach: Gaussian falloff radius from the lamp, screen heights.
+    // dye_lamp_follow: 1 = today (the mass dye is lit by the lamp ramp and
+    //   brightest at its thin edge); 0 = the dye ignores the lamp and the
+    //   thin-edge profile and sits at its core level everywhere: flat,
+    //   ambient colour that the lamp never lifts.
+    float oilFluor      = 0.0f;     // 0..1, 0 = today            oil_fluor
+    float oilFluorReach = 0.80f;    // screen heights             oil_fluor_reach
+    float dyeLampFollow = 1.0f;     // 0..1, 1 = today            dye_lamp_follow
+    // --- brief BP ("darker must mean MORE saturated, not less") -----------
+    // dark_sat: chroma gain k = 1 + dark_sat * (1 - level), keyed on the
+    //   ELEMENT's level (film_level for the film; the dye level for masses
+    //   and droplets), never on per-pixel luminance. Applied as Y + (c-Y)*k,
+    //   so the luma is kept exactly (mean_lum / HDR peak / ABL unchanged by
+    //   construction); the only clamp is the gamut edge (no channel below 0),
+    //   so HDR on and off agree. 0 = today.
+    float darkSat       = 0.0f;     // 0..1, 0 = today            dark_sat
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it

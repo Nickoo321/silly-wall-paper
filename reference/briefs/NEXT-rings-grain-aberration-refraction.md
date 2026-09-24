@@ -1291,6 +1291,16 @@ on a black film); a background-refraction offset only shows over a mass/droplet,
 secondary; film pixels only (fieldB >= thresh, away from masses) so the red mass rims do not change.
 Proof: loop crop at 0/0.5/1 (fill = ground, edge peak rises, ring width <= 3 px); acid-rise-12
 unchanged at 0; 5-frame series, loops travel with the flow; mean_lum within 1%.
+
+BR + BQ executor result (2026-09-24, branch core): BR dye_core LANDED (laP35.x, default 0.42 bit-identical;
+core/rim 0.18/0.41/0.73 nits at 0.42/0.7/1.0, core-crops.png). BQ TRIAGE DISPROVED the film_level prediction
+(bq-triage-sheet.png): film_level 0 / oil_thin_edge 0 / oil_penumbra 0 leave the loops; they are droplet_lens term (a)
+(droplet_lens_centre): its oil-side lift toward white is a grey fill on a dark film that falls away along the film's
+valleys (soft ~10 px loops at 720p) and round every droplet. droplet_lens_centre 0 removes loops + fill (values fix, set
+in the LAPD candidate r8). film_schlieren NOT landed: four iterations (grad of coverage; contours of the term-(a) lift at
+0.25 / 0.7, with and without droplet / mass masks) never traced those loops, only droplet halos and arcs near masses
+(MAD <= 0.3). The code is parked on branch core-schlieren-wip. Next pass needs a DEBUG view first: write the term-(a)
+lift, sdf sign and fieldB-vs-thresh to the output for one shot, then design the edge from what the loops really are.
 LAPD LOOK addendum (user, 2026-09-24 14:20, ref lapd-ref-solar-lava-ultramarine-pigment.jpg): "maybe
 try something like this, I was kinda imagining this." What the ref has: PIGMENT density (opaque,
 matte-dense, faintly granular, no wash), a fluorescent orange-red that glows at the edge, and deep

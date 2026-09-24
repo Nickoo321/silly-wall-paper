@@ -811,6 +811,14 @@ struct LiquidAcidConfig {
     float dyeLumVary    = 0.0f;     // 0..0.5, 0 = today          dye_lum_vary
     float dyeHueVary    = 0.0f;     // deg 0..90, 0 = today       dye_hue_vary
     float dyeThickHue   = 0.0f;     // deg -90..90, 0 = today     dye_thick_hue
+    // --- brief BR: dye_core ------------------------------------------------
+    // The mass dye is lit through a Beer-Lambert profile lerp(core, 1, Tw):
+    // the thin rim (Tw = 1) is full level, the thick core (Tw -> 0) sits at
+    // `core` times it. 0.42 is the old hard-wired floor (exact identity);
+    // 1 = an even, opaque-reading fill. dye_smoke pulls the profile toward
+    // 0.75, so with smoke up this key does less; dye_lamp_follow < 1 pushes
+    // Tw toward 0, i.e. toward this floor (at dye_core 1 it thins nothing).
+    float dyeCore       = 0.42f;    // 0.42..1, 0.42 = today      dye_core
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it

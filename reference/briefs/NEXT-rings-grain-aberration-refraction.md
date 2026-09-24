@@ -1412,3 +1412,9 @@ the hue2 hue (the opposite colour); the existing hue2 patch term becomes the low
 the same field (keep AE's rotation/wobble/period so the composition of the photos is unchanged);
 keys particle_amt (0 = today), particle_size, particle_count, particle_lamp (reach); defaults =
 identity; ABL: specks are tiny, the patch is unchanged. Fluid look untouched (acid PSO only).
+BT addendum (user 15:15, bt-panel-6/7 "more photos that show murkiness"): what reads as murk in the
+photos is the SOFT PENUMBRA of the masses (edges that dissolve into the film as if submerged), the
+slight translucency at thin edges, and the smooth low-contrast film gradient; not a haze layer.
+Levers that exist: oil_penumbra, oil_thin_edge, camera focus band / dof, shadow_soft, film level
+gradients. The LAPD look must keep these soft edges (r5/r7 have harder rims); the particles add the
+detail on top.

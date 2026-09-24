@@ -83,3 +83,38 @@ handoff\review\cycle\ for the creative chat.
    rendered at once]
 2. Ink in the cycle? Mirror overlay stages? [no, until asked]
 3. Dwell per stage? [10 min]
+
+## AUDITOR PRE-FLIGHT (2026-09-24, main 61ed50a) — binding corrections
+1. The sim does NOT restart on a look switch: ApplyPreset (main.cpp:1990-2010) overwrites Config and
+   calls EnsureLookResources, which compiles the PSO once and reseeds the acid population only on that
+   first compile (fluid.cpp:486-494); velocity/dye textures carry over. The director needs a black-point
+   reset: public FluidRenderer::ResetLookState() = clear dye + velocity (m_psoClear4 / ClearV),
+   m_acidSeeded=false, m_dropletSeededFor=-1, re-seed the mix field; callable only while cycling.
+2. Warm-up: while black, sub-step the sim (e.g. 8 steps/frame) so 10-20 s of sim time passes in ~2 s
+   wall time. MEASURE warm-up to steady state per look (droplet count, mean_lum within 5%); no
+   hard-coded 3 s.
+3. State that leaks across a switch: a mood-conductor SHIFT keeps writing shared fluid fields
+   (vorticity, dissipation) → freeze it on leaving a fluid stage, restart from DWELL on re-entry; the
+   conductor writes base_mood to the ini (moods.cpp:593) → suppress while cycling; a journey keeps
+   driving keys → detach at every stage switch; m_hueAngle → glide to the next full turn when leaving
+   fluid (AGENTS rule) and confirm the hue-burst term (fm1.x, shaders.h:1647) never runs under acid.
+4. Partial overlays merge onto live state → compose EVERY stage onto a declared base (FluidConfig{} +
+   stage file, or stage_N_base). Apply stages in memory: reuse ApplyPreset's merge WITHOUT
+   CloseSettingsWindow, SaveFullConfig, MoodsAdoptPath. No ini writes while cycling except [cycle] state.
+5. FADE = fold into m_sdrScale on the CPU (display b0.sdrScale; the post pass normalises by the same
+   value pp2.z, so grain/fog/bloom scale with it). At 1.0 the constant is bit-identical → DXBC identical,
+   parity holds. Below 0.01 switch to PresentBlack() for the hold + warm-up (avoids the post pass
+   max(sdr,1e-3) floor). Do NOT use the spare fm2.yzw (adds an instruction). Proof: dxbc-cmp IDENTICAL,
+   the md5, and a fade series where mean_lum is proportional to the fade within 2% and monotonic.
+6. Generic lerp: NEVER through the UI setter (per-key ini writes at 144 fps = disk/OneDrive/MSIX churn).
+   Write Config fields in memory, fire hooks once at the end. Flags needed (keys.inc on ui1, or a
+   director-local list until it merges): PERIOD never lerp (hue_rotate_period, hue_sweep_period,
+   film_hue2_wobble_period, weather_period_s, shadow_tone_period: phase = fmod(t/P) spins) → cut inside
+   a fade; HUE lerp the short way round (dye_hue, film_hue2); RESTART cut inside a fade (wanderer_count,
+   film_hue2_seed_rows, blob_count + per-kind fractions, droplets, enums, ink_mode); SHELL never apply.
+   Colour triples and sweep lists are not in keys.inc → fade. Any stage pair differing in a
+   PERIOD/RESTART/enum key fades even within one look.
+7. PHASING: phase 1 = fade-only director on main NOW (the first cycle is all look changes / structural
+   differences, no lerps needed). Phase 2 = generic lerp once ui1's keys.inc lands with the flags.
+8. Defaults from the opinion: fade out ~1.5 s, black hold = measured warm-up, fade in 2-3 s; dwell WE
+   longer than the oil stages (oil 12-15 min).

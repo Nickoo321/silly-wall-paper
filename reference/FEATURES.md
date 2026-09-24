@@ -343,6 +343,8 @@ The virtual lens the whole scene is shot through: focus depth, tilt and field cu
 | `[post] dof_max_px` | Depth of field (max CoC px at 1440p) | 0..16, step 0.5 | 0.0 | 9 | Turns the one global defocus into a real depth of field: each element is blurred by how far its own depth is from the plane of focus, up to this radius. 0 = off, and the whole per-pixel path is skipped. liquid_acid only |
 | `[post] camera_focus` | Focus depth | 0..1, step 0.02 | 0.5 | 0.5 | Which depth is sharp. 0.5 is the plane the big masses sit on; lower favours the front droplets, higher the back ones |
 | `[post] camera_field_curve` | Field curvature | 0..2, step 0.05 | 0.0 | 0.12 | Bends the surface of focus away from the dish with distance from the optical axis, so the centre and the corners of the frame cannot both be sharp -- what a real lens does |
+| `[post] corner_warp` | Corner warp | 0..1, step 0.05 | 0.0 | 0 | Brief BN. The microscope field edge: outside corner_warp_r each pixel reads from a point turned toward the nearest frame diagonal (tangential stretch along the arcs, radius unchanged), so the corners look oddly distorted. Frame-fixed, applied to the post pass uv before every tap; grain/dither/overlay stay unwarped. The middle 40% of the frame is bit-identical at every value. Packed in rg1.x field 2. |
+| `[post] corner_warp_r` |   corner warp start | 0.4..0.9, step 0.05 | 0.6 | 0.6 | Where the warp begins, 1 = a frame corner (square-normalised radius); 0.4 = just outside the centre 40% crop. Inert while corner_warp is 0 (written 0 then). rg1.x field 3. |
 | `[post] focus_tilt` | Focus tilt | 0..2, step 0.05 | 0.0 | 0.26 | Slants the surface of focus (Lensbaby / freelensing): a strip of sharpness across the frame with the focus falling off smoothly to either side. 0 = level |
 | `[post] focus_tilt_angle` | Focus tilt angle (deg) | -180..180, step 5 | 0.0 | 25 | Which way that strip runs. With a readjustment period set, this is the angle it is re-aimed around |
 | `[post] focus_band_px` | Sharp band width (px at 1440p) | 40..1200, step 20 | 260.0 | 340 | How wide the sharp strip is on screen. Wide is a gentle depth of field, narrow is the freelensing sliver |
@@ -377,6 +379,7 @@ The transparent cover glass over the dish: its ghost reflections, concentric rin
 | `[post] lid_scratch_corner` |   lid scratch corners | 0..1, step 0.05 | 0.7 | 0.7 | Where the wear sits: 0 = all over the cover, 1 = only in the corners -- inert while lid_scratch is 0. |
 | `[post] lid_scratch_soft` |   lid scratch softness | 0..1, step 0.05 | 0.2 | 0.2 | 0 = crisp 1 px hairlines that catch the light over a narrow angle; higher = wider, dimmer grooves that catch it over a wider one -- inert while lid_scratch is 0. |
 | `[post] lid_scratch_tint` |   lid scratch tint | 0..1, step 0.05 | 0.0 | 0 | 0 = neutral white. 1 = the scratch takes the colour of the film under it (over black it stays white) -- inert while lid_scratch is 0. |
+| `[post] glass_streaks` |   glass streaks | 0..1, step 0.05 | 0.0 | 0 | Brief BN. Two thin (~1.7 px FWHM at 1440p) bright wavy lines on the cover glass, brightest past the lamp reflection, in lid space (ride the lid wander/turn, waves travel slowly). Not gated by massDeep; kept off hot pixels so the peak cannot rise. Needs lid > 0; not scaled by it. rg1.y field 1. |
 
 ## 7. Film and post
 
@@ -404,8 +407,10 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] fog` | Light in the water: haze | 0..1, step 0.02 | 0.0 | 0.22 | The water itself glows near the off-view lamp and fades with distance, added only into the dark. It falls to exactly zero far from the lamp, so black stays black. 0 = off |
 | `[post] fog_px` | Haze reach (px at 1440p) | 100..2000, step 25 | 700.0 | 700 | How far the glow of the water carries from the lamp |
 | `[post] fog_mass_gate` | Haze: keep masses black | 0..1, step 0.05 | 0.0 | 0.7 | 0 = the haze lands wherever it is dark. 1 = it is kept out of the inside of a dark mass, which floats in front of the water, and still glows in the water beside it |
+| `[post] artefact_lum_gate` | Masses: artefacts follow colour | 0..1, step 0.05 | 0.0 | 0 | Brief BO. Inside a mass, film grain (+ film_noise), the aberration split, the lid iridescence and the sheen / glint halo follow the mass's own brightness and colour (massDeep ring + saturation lift): a pure black mass stays clean, a dyed one keeps its texture, the edge band is untouched. 0 = today. Packed in rg1.x (first 6-bit field). |
 | `[post] bloom` | Bloom (wide, weak) | 0..1, step 0.02 | 0.0 | 0.30 | The bright film bleeds a very wide, very weak wash into the black. Its radius breathes and the wash drifts with the lamp |
 | `[post] bloom_px` | Bloom radius (px at 1440p) | 40..400, step 5 | 140.0 | 140 | How far that wash spreads |
+| `[post] bloom_warmth` |   bloom warmth (lamp colour) | 0..1, step 0.05 | 0.0 | 0 | Brief BN. The keyed bloom takes the lamp colour instead of the film colour: hot yellow-white on the lamp side, red away from it (the LAPD tile veil). Luminance-normalised tint, so mean_lum/ABL do not move. rg1.x field 4. |
 | `[post] film_dust` | Film dust | 0..1, step 0.02 | 0.0 | 0.10 | Specks of dust on the film: sparse bright points, a new scattering every film frame. Additive and weighted into the dark, so they are stars on the black and nothing on the bright film |
 | `[post] film_hairs` | Film hairs | 0..1, step 0.02 | 0.0 | 0.12 | How often a curly hair is caught in the gate. Each one sticks for a few seconds, flutters, and is gone -- INERT on acid-rise-12 (why: gate not traced). |
 | `[post] film_scratches` | Film scratches | 0..1, step 0.02 | 0.0 | 0 | Faint near-vertical scratches that persist for a stretch, drift sideways and disappear |
@@ -419,6 +424,7 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] halation` | Halation | 0..1, step 0.02 | 0.0 | 0.25 | CineStill's missing anti-halation layer: a tight warm glow bleeding out of the bright film into the dark around it. Taken only from what is genuinely bright, and it never lands on the highlight itself. Much tighter than Bloom, which is the wide weak wash |
 | `[post] halation_px` | Halation radius (px at 1440p) | 4..60, step 1 | 14.0 | 14 | How far the glow reaches. A dozen pixels is the film look; far more and it becomes a second bloom |
 | `[post] halation_warmth` | Halation warmth | 0..1, step 0.05 | 0.75 | 0.75 | 0 = a colourless glow. 1 = the red-orange of light that has crossed the emulsion twice, which is the CineStill signature |
+| `[post] halation_threshold` |   halation threshold (haze) | 0..0.6, step 0.05 | 0.0 | 0 | Brief BN. Lowers the halation knee from 0.55..1.05 (0) to 0.30..0.65 (0.5) of SDR white (the key reaches 0.05..0.25 at 1, but on acid-rise-12 0.5 and 1.0 measure the same, so the slider stops at 0.6), so mid-tones scatter too and halation becomes a diffusion haze: the base is never blurred, only veiled. Pair with halation_px. rg1.y field 2. |
 | `[post] shimmer` | Thermal shimmer | 0..1, step 0.02 | 0.0 | 0.35 | The air above the lamp. A very fine refractive wobble, strongest near the light and fading to nothing away from it, and carried by the sim's own velocity -- a burst that shoves the oil shoves the heat above it too |
 | `[post] shimmer_px` | Shimmer amount (px at 1440p) | 0..6, step 0.1 | 1.5 | 0.8 | How far the wobble displaces the picture at its strongest. A pixel or two is heat; more is water |
 | `[hdr] gamut` | Output gamut (sRGB / Display-P3 / BT.2020) | 0..2 (radio buttons) | 2 | 1 | Output colour gamut for the HDR swapchain (radio buttons, not a slider row) |
@@ -563,5 +569,5 @@ traced for this pass; their inline notes say "gate not traced".
 
 ## Totals
 
-**429 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **357 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
+**430 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **358 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
 

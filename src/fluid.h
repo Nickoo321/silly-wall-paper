@@ -1141,6 +1141,24 @@ struct PostConfig {
     // inside a mass -- keeps its black, while a dark pixel beside bright film
     // is the water itself and still glows.
     float fogMassGate= 0.0f;      // 0 today .. 1 no haze inside masses  fog_mass_gate
+    // brief BO: inside a mass, the grain, the lens split and the cover's
+    // sheen / iridescence / glint halo follow the mass's own brightness and
+    // colour (the massDeep ring, plus a saturation lift), so a pure black
+    // mass stays clean and a dyed one keeps its texture. 0 = today.
+    float artefactLumGate = 0.0f; // 0 today .. 1 artefacts follow mass lum/colour  artefact_lum_gate
+    // brief BN, instrument optics (post pass, packed in rig rg1.x / rg1.y as
+    // 6-bit fields; every one 0 = today, bit for bit):
+    //   corner_warp      tangential stretch of the frame's corners outside
+    //                    corner_warp_r (1 = a corner); the centre is untouched
+    //   bloom_warmth     the keyed bloom takes the lamp's colour (hot yellow
+    //                    on its side, red away from it), luminance unchanged
+    //   glass_streaks    two thin bright wavy lines on the lid glass (needs lid)
+    //   halation_threshold  lowers halation's knee so it becomes a diffusion haze
+    float cornerWarp        = 0.0f;  // 0 off .. 1 strong                     corner_warp
+    float cornerWarpR       = 0.6f;  // 0.4..0.9, where the warp starts       corner_warp_r
+    float bloomWarmth       = 0.0f;  // 0 film colour .. 1 lamp colour        bloom_warmth
+    float glassStreaks      = 0.0f;  // 0 off .. 1 bright                     glass_streaks
+    float halationThreshold = 0.0f;  // 0 highlights only .. 1 mid-tones too  halation_threshold
     float bloom      = 0.0f;      // 0..1 wide wash master           bloom
     float bloomPx    = 140.0f;    // its radius, px at 1440p         bloom_px
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x
@@ -1789,6 +1807,8 @@ private:
     // exactly the draws the post pass follows, so the grain is applied once,
     // after the blur.
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPost;
+    // brief BN: kPostSrc with BN_OPTICS, built on demand when a BN key is live
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPostBN;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_postTex;
     D3D12_RESOURCE_STATES m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     D3D12_GPU_DESCRIPTOR_HANDLE m_postSrv = {};

@@ -1084,8 +1084,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
     rig[4] = m_rig.tiltAngle;
     rig[5] = m_rig.tiltAmt;
-    rig[6] = m_rig.focus;
-    rig[7] = m_rig.movePhase;
+    // rig[6..7] (rg1.zw) are brief BM's lid scratches, packed below.
     // The LENS's own chromatic split (item Z). It lives in the rig block
     // because it is a property of the same lens the rig carries the centre
     // of: the split is radial about that centre, so the two numbers have to
@@ -1152,6 +1151,30 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
                     + qz(L * po.lidIris,  0.0f, 1.0f, 7) * 1024.0f
                     + qz(fmaxf(po.lidSheenPx, 8.0f) * scale, 8.0f, 1400.0f, 6) * 16.0f
                     + qz(po.lidGhostSpread, 0.0f, 2.0f, 4);
+        }
+    }
+    // ---- brief BM: the lid's SCRATCHES, in rg1.zw -------------------------
+    // rg1.zw carried the focus depth and the move phase, which this pass has
+    // never read (the display pass gets the focus through its acid slot), so
+    // they are the free rig floats. Packed exactly like rg4.z: three 8-bit
+    // fields in an exact integer below 2^24. Both are exact 0 unless the lid
+    // is on AND the scratch amount quantises to at least 1 -- rg1.z > 0.5 is
+    // the shader's only test, so every preset without scratches is untouched.
+    //   rg1.z  amount : 8 | density : 8 | len : 8
+    //   rg1.w  corner : 8 | soft : 8 | tint : 8
+    {
+        auto q8 = [](float v) -> float {
+            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            return (float)(int)(u * 255.0f + 0.5f);
+        };
+        const float qa = q8(po.lidScratch);
+        if (po.lid > 0.0005f && qa >= 1.0f) {
+            rig[6] = qa * 65536.0f + q8(po.lidScratchDensity) * 256.0f
+                   + q8(po.lidScratchLen);
+            rig[7] = q8(po.lidScratchCorner) * 65536.0f
+                   + q8(po.lidScratchSoft) * 256.0f + q8(po.lidScratchTint);
+        } else {
+            rig[6] = rig[7] = 0.0f;
         }
     }
     // rg3 (12..15) -- MOTION (item V3). rg4 (16..19) is the lid, filled just

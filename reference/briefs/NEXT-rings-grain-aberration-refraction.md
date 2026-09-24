@@ -1061,3 +1061,32 @@ aberration and lid sheen/glint by smoothstep(0, gate_width, localLum) with a sat
 dyed masses keep their texture. Proof block: crop pairs of a black mass and a dyed mass at
 0 / 0.5 / 1; measure noise std in the black-mass crop (target: falls to the film's level) and in
 the dyed crop (target: unchanged within 10%). Night-shift item; auditor pre-flight first.
+
+BO auditor pre-flight (2026-09-23 20:05), SUPERSEDES the spec above where it differs:
+- Build on massDeep (post pass, shaders.h ~3349: smoothed brightness of a 40 px ring; ~0 inside a
+  black mass, higher in a dyed one, ~1 at a mass edge). No new localLum. Its four ring taps give the
+  colour for the saturation lift. g = max(massDeep, satLift(sw)); each artefact *= lerp(1, g, key).
+- Move the massDeep calculation above the aberration block (~3250, it currently runs after) and add
+  `artefact_lum_gate > 0` to its condition; it reads the unaberrated frame so nothing else changes.
+- Sheen and iridescence halo already multiply by massDeep: REPLACE that factor with g (max lets dyed
+  masses keep their sheen, black masses stay clean). Leave the glint core ungated.
+- Edge band survives (ring sees bright film near the edge, g -> 1). Grain is already thinned in the
+  blacks by film_grain_density 1; expect the visible gain from aberration + lid.
+- rg1.xy layout, fixed NOW for BO and BN (four 6-bit fields per float, unused = 0):
+  rg1.x = artefact_lum_gate | corner_warp | corner_warp_r | bloom_warmth;
+  rg1.y = glass_streaks | halation_threshold | spare | spare. rg2.w is full. First to merge writes it.
+- Proof: render twice at the same seed/time (dye_lum 0 and 0.30), same crop; std on a high-passed
+  crop (image minus a 5 px blur); mass-edge band std unchanged within 10%.
+- Avoid (BM/scratch regions): fluid.cpp rig[6..7] packing (~1084-1180), RigCB rg1 comment
+  (~2862-72), the literal piece after AvgTap (~3087), the lid-block gate line, the scratches block.
+
+BL auditor pre-flight (2026-09-23 20:05): display dye block, AFTER bk lands. Keys: oil_fluor (0..1,
+default 0) + oil_fluor_reach (screen heights) = emissive gain from the lamp position (laP28); use
+the film's own saturated hue (no oil_fluor_hue; the palette rotates). Ambient = BK's dye_hue/sat/lum
+plus ONE key dye_lamp_follow (1 = today; 0 = dye drops lampG and the thin-edge profile); no
+ambient_level/hue. Edge glow exists: A/B FIRST meniscus_film_mix 0/0.5/1 x film_level 1/0.3 (plus
+mass_rim, halo, bloom 0.30, halation 0.25) before code. FLAG fog 0.22 lifts the dark water near the
+lamp: A/B 0.22/0. Slots: new laP33 = {oil_fluor, oil_fluor_reach, dye_lamp_follow, spare}; CBV so no
+root-signature change; slot-check. ABL: ship only with film_level lowered; proof film_level {1,0.3}
+x oil_fluor {0,0.5,1}: mean_lum <= baseline, 99th-percentile edge nits up, mean inside masses not
+up, HDR on and off, key-effect at defaults = no change.

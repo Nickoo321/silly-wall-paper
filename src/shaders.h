@@ -2927,7 +2927,14 @@ cbuffer PostPassCB : register(b0) {
 // fold and this pass has never bound.
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
-    float4 rg1;   // x tiltAngle(rad) y tiltAmt  z focusDepth  w movePhase 0..1
+    // rg1.xy are the tilt (read by nothing in this pass); rg1.zw are brief
+    // BM's lid scratches, packed like rg4.z (the focus depth and move phase
+    // they used to carry never reached this pass -- the display pass gets
+    // its own copies through the acid slots). Both are exactly 0 when the
+    // scratches are off, which is their only branch.
+    //   z  amount : 8 | density : 8 | len : 8
+    //   w  corner : 8 | soft : 8 | tint : 8
+    float4 rg1;   // x tiltAngle(rad) y tiltAmt  z scratch A  w scratch B
     // rg2.w is brief BD's four knobs, PACKED the way the lid packs its own
     // (b0's 32 constants are full and the root signature is at the 64-DWORD
     // limit, so a new number has to fit in a slot that already exists):
@@ -3152,6 +3159,129 @@ float3 AvgTap(float2 uv, float2 t) {
           + Src.SampleLevel(linearClamp, uv + float2(-t.x, -t.y), 0).rgb) * 0.25;
 }
 
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+// ---- LID SCRATCHES (brief BM) ---------------------------------------------
+// The WEAR on the cover: a scratched acrylic sheet under a lamp (refs
+// lid-scratch-ref-1..4). A scratch is a thin groove, and a groove sends light
+// to the eye only where it runs roughly PERPENDICULAR to the line from it to
+// the light. That is why a scratched panel is invisible until the light
+// catches it, why swirl marks form arcs round the lamp's reflection, and why
+// the pattern breathes as the lamp drifts and re-aims. That one test is the
+// whole effect; the rest is where the grooves are.
+//
+// Everything here is in LID space, px at 1440p: the caller has carried the
+// pixel and the lamp through the lid's own drift and turn, so the grooves
+// ride the lid and never the fluid.
+//
+// Two scales. MICRO: three layers of short, faintly curved grooves on long
+// thin cells, one layer per 60 degrees; a slow noise field picks each
+// region's dominant direction and a layer thins out as it turns away from it
+// (never to nothing -- worn plastic has every direction in it). LONG: up to
+// eight straight hairline gouges a few hundred px long, placed anywhere or
+// pulled into the corners. Cost: 12 cells (one hash, one sincos, a few MADs
+// each) + 8 slots, no marching.
+float4 LidH42(float2 p) {
+    float4 p4 = frac(p.xyxy * float4(0.1031, 0.1030, 0.0973, 0.1099));
+    p4 += dot(p4, p4.wzxy + 33.33);
+    return frac((p4.xxyz + p4.yzzw) * p4.zywx);
+}
+// how much of the lamp a groove with tangent T catches: 1 when it runs
+// perpendicular to the direction to the light, falling off `lobe` (in cos)
+// away from that to a small floor -- a groove's walls are rough, so every
+// groove scatters a little whichever way it runs. Without the floor the lit
+// set is all one direction in any one region, and it reads as rain.
+float LidScrLit(float2 T, float2 toL, float lobe) {
+    float c = dot(T, toL);
+    return 0.12 + 0.88 * exp(-(c * c) / (lobe * lobe));
+}
+// P, Lp: the pixel and the lamp in lid space; F: the frame (px at 1440p);
+// pxU: one OUTPUT pixel in those units (1 at 1440p, 2 at 720p).
+float LidScratch(float2 P, float2 Lp, float2 F, float dens, float len,
+                 float corner, float soft, float pxU) {
+    float2 toL  = normalize(Lp - P + float2(1e-3, 0.0));
+    float  wPx0 = 0.75 + 1.6 * soft;       // tent half-width: ~1 px at 1440p
+    // Below 1440p a 1 px groove is thinner than a pixel and a point-sampled
+    // tent would come out dotted; hold it at one output pixel and dim it by
+    // the same ratio, so it keeps its energy and reads the same, only softer.
+    float  wPx  = max(wPx0, 0.75 * pxU);
+    float  wAmp = wPx0 / wPx;
+    float  lobe = 0.30 + 0.30 * soft;
+    // Where the wear is. The corners (lid_scratch_corner) of the lid's own
+    // frame, the edge of that zone broken up by the same slow patchiness that
+    // thins and thickens the wear everywhere.
+    float  patch = PVNoise(P * (1.0 / 380.0) + 17.3);
+    float2 e     = abs(P / F - 0.5) * 2.0;
+    float  cm    = smoothstep(0.22, 0.80, e.x * e.y + (patch - 0.5) * 0.35);
+    float  wgt   = lerp(1.0, cm, corner);
+    float  pres  = lerp(0.10, 0.95, dens) * wgt * (0.55 + 0.9 * patch);
+    float  acc   = 0.0;
+    [branch] if (pres > 0.004) {
+        float baseA = PVNoise(P * (1.0 / 640.0) + 3.1) * 9.42;
+        // 64 px along x 28 across: with centres in the middle half of a cell
+        // and every groove reaching at most half a cell each way, the 2x2
+        // nearest cells are an exact lookup
+        const float2 CS = float2(64.0, 28.0);
+        [unroll] for (int ly = 0; ly < 3; ly++) {
+            float  la = (float)ly * 1.0471976 + 0.35;
+            float  cl = cos(la), sl = sin(la);
+            float  lw = lerp(0.2, 1.0, saturate(0.5 + cos(2.0 * (baseA - la))));
+            float2 Q  = float2(P.x * cl + P.y * sl, -P.x * sl + P.y * cl) / CS;
+            float2 ci = floor(Q);
+            float2 o  = step(0.5, Q - ci) - 1.0;
+            [unroll] for (int k = 0; k < 4; k++) {
+                float2 cc = ci + o + float2((float)(k & 1), (float)(k >> 1));
+                float4 h  = LidH42(cc + float2(37.0 * (float)ly + 11.0, 5.0));
+                if (h.x > pres * lw) continue;
+                float  u  = frac(h.x * 97.31 + h.w * 13.7);
+                float  v  = frac(h.y * 53.17 + h.z * 29.3);
+                float  br = frac(h.z * 71.93 + h.x * 7.31);
+                float2 c  = (cc + 0.25 + 0.5 * h.yz) * CS;
+                float  a  = (h.w - 0.5) * 0.60;               // +-17 deg off the layer
+                float2 T  = float2(cos(a), sin(a));
+                float2 N  = float2(-T.y, T.x);
+                float2 r  = Q * CS - c;
+                float  t  = dot(r, T);
+                float  hl = 6.0 + 20.0 * u * u;                // half length, px
+                float  kc = (v - 0.5) * 0.020;                 // curvature, 1/px
+                float  dv = kc * t;
+                float  ds = abs(dot(r, N) - 0.5 * kc * t * t) * rsqrt(1.0 + dv * dv);
+                float  ln = saturate(1.0 - ds / wPx)
+                          * (1.0 - smoothstep(0.55, 1.0, abs(t) / hl));
+                // the groove's own tangent here, turned back into lid space
+                float2 Tt = normalize(T + N * dv);
+                Tt = float2(Tt.x * cl - Tt.y * sl, Tt.x * sl + Tt.y * cl);
+                acc += ln * LidScrLit(Tt, toL, lobe) * (0.30 + 0.70 * br * br);
+            }
+        }
+    }
+    // The long gouges: `len` is the share of the eight slots in use. A
+    // straight groove lights only round the foot of the perpendicular from
+    // the lamp, so its lobe is wider or it would never show at all.
+    [branch] if (len > 0.004) {
+        [unroll] for (int k = 0; k < 8; k++) {
+            float4 h = LidH42(float2((float)k * 7.13 + 3.1, 91.7));
+            if (h.x > len) continue;
+            float4 g  = LidH42(float2((float)k * 3.71 + 11.9, 23.3));
+            float2 cc = float2(g.w < 0.5 ? 0.04 + h.y * 0.30 : 0.96 - h.y * 0.30,
+                               frac(g.w * 2.0) < 0.5 ? 0.04 + h.z * 0.30
+                                                     : 0.96 - h.z * 0.30);
+            float2 c  = lerp(h.yz, cc, corner) * F;
+            float  a  = h.w * 6.2831853;
+            float2 T  = float2(cos(a), sin(a));
+            float2 r  = P - c;
+            float  t  = dot(r, T);
+            float  hl = 160.0 + 380.0 * g.x;
+            if (abs(t) > hl) continue;
+            float  ds = abs(r.x * T.y - r.y * T.x);
+            float  ln = saturate(1.0 - ds / (wPx * (1.0 + 0.5 * g.y)))
+                      * (1.0 - smoothstep(0.6, 1.0, abs(t) / hl));
+            acc += ln * LidScrLit(T, toL, lobe * 1.6) * (0.55 + 0.45 * g.z);
+        }
+    }
+    return acc * wAmp * rsqrt(wPx0 / 0.75); // a wider groove is a dimmer one
+}
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
@@ -3521,7 +3651,7 @@ R"hlsl(
     // rides, so the ghosts, the sheen and the glint all arrive together --
     // never one effect moving alone.
     // =====================================================================
-    [branch] if (rg4.z > 0.5 || rg4.w > 0.5) {
+    [branch] if (rg4.z > 0.5 || rg4.w > 0.5 || rg1.z > 0.5) {
         float  sdrL = max(pp2.z, 1e-3);
         float  aspL = pp0.y / max(pp0.x, 1e-9);            // W/H
         // unpack: see the rg4 comment in the cbuffer above
@@ -3669,6 +3799,43 @@ R"hlsl(
             d += (float3(1.00, 0.90, 0.72) * (core * 0.55)
                 + float3(1.00, 0.56, 0.20) * (halo * 0.13 * massDeep))
                  * (M * lidD.x * sdrL);
+        }
+
+        // ---- SCRATCHES: the wear on the cover (brief BM) ----------------
+        // Lit by the lamp as the cover sees it (lampR, the glint's position)
+        // and carried by the lid: shifted by a third of its wander and turned
+        // by a sliver of its rotation about its optical centre, so they drift
+        // with the ghosts and are shoved with them at a readjust. The pixel
+        // comes in through the OLED orbit only, NOT the shimmer warp above --
+        // that one is moved by the fluid, and the lid never is. Not scaled by
+        // the lid master: they are the sheet's wear, not a reflection in it.
+        [branch] if (rg1.z > 0.5) {
+            float3 sA  = LidU8(rg1.z);                     // amount density len
+            float3 sB  = LidU8(rg1.w);                     // corner soft tint
+            float2 F   = float2(1440.0 * aspL, 1440.0);
+            float2 C   = ctrL * F;
+            float2 off = lidO * (0.35 * F);
+            float  th  = 0.06 * lidA;
+            float  cth = cos(th), sth = sin(th);
+            float2 Ps  = (i.uv + float2(rg3.z, rg3.w)) * F - C - off;
+            float2 Ls  = lampR * F - C - off;
+            float2 Pl  = float2(Ps.x * cth + Ps.y * sth, -Ps.x * sth + Ps.y * cth) + C;
+            float2 Ll  = float2(Ls.x * cth + Ls.y * sth, -Ls.x * sth + Ls.y * cth) + C;
+            float  sc  = saturate(LidScratch(Pl, Ll, F, sA.y, sA.z, sB.x, sB.y,
+                                              1.0 / max(pp4.w, 1e-4)));
+            // brightest near the lamp, never gone far from it
+            float  dl  = length((i.uv - lampR) * float2(aspL, 1.0));
+            float  fal = 0.15 + 0.85 / (1.0 + dl * dl * 8.0);
+            // clear over the dark, a whisper over the bright film
+            float  ovr = lerp(0.10, 1.0, 1.0 - smoothstep(0.12, 0.80, ownL));
+            // tint 0: neutral white. 1: the colour of the film under the
+            // groove (light scattered out of the picture it lies over);
+            // over black there is no colour to take, so it stays white.
+            float  mx  = max(d.r, max(d.g, d.b));
+            float3 fc  = max(d, 0.0) / max(mx, 1e-4);
+            float3 col = lerp(float3(1.0, 1.0, 1.0), fc,
+                              sB.z * smoothstep(0.02, 0.10, mx / sdrL));
+            d += col * (sA.x * 0.60 * sc * fal * ovr * sdrL);
         }
     }
 )hlsl"

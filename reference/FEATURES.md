@@ -367,6 +367,12 @@ The transparent cover glass over the dish: its ghost reflections, concentric rin
 | `[post] lid_glint` |   lid glint | 0..1, step 0.05 | 0.0 | 0.15 | The lamp's own reflection in the cover: a soft core with a wide amber halo |
 | `[post] lid_iris` |   lid iridescence | 0..1, step 0.05 | 0.0 | 0.22 | Interference colours of the thin oil film on the cover, visible only across the sheen |
 | `[post] lid_refract_px` |   lid refraction (px) | 0..12, step 0.5 | 0.0 | 2.5 | How much the uneven cover wobbles its own reflections (the transmitted picture is left alone) |
+| `[post] lid_scratch` |   lid scratches | 0..1, step 0.05 | 0.0 | 0 | Wear on the cover (brief BM): hairline scratches fixed to the lid that catch the lamp only where they run across its light, so the pattern shifts as the lamp drifts. Clear over the dark, nearly gone on the bright film. 0 = off (needs Lid above 0). Not scaled by `lid`. |
+| `[post] lid_scratch_density` |   lid scratch density | 0..1, step 0.05 | 0.5 | 0.5 | How many fine scratches there are where the wear is -- inert while lid_scratch is 0. |
+| `[post] lid_scratch_len` |   lid scratch long gouges | 0..1, step 0.05 | 0.3 | 0.3 | 0 = only short micro-swirls. Higher adds up to eight long straight gouges across the cover -- inert while lid_scratch is 0. |
+| `[post] lid_scratch_corner` |   lid scratch corners | 0..1, step 0.05 | 0.7 | 0.7 | Where the wear sits: 0 = all over the cover, 1 = only in the corners -- inert while lid_scratch is 0. |
+| `[post] lid_scratch_soft` |   lid scratch softness | 0..1, step 0.05 | 0.2 | 0.2 | 0 = crisp 1 px hairlines that catch the light over a narrow angle; higher = wider, dimmer grooves that catch it over a wider one -- inert while lid_scratch is 0. |
+| `[post] lid_scratch_tint` |   lid scratch tint | 0..1, step 0.05 | 0.0 | 0 | 0 = neutral white. 1 = the scratch takes the colour of the film under it (over black it stays white) -- inert while lid_scratch is 0. |
 
 ## 7. Film and post
 

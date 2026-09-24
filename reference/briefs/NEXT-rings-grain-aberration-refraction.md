@@ -1332,3 +1332,10 @@ silhouette, no detail inside the silhouettes, the murk itself carries the colour
 So: the film becomes the murk (volumetric, lamp-carrying, dim but saturated), the oil is black
 silhouette, and the ~5% pigment masses GLOW (emissive) inside that murk. This is BI's haze idea
 made concrete: a lamp-driven volumetric term, not a flat film level.
+BS addendum 2 (user 14:40): "randomly pick a continuous thing of oil, probably one in 20 to be lit
+up." CONFIRMED: whole connected bodies (a mass or a droplet as one continuous thing), chosen at
+random by identity, about 1 in 20 glowing, the rest pitch black. Key dye_fraction (0..1, default 1
+= today = every body dyed): a body glows when hash(id) < dye_fraction; the LAPD/BS value is 0.05.
+Identity: AG-b's hole-blob id (c.w) where a hole carves the mass; for bodies without a hole id
+(gaps between oil blobs, droplets) the executor must find a stable per-body id (droplet hash, blob
+seed) so a body does not flicker in and out; a glowing body stays glowing for its life.

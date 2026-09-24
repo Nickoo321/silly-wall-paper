@@ -1325,3 +1325,10 @@ dye_fraction (small), (b) UV fluorescence model: film emission = fluor_amount * 
 lamp_reach, no diffuse term (BL rework: oil_fluor hue from the film palette, not green), (c) murk:
 lamp-carrying volumetric haze (BI). Pre-flight before anything; this is the next LAPD LOOK step
 after dye_core/schlieren land. Ideas, not targets.
+BS addendum (user 14:35, blacklight-ref-3-murky-water-divers.jpg): "Like that, but with glowing oil."
+The murk photo is the model for the MEDIUM: a hot light source (above / off-frame) whose light
+scatters through a dense green-yellow murk with a broad falloff, everything solid is a pitch-black
+silhouette, no detail inside the silhouettes, the murk itself carries the colour and the gradient.
+So: the film becomes the murk (volumetric, lamp-carrying, dim but saturated), the oil is black
+silhouette, and the ~5% pigment masses GLOW (emissive) inside that murk. This is BI's haze idea
+made concrete: a lamp-driven volumetric term, not a flat film level.

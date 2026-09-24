@@ -272,3 +272,20 @@ main.cpp:1054/:1990/:2768-2772/:2829/:3194; 67 moods).
    fixes (merge on its own); 1b = Effects + Modes pages. Validity matrix cells stay "?" until
    key-effect has verified them.
 Opinion: ImGui is the right call (relayed to the user verbatim).
+
+## DECISIONS 1 (creative chat, 2026-09-25 ~00:30; implementation agreed; binding)
+D1 Layout (a): LEFT mode tiles (Fluid WE / Liquid Acid / Ink / CYCLE), each with a static thumbnail
+   (handoff\images renders) + a "running" dot; CENTRE = selected tile's presets + big knobs + Advanced
+   expander; RIGHT = settings outside modes. Every setting lives in exactly ONE place: mirror and peak
+   nits only in the right column, never as centre knobs (duplicated controls are how the old UI lied).
+D2 CYCLE is a TILE on the left: the tiles are one radio group = "what the wallpaper is doing"; Cycle's
+   centre panel is the playlist (stages, order, dwell, in-cycle checks) with "edit current stage"
+   jumping to that look's page. Cycling IS the mode, not a setting on top of one.
+D3 Window open ⇒ dwell timer pauses, colours keep moving, auto-resume ~10 min (as UI-ANIMATORS-MODEL).
+D4 Big knobs: Fluid and Ink as listed in §3B minus mirror/peak nits. Liquid Acid front page =
+   Film brightness · Film colour (base hue; if no single key sets it, FLAG to the user, do not build
+   one) · Colour speed · Second colour (film_hue2_amt) · Split tone (once BU lands) · Droplet amount ·
+   Rise speed · Focus (camera_focus / dof) · Glow · Haze · Grain. Moved to Advanced: mass colour,
+   droplet colour, lid. Reason: the front page = the knobs of the current direction (black oil, one
+   lit colour, filmic lens) and what the user actually reached for.
+D5 Live marker: a thin ghost tick ONLY on keys animating right now, never on static ones.

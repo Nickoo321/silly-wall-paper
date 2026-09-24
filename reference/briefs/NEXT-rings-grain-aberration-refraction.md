@@ -1090,3 +1090,34 @@ lamp: A/B 0.22/0. Slots: new laP33 = {oil_fluor, oil_fluor_reach, dye_lamp_follo
 root-signature change; slot-check. ABL: ship only with film_level lowered; proof film_level {1,0.3}
 x oil_fluor {0,0.5,1}: mean_lum <= baseline, 99th-percentile edge nits up, mean inside masses not
 up, HDR on and off, key-effect at defaults = no change.
+
+## BP. Punch: darker must mean MORE saturated, not less (user, 2026-09-23 21:00, on the BK sheets)
+
+User: roles sheet tiles 0, 4, 5, 6 good; tiles 1 and 2 (film BLACK, dyed masses/droplets) "should have
+more punch"; the 1440p hero (tile 1) "nothing is punching, probably more colour, like saturation";
+split-keys sheet: the dark film_level tiles and the dimmed-droplet tile are bad; smoke sheet: the
+middle values bad. "I am finding a pattern that it reduces colours and then reduces saturation as
+well, when those should be inversely proportional." So: every DIMMING lever (film_level, dye_lum,
+dye_droplet_lum, dye_smoke's edge fade) currently drops chroma together with luminance, and the
+result reads muddy. Wanted: as level falls, chroma is preserved or RISES.
+Spec (display dye block, with BL, same executor): (1) film_level dims luminance only, in a
+chroma-preserving way (scale Y, keep the chromatic ratio; no lerp toward black in RGB that also
+greys); no identity risk, no preset uses it below 1. (2) one key dark_sat (0..1, default 0 = today):
+saturation compensation that grows as the element's level falls: sat' = sat * (1 + dark_sat *
+(1 - level)) applied to the dye colour (mass and droplet) and to the film under film_level; clamp so
+HDR peak and ABL are respected (mean_lum must not rise at film_level 0.3). (3) dye_smoke's edge fade
+should fade luminance, not chroma. Proof: tiles 1 and 2 of the roles sheet re-rendered at dark_sat
+0 / 0.5 / 1 plus film_level 0.3 / 0.1, with a chroma measure (mean OKLab chroma of the dyed pixels)
+that must rise as level falls; mean_lum table; HDR on/off hero pair.
+
+## KEY PASS (user, 2026-09-23 21:00: "ok do a key pass tonight")
+Retire keys, alone, when no branch is open (after BN, before the HLSL refactor). Rules: a key is
+removed ONLY if tools\preset-identity.ps1 over EVERY preset and look (fluid parity, ink paper +
+inverted, liquid-acid-water, all acid-rise-*, camera-*, Mirror overlays, tray presets) is byte-
+identical before and after; the 30 "inert on acid-rise-12" keys are candidates, not a list (ink_*
+and swarm_* are live in other looks: keep). Duplicates: drop dye_droplets and dye_masses (BK
+executor: 0.5 == dye_droplet_lum 0.22; dye_masses == dye_lum), keeping dye_droplet_hue/sat/lum +
+dye_lum; tighten dye_smoke to 0..0.7. For each removed key: FEATURES.md row struck with the reason,
+settings.cpp slider gone, ini loader ignores it silently (old inis must still load), acid slot
+freed and recorded in acid_slots.h. Report: table of removed / kept-with-reason, identity md5s
+before/after per preset, parity md5, slot-check.

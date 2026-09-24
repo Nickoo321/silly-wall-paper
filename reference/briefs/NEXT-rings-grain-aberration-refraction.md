@@ -1291,3 +1291,10 @@ on a black film); a background-refraction offset only shows over a mass/droplet,
 secondary; film pixels only (fieldB >= thresh, away from masses) so the red mass rims do not change.
 Proof: loop crop at 0/0.5/1 (fill = ground, edge peak rises, ring width <= 3 px); acid-rise-12
 unchanged at 0; 5-frame series, loops travel with the flow; mean_lum within 1%.
+LAPD LOOK addendum (user, 2026-09-24 14:20, ref lapd-ref-solar-lava-ultramarine-pigment.jpg): "maybe
+try something like this, I was kinda imagining this." What the ref has: PIGMENT density (opaque,
+matte-dense, faintly granular, no wash), a fluorescent orange-red that glows at the edge, and deep
+ultramarine as the second colour. For the look: main = solar-lava orange-red (dye hue ~10-15, sat 1,
+dye_core high), accent = ultramarine (droplet hue ~235-245, deep, not cyan), black ground; the body
+reads as pigment, not liquid dye: even fill (dye_core), tiny grain inside the mass allowed (that is
+the one place artefact_lum_gate should NOT clean). Idea, not target. The user may send drawings.

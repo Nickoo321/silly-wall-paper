@@ -607,6 +607,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
+    float4 laP35;     // x DYE_CORE  y -  z -  w -
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -1978,8 +1979,8 @@ R"hlsl(
         // ---- brief BL: dye_lamp_follow (ambient dye) ---------------------
         // The lamp lights the OIL; the fluid under it should only see a dim
         // ambient. At 1 (today) the dye rides lampG (rise_bottom_light) and
-        // the thin-edge profile lerp(0.42, 1, Tw); toward 0 both fade out and
-        // the dye sits at its thick-core level everywhere: a flat colour the
+        // the thin-edge profile lerp(dye_core, 1, Tw); toward 0 both fade out
+        // and the dye sits at its thick-core level everywhere: a colour the
         // lamp never lifts. At 1 the branch is skipped and lampGd IS lampG.
         float lampGd = lampG;
         [branch] if (LA_DYE_LAMP_FOLLOW < 0.9995) {
@@ -1990,9 +1991,9 @@ R"hlsl(
         float inkL = max(inkC.r, max(inkC.g, inkC.b));
         float dkG  = 1.0 - smoothstep(0.0, 0.55, inkL);
         float wD   = (1.0 - cov) * dkG;
-        float3 dyeAdd = dyeC * (LA_DYE_AMT * lerp(0.42, 1.0, Tw) * lampGd * wD);
+        float3 dyeAdd = dyeC * (LA_DYE_AMT * lerp(LA_DYE_CORE, 1.0, Tw) * lampGd * wD);
         [branch] if (LA_DARK_SAT > 0.0005)
-            dyeAdd = DarkSat(dyeC * LA_DYE_AMT, LA_DYE_AMT) * (lerp(0.42, 1.0, Tw) * lampGd * wD);
+            dyeAdd = DarkSat(dyeC * LA_DYE_AMT, LA_DYE_AMT) * (lerp(LA_DYE_CORE, 1.0, Tw) * lampGd * wD);
         // ---- brief BK: masses vs droplets, and smoke ---------------------
         // "Too bubbly": the dye on EVERY droplet is what reads as bubbles.
         // Mass vs droplet is decided by WHICH sim object made the dark, not
@@ -2025,7 +2026,7 @@ R"hlsl(
             float wOut = s * 0.030;
             float sB   = (fieldB - thresh) / max(length(gradB), 1e-6);
             float mK   = 1.0 - smoothstep(0.0, 3.0 * PX1440 + wOut, sB);
-            float prof = lerp(0.42, 1.0, Tw);
+            float prof = lerp(LA_DYE_CORE, 1.0, Tw);
             float gate = 1.0 - cov;
             float leakK = 0.0;
             [branch] if (s > 0.0005) {

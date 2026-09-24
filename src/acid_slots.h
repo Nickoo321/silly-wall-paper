@@ -34,6 +34,8 @@
 // dark_sat (brief BP)}: full again; the next key needs laP34.
 // Brief AG-b added laP34 = {dye_lum_vary, dye_hue_vary, dye_thick_hue,
 // rise_speed for the identity fallback's drift}: full; the next key needs laP35.
+// Brief BR added laP35 = {dye_core, -, -, -}; .y / .z are reserved for BB / BH
+// (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -180,7 +182,8 @@
     X(DYE_LUM_VARY,        34, x, "dye_lum_vary, relative +-, 0..0.5 (brief AG-b)") \
     X(DYE_HUE_VARY,        34, y, "dye_hue_vary, degrees, 0..90 (brief AG-b)") \
     X(DYE_THICK_HUE,       34, z, "dye_thick_hue, degrees, -90..90 (brief AG-b)") \
-    X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)")
+    X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)") \
+    X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -195,5 +198,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP34).
-static const int kAcidSlotVecs = 35;
+// Number of laP<n> float4s (laP0 .. laP35).
+static const int kAcidSlotVecs = 36;

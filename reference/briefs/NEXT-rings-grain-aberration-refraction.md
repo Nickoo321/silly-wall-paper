@@ -1121,3 +1121,26 @@ dye_lum; tighten dye_smoke to 0..0.7. For each removed key: FEATURES.md row stru
 settings.cpp slider gone, ini loader ignores it silently (old inis must still load), acid slot
 freed and recorded in acid_slots.h. Report: table of removed / kept-with-reason, identity md5s
 before/after per preset, parity md5, slot-check.
+
+BP auditor pre-flight (2026-09-23 21:10), SUPERSEDES BP items 1 and 3: the dimming multiplies are
+linear-RGB multiplies and keep C/L exactly; do not rewrite film_level or the smoke fade. Real causes
+of the mud: additive veils that do not dim with the element (fog 0.22 targets dark pixels, bloom,
+halation, warm lid sheen, grain), the Hunt effect, and a BUG: droplet dye quantised to 8-bit linear
+RGB after the lum multiply (fluid.cpp dyeDropRgb) = 10-20% hue/sat error at low lum -> pack
+hue8|sat8|lum8 and rebuild in the shader. dark_sat keyed on the ELEMENT level (not per-pixel), the
+DarkSat() function keeps Y exactly (mean_lum/peak/ABL unchanged by construction), gamut clamp only;
+slot laP33.w. Smoke mid values = additive hue mixing of the leak under a different-hue film; proof
+tile with dye_hue_follow 1, then tint the leak to the film hue if clean. Measure on the linear .jxr:
+OKLab L, C, C/L over dyed pixels; C/L must rise as level falls. Handed to the BL executor 21:12.
+
+KEY PASS auditor pre-flight (2026-09-23 21:10): coverage: preset-identity.ps1 renders only
+we-look-live + 4 acid-rise + 1 tray preset; the pass must render ALL 157 inis (ink-paper/inverted +
+7 ink-*, liquid-acid-water(+glass), liquid-acid-a/b/c, layering1, mirror-quad, parity-*, 40 tray
+presets, the user's 10 %APPDATA% moods; Mirror overlays composed onto acid-rise-12 and we-look-live).
+Time-based keys (rig_readjust, film_hairs, film_leak, focus_tilt_period) need a --shot-series of 6
+frames over 10 min, a single frame cannot prove them dead. Static scan: ink_*/seam_* are set in 17
+bands-mode inis, swarm_* in 26 inis with droplets off, rim_vary/rim_ink_follow/rim_inset live with
+bright ink: KEEP all; expect ~zero retirements from the 30, the real removals are the duplicates.
+Migration on load: dye_lum *= dye_masses; dye_droplet_lum = dye_lum*dye_droplets only if inheriting;
+then drop the keys; also remove from WriteConfigToIni, settings.cpp mood map, moods.cpp/journey.cpp
+key tables. No acid slot is freed (both folded on the CPU). Order: BL/BP -> BN -> KEY PASS alone.

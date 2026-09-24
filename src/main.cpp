@@ -434,6 +434,12 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.lidGlint       = getF(S, L"lid_glint",        po.lidGlint);
         po.lidIris        = getF(S, L"lid_iris",         po.lidIris);
         po.lidRefractPx   = getF(S, L"lid_refract_px",   po.lidRefractPx);
+        po.lidScratch        = getF(S, L"lid_scratch",         po.lidScratch);
+        po.lidScratchDensity = getF(S, L"lid_scratch_density", po.lidScratchDensity);
+        po.lidScratchLen     = getF(S, L"lid_scratch_len",     po.lidScratchLen);
+        po.lidScratchCorner  = getF(S, L"lid_scratch_corner",  po.lidScratchCorner);
+        po.lidScratchSoft    = getF(S, L"lid_scratch_soft",    po.lidScratchSoft);
+        po.lidScratchTint    = getF(S, L"lid_scratch_tint",    po.lidScratchTint);
         po.shimmer        = getF(S, L"shimmer", po.shimmer);
         po.shimmerPx      = getF(S, L"shimmer_px", po.shimmerPx);
         po.vignetteWander = getF(S, L"vignette_wander", po.vignetteWander);
@@ -1664,6 +1670,12 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"lid_glint", po.lidGlint, 3);
         putF(S, L"lid_iris", po.lidIris, 3);
         putF(S, L"lid_refract_px", po.lidRefractPx, 2);
+        putF(S, L"lid_scratch", po.lidScratch, 3);
+        putF(S, L"lid_scratch_density", po.lidScratchDensity, 3);
+        putF(S, L"lid_scratch_len", po.lidScratchLen, 3);
+        putF(S, L"lid_scratch_corner", po.lidScratchCorner, 3);
+        putF(S, L"lid_scratch_soft", po.lidScratchSoft, 3);
+        putF(S, L"lid_scratch_tint", po.lidScratchTint, 3);
         putF(S, L"shimmer", po.shimmer, 3);
         putF(S, L"shimmer_px", po.shimmerPx, 2);
         putF(S, L"vignette_wander", po.vignetteWander, 2);

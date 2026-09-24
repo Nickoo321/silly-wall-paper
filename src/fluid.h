@@ -1205,6 +1205,18 @@ struct PostConfig {
     float lidGlint     = 0.0f;   // 0..1 the lamp's own reflection + halo
     float lidIris      = 0.0f;   // 0..1 oil-film iridescence on the cover
     float lidRefractPx = 0.0f;   // px at 1440p: wobble of the REFLECTIONS
+    // SCRATCHES (brief BM): the WEAR on the cover -- fine hairline grooves
+    // fixed to the lid (they ride its drift, never the fluid) that light up
+    // only where they run perpendicular to the line to the lamp's glint, so
+    // the pattern breathes as the lamp moves. Additive, clear over the dark,
+    // nearly gone over the bright film. Needs lid > 0 (no cover, no wear) but
+    // is NOT scaled by it. lidScratch 0 = off, byte-identical.
+    float lidScratch        = 0.0f;  // 0..1 amount                      lid_scratch
+    float lidScratchDensity = 0.5f;  // 0..1 how many grooves            lid_scratch_density
+    float lidScratchLen     = 0.3f;  // 0..1 0 = micro only, 1 = + 8 long gouges  lid_scratch_len
+    float lidScratchCorner  = 0.7f;  // 0..1 0 = uniform, 1 = corners only  lid_scratch_corner
+    float lidScratchSoft    = 0.2f;  // 0..1 groove width + light lobe   lid_scratch_soft
+    float lidScratchTint    = 0.0f;  // 0..1 0 = white, 1 = film colour  lid_scratch_tint
     // --- MOTION (item V3) -------------------------------------------------
     // The user's rule for this whole family: nothing may sit at a fixed
     // screen position on an OLED, ever. And the motion model they chose is

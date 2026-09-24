@@ -1144,3 +1144,21 @@ bright ink: KEEP all; expect ~zero retirements from the 30, the real removals ar
 Migration on load: dye_lum *= dye_masses; dye_droplet_lum = dye_lum*dye_droplets only if inheriting;
 then drop the keys; also remove from WriteConfigToIni, settings.cpp mood map, moods.cpp/journey.cpp
 key tables. No acid slot is freed (both folded on the CPU). Order: BL/BP -> BN -> KEY PASS alone.
+
+AG-b auditor pre-flight (2026-09-24 10:20), executor spec: identity source = the hole blobs:
+AcidBlobGPU.c.w is written 0 and read nowhere; CPU writes dst[i].c[3] = hash(stable per-blob seed)
+in (0,1), constant for the blob's life (re-rolled on recycle); shader, inside the existing blob
+loop: `if (B.a.w < 0) { idS += B.c.w * w4; idW += w4; }`, mass id = idS/idW (merging holes blend
+smoothly, same w^4 trick as the oil colour; no extra loop or taps). Gaps between oil blobs have
+idW ~ 0 -> fall back to a slow AcidFbm at mass scale (~0.25 screen); NOT the hue2 field (would
+couple to the film's second hue); report the share of mass pixels with idW > 0.5. dye_thick_hue is
+not a duplicate: hue += dye_thick_hue * (1 - Tw), masses only (mK), inside the isoline (dIn > 0);
+Tw saturates in small masses so they stay edge-coloured and large ones get a core. Application:
+dyeC = InkHsv2Rgb(float3(LA_DYE_HUE + dh, LA_DYE_SAT, 1)) is already per pixel; lum *=
+(1 + dye_lum_vary * (2*id - 1)) clamped at 0.5; masses only, droplets unchanged. Slots: laP34 =
+{dye_lum_vary (relative +-), dye_hue_vary (deg), dye_thick_hue (deg), spare}; CBV, no root change;
+slot-check. Defaults 0 behind a [branch]. Test ini dye_lum 0.36; "medium" = dye_lum_vary 0.22.
+Proof: connected components of the dyed-pixel mask on the .jxr, per-mass mean OKLab L and hue at
+vary 0/0.3/0.6 (spread across masses rises monotonically, within-mass spread small); two-mass 2x
+crops; a 5-frame series over 10 s with per-mass hue drift < 2 deg (no flicker on merge/recycle);
+key-effect at defaults = no change; report mean_lum.

@@ -662,6 +662,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.oilFluorReach    = getF(S, L"oil_fluor_reach", a.oilFluorReach);
         a.dyeLampFollow    = getF(S, L"dye_lamp_follow", a.dyeLampFollow);
         a.darkSat          = getF(S, L"dark_sat", a.darkSat);
+        a.dyeLumVary       = getF(S, L"dye_lum_vary", a.dyeLumVary);
+        a.dyeHueVary       = getF(S, L"dye_hue_vary", a.dyeHueVary);
+        a.dyeThickHue      = getF(S, L"dye_thick_hue", a.dyeThickHue);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1900,6 +1903,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"oil_fluor_reach", a.oilFluorReach, 3);
         putF(S, L"dye_lamp_follow", a.dyeLampFollow, 3);
         putF(S, L"dark_sat", a.darkSat, 3);
+        putF(S, L"dye_lum_vary", a.dyeLumVary, 3);
+        putF(S, L"dye_hue_vary", a.dyeHueVary, 1);
+        putF(S, L"dye_thick_hue", a.dyeThickHue, 1);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);

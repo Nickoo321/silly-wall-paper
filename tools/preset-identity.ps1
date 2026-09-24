@@ -25,7 +25,8 @@ param(
     [string]$Save = '',
     [string[]]$Presets = @(),
     [double]$Delay = 60,
-    [string]$ScratchDir = ''
+    [string]$ScratchDir = '',
+    [int]$Yield = 8        # --shot-yield ms per frame; the image does not depend on it
 )
 
 $ErrorActionPreference = 'Stop'
@@ -99,7 +100,7 @@ function Get-PresetMd5 {
     param([string]$Name, [string]$IniPath, [string]$OutPng)
     if (Test-Path $OutPng) { Remove-Item $OutPng -Force -ErrorAction SilentlyContinue }
     & $exePath --shot $OutPng --ini $IniPath --hdr on --shot-delay $Delay `
-        --shot-size 2560x1440 --shot-yield 8 --seed 1234 2>&1 | Out-Null
+        --shot-size 2560x1440 --shot-yield $Yield --seed 1234 2>&1 | Out-Null
     if (-not (Wait-StablePng -Path $OutPng)) {
         Write-Output "$Name TIMEOUT (no stable PNG after 20 min): $OutPng"
         return $null

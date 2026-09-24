@@ -797,6 +797,20 @@ struct LiquidAcidConfig {
     //   construction); the only clamp is the gamut edge (no channel below 0),
     //   so HDR on and off agree. 0 = today.
     float darkSat       = 0.0f;     // 0..1, 0 = today            dark_sat
+    // --- brief AG-b: dye gradients, so the masses are not all one wax -----
+    // Each dye mass gets an IDENTITY in 0..1: the hole blobs carry a hash
+    // (stable for the blob's life, re-rolled when it respawns under the
+    // bottom edge) that the shader soft-maxes (w^4) inside its blob loop; the
+    // gaps between oil blobs, where no hole reaches, fall back to a slow fbm
+    // at mass scale that rises with the column. MASSES only -- droplets keep
+    // their dye. All three need dye_lum > 0; all 0 = today (shader skips).
+    // dye_lum_vary: per-mass level spread, relative: lum *= 1 +- value.
+    // dye_hue_vary: per-mass hue spread, +- degrees around dye_hue.
+    // dye_thick_hue: hue shift with depth into the mass (thin edge = dye_hue,
+    //   thick core = dye_hue + value), like real dye density.
+    float dyeLumVary    = 0.0f;     // 0..0.5, 0 = today          dye_lum_vary
+    float dyeHueVary    = 0.0f;     // deg 0..90, 0 = today       dye_hue_vary
+    float dyeThickHue   = 0.0f;     // deg -90..90, 0 = today     dye_thick_hue
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
@@ -1893,8 +1907,22 @@ private:
         // vanishing when the blob_count slider moves. 0 = "retire me".
         // Equal to baseR everywhere else, so nothing relaxes on its own.
         float rTarget = 0.0f;
+        // brief AG-b: the dye IDENTITY a hole blob hands the mass it opens,
+        // in (0,1). Drawn from a hash of a serial number (never from the sim's
+        // own RNG streams, so the motion is untouched), fixed for the blob's
+        // life and re-rolled only when it respawns off-screen. Uploaded as
+        // AcidBlobGPU.c.w; the shader reads it for negative-weight blobs only.
+        float dyeId = 0.5f;
     };
     std::vector<AcidBlob> m_acidBlobs;
+    uint32_t m_acidDyeSerial = 0;    // next dye identity serial (brief AG-b)
+    uint32_t m_acidDyeSalt   = 0;    // per-seed salt for the identity hash
+    float NextAcidDyeId();
+    // DIAGNOSTIC ONLY (FW_ACID_DUMP): a copy of the last AcidBlobGPU upload,
+    // 12 floats per blob, so DumpAcidCsv can write exactly what the shader
+    // saw (breathing radius, stretch, dye identity). Empty unless the env
+    // var is set.
+    std::vector<float> m_acidBlobGpuCopy;
     bool   m_acidSeeded = false;
     // blob_count, as last requested. Under conserve_mass the population walks
     // toward it rather than being re-seeded in one frame.

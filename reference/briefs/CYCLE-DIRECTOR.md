@@ -118,3 +118,31 @@ handoff\review\cycle\ for the creative chat.
    differences, no lerps needed). Phase 2 = generic lerp once ui1's keys.inc lands with the flags.
 8. Defaults from the opinion: fade out ~1.5 s, black hold = measured warm-up, fade in 2-3 s; dwell WE
    longer than the oil stages (oil 12-15 min).
+
+## SURVEY + DECISION 2026-09-25 ~00:45: the conductor is ABSORBED, not frozen (supersedes §1 and
+pre-flight item 3 where they say the conductor "stays as is")
+User: "cycles and modes are Kimi's work, delete or alter however much you want; it broke its own
+system; see if there's anything cool in there." Read-only survey findings (moods.cpp/journey.cpp/
+scenes.cpp): with [moods] enabled=0 and no base_mood, none of it changes the rendered image (UpdateMoods
+returns at :509; InitMoods' rand() is re-seeded in InitCommon; ApplyMoodPeakNits/SetCoverageWanted are
+no-ops) → deletable without touching parity, provided the hue-shift functions in fluid.cpp stay.
+Broken: rotation = whole folder (67 files, 41 are acid/ink/mirror copies) alphabetically; FinishTransition
+copies the full config incl. look flags but never calls EnsureLookResources; moods inherit from the
+previous one (partial overlays on live); MoodsAdoptPath can undo a just-applied preset (:583-585);
+JourneyDetach without ReleaseHueShift leaves the rotation locked (:600, journey.cpp:320); any tray
+apply persists base_mood (:593); Scenes Overwrite dumps the full settings.ini incl. sim_res/peak_nits.
+KEEP (absorb into the director): hue bridge maths (moods.cpp:138-143 + fluid.cpp:2326-2350
+CommandHueShift/ReleaseHueShift/FieldAvgHueDeg — rotation only moves forward), the 4 s smoothstep
+curve with the midpoint flip of non-numeric values (:530, :92) = the director's within-FLUID lerp
+(LerpLook's ~45 fluid fields), dwell jitter (:175 → stage_N_jitter, default 0.3), the dark-screen
+trigger (:513-519: past min dwell, field ≥92% dark for 10 s → switch now; fluid stages only),
+per-mood [hdr] peak_nits (:157), the ●/○/* change markers idea (Modes page), journeys as a
+fluid-only stage type (stage_N_journey=<name>; must ReleaseHueShift(false) on detach/end).
+DELETE: moods.cpp conductor/rotation/skip list/base_mood/MoodsApplyBase/auto-written Neon+Clouds/
+one-time preset copy, scenes.cpp + window, the settings mood bar. Call sites to remove: main.cpp
+1096-1124, 1248-1271, 2014, 2031, 2592-2594, 2682, 2828-2829, 3192; settings.cpp (being replaced by
+ui1 anyway) 654-733, 960, 1001-1029, 1073-1120, 1233, 1397; app_state.h:30. Replace MoodsGetDirectory
+(main.cpp:1041/1262/2024): the tray Presets menu uses the moods folder as its recipe folder → the
+director's preset folder. Proof after removal: parity md5 + dxbc-cmp IDENTICAL.
+WE variants for the cycle = the ~26 fluid moods (only "WE parity (fluid)" + the 4 Journey moods matter
+for the first cycle); the 41 acid/ink/mirror copies in moods\ are redundant with reference/presets.

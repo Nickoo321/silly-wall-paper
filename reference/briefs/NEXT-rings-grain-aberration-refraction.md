@@ -1344,3 +1344,42 @@ dye_fraction is a slider, 0.05 is only the first value. Ref blacklight-ref-4-glo
 "maybe like this?": the GLOWING bodies look like glow-stick liquid under UV: self-luminous volume
 (not a lit surface), brighter toward the core, glowing particles/bubbles inside, soft bleed of the
 glow into the dark surround (bloom/halation carry it), magenta / pink / blue palette in the ref.
+
+BS auditor pre-flight (2026-09-24 15:00), executor spec:
+(1) dye_fraction: id differs per body type. Hole-carved masses: c.w = dyeId (fluid.cpp:2894/3443),
+accumulated at shaders.h:1116; in the same loop add idG += step(frac(B.c.w*7.13), LA_DYE_FRACTION)
+* w4 for a.w < 0, glowM = idG/idW (re-hashed so "glows" is not tied to AG-b's hue/lum offset; the w^4
+blend fades across a merge, no pop). Gap masses (idW ~ 0): AG-b's fallback id drifts (DYE_ID_RISE),
+so they stay black whenever fraction < 1 (document). Droplets: AcidDrop.seed (fluid.h:1968) is not on
+the GPU and w is packed (4dq+2ring+gate, decoded :1207-1209 and :2826): encode the glow bit in the
+radius, z = sign*(r + 2*glow), only when fraction < 1 (z unchanged at default); decode at both
+sites: glow = |z| > 1, r = |z| - 2*glow; loop keeps glowD = max(glowD, glow*coverage). Gate in the
+dye block inside [branch] fraction < 0.9995: massC *= glowM; dropC *= glowD.
+(2) oil_fluor hue: OK, no rework: it takes the film's own colour per pixel (oilR, :2348; sat x1.25,
+V = 1); green only where the film is green. For BS use a blue palette, film_hue2_amt 0, and
+rise_bottom_light 0 (the diffuse lamp term) so the lamp shows only as fluorescence. The 0.20 flat
+base in prof (:2345) is volume emission, right under UV, keep. A fixed pigment hue would need
+oil_fluor_hue (-1 = today) in laP37.x.
+(3) Murk: a small display-pass term. The post fog (:3940-3951) is already a lamp-carrying scatter
+with an exact-zero falloff and fog_mass_gate keeps mass interiors black; it lacks colour (hardwired
+warm-white :3951) and extinction. Spec, after oil_fluor, film pixels only: T = exp(-murk_amt * dL /
+murk_falloff); col = lerp(murkC * fall, col, lerp(1, T, alpha)); masses stay black, rims on top,
+post bloom/grain after; fog 0 in the BS preset. ABL: mean_lum <= BS baseline, murk brightness <=
+film level. Slots laP36 = {dye_fraction, murk_amt, murk_hue, murk_falloff}, defaults 1/0/-/- keep
+every preset identical; no sim changes. Proof: dye_fraction 0.05: 5-frame 10 s series, same bodies
+glow every frame, no pop at merges, count of glowing masses/droplets per frame; murk: luminance /
+OKLab profile along the lamp axis at 0/0.3/0.6 with mass-interior mean ~ 0; mean_lum table; HDR
+on/off pair.
+AUDITOR'S OPINION (verbatim, relayed to the user 15:00): "The glow half is right; the murk half is a
+detour. r7's red body already proves it: a saturated emissive shape against true black is what a
+1000-nit OLED does best, with a small bright area, no ABL, and real black around it. The glow-stick
+jars are the same idea. Murk is the opposite: a broad lit veil. It triggers ABL, it softens the
+sharp centre, and it pulls colour toward one haze tone, which is the 'muddy/paper' look you just
+rejected. Wide smooth gradients also band on the panel. One in twenty is also the wrong count. With
+about a dozen masses on screen, 5% often means no glowing mass at all, while 5% of ~950 droplets is
+~47 specks, which reads as confetti rather than one body. Use a mass fraction that guarantees one
+or two glowing bodies on screen, and keep the droplets at 0 or near it. The biggest risk is losing
+the bold saturated film you loved. What I'd do differently: build the glowing bodies on your
+blue-film panel look (ref-1) first, with no murk. If it then lacks depth, add extinction only
+(darker with distance), never an added veil. The drifting lamp keeps the image moving, so burn-in
+is fine."

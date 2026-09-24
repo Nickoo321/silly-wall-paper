@@ -1418,3 +1418,36 @@ slight translucency at thin edges, and the smooth low-contrast film gradient; no
 Levers that exist: oil_penumbra, oil_thin_edge, camera focus band / dof, shadow_soft, film level
 gradients. The LAPD look must keep these soft edges (r5/r7 have harder rims); the particles add the
 detail on top.
+
+BT auditor pre-flight (2026-09-24 15:25): NOT a hashed point field (cannot follow an arbitrary
+velocity; reseeding = the same "pops up" problem). Real CPU particles: a grain list next to the
+droplets, advected by the same 64x36 velocity readback StepHueField uses (specks and patches move
+together); spawn only in the hidden rows below the frame at a rate proportional to the mix field
+there (AL rule) so they drift in visible before a patch forms; brightness = mixField(x,y) (CPU
+bilinear) x lamp reach x particle_amt; colour = the hue2 hue. Much exists already: the glowing
+specks in the black mass (bt-panel-2/5) are droplets inside masses taking the film colour rotated by
+the local mix field (k2 x crust_hue_mix, MULTICOLOUR OIL block); what is missing is specks on the
+film itself. Patch stays AE's term (k2 = smoothstep(0.56,0.68,mixV) unchanged, so rotation/wobble/
+period and the photos' composition hold at every particle_amt); do not make it a low-pass of the
+particles. Cost: bin grains in the droplet grid (3x3 cell walk), ~3000 grains ~ 13 tests/pixel;
+bind the grain buffer by extending the SRV table next to t2/t4, not a new root parameter (64 DWORD
+limit). Anti-aliasing: analytic Gaussian speck, sigma >= 0.6 px at 1440p, area-normalised, else
+sub-pixel twinkle. Slots laP36 = {dye_fraction, particle_amt, particle_size, particle_lamp};
+particle_count CPU-only; amt 0 = no grains, branch skipped, presets unchanged; ABL negligible.
+Proof: speck count/size histogram from connected components of (render - amt 0) on a crop; patch
+unchanged (32 px low-pass of the difference ~ 0); 5-frame series, specks move with the flow and
+NONE are born inside the frame; shimmer check --shot-series 5:0.007, per-speck brightness std < 5%;
+mean_lum.
+AUDITOR'S OPINION (verbatim): "Yes, this answers my murk objection. It adds detail instead of a veil,
+and the 'vibe' stays in the soft patches you already have. It fixes the green popping up randomly
+only if the specks are real particles that drift in from below the frame with the same flow as the
+patches. Specks generated in place would pop in and out just like the patches do now. Look at your
+own photos, though. The green specks in the black (panel 2) and the red ones (panel 5) are your
+existing droplets inside the masses, coloured by the same second-hue field. You already have the
+physical version you're describing, and it's the part you love. The risk is glitter. Thousands of
+even, bright specks over the bright film read as a starfield. In your photos they're few, varied in
+size, and sit in the dark, where a glow means something. On the film itself, emissive on emissive
+barely shows. The OLED angle is fine: tiny drifting points are the safest content there is. What I'd
+do differently: first push what exists (more crust droplets, crust_hue_mix, the glowing bodies) and
+look at it on the panel. Add film specks only if the plain background still bothers you, and keep
+them sparse."

@@ -1200,3 +1200,26 @@ lid_mass_fade: DROPPED (auditor 10:50). Not a duplicate of artefact_lum_gate, bu
 was signed off by the user ("noise fix is fire"), BO asks for fewer artefacts on black masses, and
 rg1.y's last two fields are promised to AP. FEATURES.md line to add: "BD's in-mass lid fade is
 unkeyed by design (user sign-off 09-23)."
+
+COLOURED GRAIN auditor pre-flight (2026-09-24 11:05): the key exists: film_grain_color (pp2.x, 0 =
+mono, 1 = three independent per-channel noises) but BD's film_grain_chroma 0 makes Emulsion's
+multiplicative branch read only nz.x, throwing the colour noise away (so film_grain_color is inert
+under BD and raising film_grain_chroma brings back the high-ISO look). One-line fix in kPostSrc:
+`mul = max(e * (1.0 + (nz - 0.5) * (amt*0.6667*w)), 0.0);` (cannot lift black or clip; at
+film_grain_color 0 nz = (n0,n0,n0) so output is bit-identical; no ini has film_grain_color > 0 with
+chroma < 1, identity holds everywhere). Then subtle colour = values: A/B film_grain_color 0 / 0.15 /
+0.3, no new key. Per-layer sizes (blue coarsest) DROPPED for now (rg2.w cannot take a fifth 6-bit
+field). Black masses stay clean (grain still passes pp1.y*lumG and the density curve). Proof: film
+crop high-passed R/G/B std and R-G correlation (1 for mono, falls with color); black-mass crop std
+unchanged; mean_lum within 0.5%; preset-identity at defaults.
+
+BH FOCUS BREATHING auditor pre-flight (2026-09-24 11:05): display pass, not post uv (post resampling
+softens the whole frame and fights BN's sharp centre): scale uv/pp about the rig optical axis
+(laP24.xy) at the top of the LIQUID_ACID block after MirrorFold; procedural so it stays sharp,
+style=fluid untouched, before BN's corner warp by construction. Drive from focus depth, not the
+readjust event: s = 1 + focus_breathe * 0.006 * saturate(|focus - rest| * k), riding m_rig.focus's
+spring (eases with every readjust and AS focus move, no event plumbing); zoom in only (s >= 1) or
+the Dye texture's clamped edges show; compute s on the CPU, upload one scalar. Slot laP34.w if BB
+has not taken it, else laP35.x; default 0 => s = 1 exactly. Proof: at one time t, breathe 0 vs 1:
+MAD of a +-32 px crop around the axis ~ 0, edge-crop MAD > 0, edge feature displacement = s*r; a
+12-frame series across a readjust (log m_rig.focus to pick the window) plotting s(t) vs focus.

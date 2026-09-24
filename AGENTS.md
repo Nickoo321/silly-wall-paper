@@ -1,7 +1,7 @@
 # AGENTS.md — FluidWallpaper
 
 C++/D3D12 desktop fluid-sim wallpaper (renders behind the icons via WorkerW).
-Single exe, no deps beyond Windows SDK libs.
+Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24): Dear ImGui vendored at src/third_party/imgui for the Settings window only, compiled in, no DLL.
 
 ## Build & run
 

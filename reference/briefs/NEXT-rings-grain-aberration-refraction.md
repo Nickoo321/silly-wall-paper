@@ -1489,3 +1489,34 @@ through the frame centre with drift. ABL: desaturate/cool do not raise luminance
 Proof per effect: OKLab C and L profile along the axis at 0/0.5/1 (monotone ramp), centre sharpness
 unchanged, mean_lum, a 5-frame series across a cycle step. Slots: rg1.y spare fields are gone after
 AP; the post rig block needs a new packing or a small cbuffer row (the rig slot table item).
+
+BU auditor pre-flight (2026-09-24 evening), executor spec: post pass after bloom/halation/fog/lid/
+vignette and before grain/dither/film overlay. Ramp = one dot product: t = smoothstep(-w/2, +w/2,
+dot((uv - C)*(aspect,1), dir)); dir = lamp direction (rg0.xy - centre) when grade_axis = -1 (drifts
+with the lamp for free), else a fixed angle plus slow drift from the clock (pp2.y). Per-pixel,
+Y-preserving effects: desaturate c' = Y + (c-Y)(1-k); temperature = white-balance multiply
+normalised to Y (as BB); shadow tint = chroma shift at the same Y (true black cannot turn teal
+without lifting it: bu-lr-1 lifts the oil, which gives up true black: SKIP the tint). Dehaze needs a
+~12-tap 60 px local mean and brings back the high-ISO mottle BD removed: OUT of the first build.
+hue_rotate (CPU) and hue2 independent; Y-preserving ops cannot re-lift what massDeep/fog/BO
+darkened. ABL: Y unchanged. OLED: drifting axis + a slow cycle on the hue_rotate clock later.
+SLOTS: the post pass has no room (b0 32/32, rig 20/20, rg1/rg2 packed): if the graphics root
+signature still has the AcidCB (b1) bound at the post draw, the post shader can read new rows
+laP37+ (CBV, no root cost); the executor must confirm b1 is bound at the post draw and gate the read
+so a non-acid look never sees stale values; otherwise add a small post CBV first (the rig slot
+table item). Defaults: grade_amount 0 skips the branch. Proof: OKLab L and C profiles along the
+axis at 0/0.5/1 (C ramps monotonically, L flat within 1%), mean_lum <= baseline, black-mass mean
+unchanged, centre-crop high-pass MAD = 0, 5-frame series across a drift step with no pop.
+AUDITOR'S OPINION (verbatim): "Build the graduated desaturation. It's the striking one, and it's
+physical: colour dying with distance from the light. It keeps luminance flat, which suits the OLED
+and ABL. Fold the cool temperature into the same ramp as a second channel. Skip dehaze: that mottled
+film is the high-ISO look you asked me to remove. The teal split tone is gorgeous in Lightroom
+because it lifts the black oil to teal. On the OLED that means giving up true black, which the whole
+look rests on. Get that two-colour feel from the glowing bodies instead. Grain you already have.
+Tying the axis to the lamp is right. It gives the gradient a reason (colour lives near the light),
+and the drifting lamp solves the static-image problem for free. 'Cycling effects like hues' works as
+design only if it's slow and continuous: minutes per change, crossfaded, never a slideshow. If you
+can see it switch, it's a gimmick. Build order: the lamp-aligned desaturate + cool ramp, one amount
+key. Add cycling after you've lived with it."
+BUILD 1 (user "let's lowkey add this feature"): grade_amount (0..1), grade_axis (-1 lamp | degrees),
+grade_width (0.2..1.5), grade_cool (0..1, temperature channel share); cycle later.

@@ -1162,3 +1162,74 @@ Proof: connected components of the dyed-pixel mask on the .jxr, per-mass mean OK
 vary 0/0.3/0.6 (spread across masses rises monotonically, within-mass spread small); two-mass 2x
 crops; a 5-frame series over 10 s with per-mass hue drift < 2 deg (no flicker on merge/recycle);
 key-effect at defaults = no change; report mean_lum.
+
+AP auditor pre-flight (2026-09-24 10:35): film_hairs / film_dust / film_leak are NOT inert, the
+key-effect harness could not see them: a hair's fade envelope is 0 at the start and end of every
+reel (film_artefact_rate 5 s), so shot delays that are multiples of 5 s (10, 60) capture a hair-free
+frame by construction; the leak fires on ~25% of 25 s reels (the t=10 s reel was off); dust did
+change the md5 but ~21 specks of 1-3 px round the MAD to 0.000. Path c[12..15] -> pp3 is uploaded
+and live; BD's dark lean only hides them on bright film. 25 inis set these keys non-zero, including
+acid-rise-12 (0.10 / 0.12 / 0.06): any change to this path must sit behind NEW keys that default to
+today. Executor spec (AP proper): film_artefact_fine (0 = today; 1 = half size, half opacity for
+hairs and dust; when > 0 hair slots go 3 -> 6, film_hairs/film_dust stay the frequency controls) and
+film_artefact_corner (0 = uniform; 1 = spawn positions pulled toward the corners); both in the two
+spare 6-bit fields of rg1.y (field value 0 decodes to exactly today; fill fields, do not repack).
+Motion already works (dust re-seeds every film frame, hairs stick one reel and flutter, the leak
+swells on a 5x clock); do not tie them to the lid. ABL negligible. Harness fix: time-acting keys
+(film_*, rig_readjust, focus_tilt_period) need `--shot-series 12:1.7` from t=11 s so no frame lands
+on a reel boundary, report the max over the series; relabel the FEATURES.md rows for film_hairs and
+film_leak from INERT to "time-gated". Proof: 12-frame series at 2560x1440 per key 0 vs live, MAD and
+max over the series, a 5-frame 2x crop of a hair appearing/fluttering/leaving, DIFFERENCE + WHAT
+ADDS, preset identity on the 25 affected inis with the new keys at 0.
+
+BB auditor pre-flight (2026-09-24 10:50), executor spec: rise_bottom_light lives in the display pass
+(shaders.h ~1871): lampG = lerp(1, 0.80+0.50*smoothstep(uv.y), saturate(k)) multiplies oilC, hue2
+applied before it, oilR copied after it (film, hue2 patches and rims all pick the shift up); no
+interaction with CssHueRotate (fluid look only). (1) "stronger falloff" is capped by saturate(k):
+change to lerp(1, ramp, min(k, 2)), slider 0..2, identical for k <= 1. (2) "warm near, cooler far" =
+colour TEMPERATURE, not hue rotation: key rise_bottom_temp (-1..1, default 0), w = 2*smoothstep(0,1,
+uv.y) - 1; t = float3(1+0.25*T*w, 1, 1-0.25*T*w); oilC *= t / dot(t, W709) (Y unchanged, no ABL).
+rise_bottom_hue (degrees x w via AcidHueShift) optional, second. Nothing existing covers it
+(bloom_warmth/halation_warmth tint the glows, not the film). Slot: display pass -> laP34.w (spare in
+AG-b's plan; if AG-b has not landed, add laP34 = {rise_bottom_temp, rise_bottom_hue, -, -}). Proof:
+OKLab hue and C on the film mask in bands uv.y 0.1..0.9 at temp 0/0.3/0.6 (hue 0/30/60 if kept);
+bottom/top luminance ratio at rise_bottom_light 0.8/1.4/2.0; mean_lum (temp within 1%) and peak
+nits (falloff > 1 lifts the film bottom up to 60%); one HDR on/off pair.
+
+lid_mass_fade: DROPPED (auditor 10:50). Not a duplicate of artefact_lum_gate, but BD's in-mass fade
+was signed off by the user ("noise fix is fire"), BO asks for fewer artefacts on black masses, and
+rg1.y's last two fields are promised to AP. FEATURES.md line to add: "BD's in-mass lid fade is
+unkeyed by design (user sign-off 09-23)."
+
+COLOURED GRAIN auditor pre-flight (2026-09-24 11:05): the key exists: film_grain_color (pp2.x, 0 =
+mono, 1 = three independent per-channel noises) but BD's film_grain_chroma 0 makes Emulsion's
+multiplicative branch read only nz.x, throwing the colour noise away (so film_grain_color is inert
+under BD and raising film_grain_chroma brings back the high-ISO look). One-line fix in kPostSrc:
+`mul = max(e * (1.0 + (nz - 0.5) * (amt*0.6667*w)), 0.0);` (cannot lift black or clip; at
+film_grain_color 0 nz = (n0,n0,n0) so output is bit-identical; no ini has film_grain_color > 0 with
+chroma < 1, identity holds everywhere). Then subtle colour = values: A/B film_grain_color 0 / 0.15 /
+0.3, no new key. Per-layer sizes (blue coarsest) DROPPED for now (rg2.w cannot take a fifth 6-bit
+field). Black masses stay clean (grain still passes pp1.y*lumG and the density curve). Proof: film
+crop high-passed R/G/B std and R-G correlation (1 for mono, falls with color); black-mass crop std
+unchanged; mean_lum within 0.5%; preset-identity at defaults.
+
+BH FOCUS BREATHING auditor pre-flight (2026-09-24 11:05): display pass, not post uv (post resampling
+softens the whole frame and fights BN's sharp centre): scale uv/pp about the rig optical axis
+(laP24.xy) at the top of the LIQUID_ACID block after MirrorFold; procedural so it stays sharp,
+style=fluid untouched, before BN's corner warp by construction. Drive from focus depth, not the
+readjust event: s = 1 + focus_breathe * 0.006 * saturate(|focus - rest| * k), riding m_rig.focus's
+spring (eases with every readjust and AS focus move, no event plumbing); zoom in only (s >= 1) or
+the Dye texture's clamped edges show; compute s on the CPU, upload one scalar. Slot laP34.w if BB
+has not taken it, else laP35.x; default 0 => s = 1 exactly. Proof: at one time t, breathe 0 vs 1:
+MAD of a +-32 px crop around the axis ~ 0, edge-crop MAD > 0, edge feature displacement = s*r; a
+12-frame series across a readjust (log m_rig.focus to pick the window) plotting s(t) vs focus.
+
+## LAPD LOOK (user, 2026-09-24 12:30: "name it lapd look, the task is called that")
+The full effect from the references, composed from the keys that now exist: the LAPD bloom tile
+(bn-lapd-bloom-tile.png): warm veiling bloom from the lamp side, corners that misbehave (corner_warp,
+field curve, aberration), haze over a sharp centre (halation), streaks in the glass, on the dark
+film with black / main / accent roles (film_level, dye roles, dark_sat, dye_lamp_follow), scratches
+and the black-mass gate as needed. Values first (the Opus look composer, 09-24 afternoon), the user
+picks, the values go into acid-rise-12, then "new build, swap?". Local executors AP (hairs/grain)
+and BB/BH (lamp temp, breathing) add on top of the picked look; cloud items (key pass, HLSL, slot
+table, tour, identity coverage) are independent. This is the priority task; it is not gated on them.

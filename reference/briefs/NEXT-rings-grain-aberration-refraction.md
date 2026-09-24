@@ -1532,3 +1532,35 @@ temp -54, saturation -50, dehaze +100, blacks -20 (bu-lr-3); B "grey" = saturati
 C "teal shadows" split tone (bu-lr-1, lifts the black oil: conflicts with true black). BUILD 1 above
 (the linear lamp ramp) is WITHDRAWN. The user wants the pros/cons, the implementation difficulty,
 and whether it can be graded headlessly, from the auditor and the coordinator, before any build.
+
+BU EVALUATION (auditor, 2026-09-24 evening; coordinator agrees):
+Pros: slow variety with no new sim work; corner-weighted leaves the sharp centre alone; reads as
+lens/film character; a step toward the auto-cycling director. Cons: A and B are SUBTRACTIVE (the
+colour is the point; greyed corners can read as "sick" for part of every cycle); stacks on the
+vignette (display pass, wandering centre) and on fog/bloom that put lamp colour back at the bottom
+edge (the grade must run after them); a second independent clock next to hue_rotate makes
+unplanned combinations. Screensaver risk real if a change is visible within one viewing: minutes,
+crossfaded. OLED/ABL: desaturate + Y-normalised cool keep Y flat (no ABL, no burn-in risk); C teal
+shadows lifts true black over a large area: reject.
+Difficulty: vignette weight easy (recompute the display-pass r2^2 about rg0.zw in the post pass,
+lamp bias from rg0.xy, ~10 lines; do NOT touch the display-pass vignette, the fluid PSO runs it);
+B grey trivial; A cool easy (temp + sat), dehaze medium-hard and brings back the mottle (skip),
+blacks -20 crushes the dyed bodies (skip); scheduler easy (CPU next to hue rotation fluid.cpp
+~4855, phase = m_time/period, long smoothstep crossfade, upload 2-3 weights); SLOTS = the hard part:
+(a) read laP37 at b1 during the post draw if bound, gated for ink presets; (b) a post root CBV does
+NOT fit (root signature at 64 DWORDs); (c) rig slot table repack first. Try (a), fall back to (c).
+Headless: a render proves the radial OKLab C/L profile (centre MAD = 0 for r < 0.3, monotone to the
+corners), L flat within 1%, mean_lum <= baseline, black-mass mean unchanged, no pop across a
+crossfade (--shot-series 1 s steps, smooth dC), identity at 0, GPU ms. Only the panel judges
+design vs mode-switching, "fading light" vs "dying colour", and hours-long feel. Demanded proof:
+all of the above + a 12-frame time-lapse over one cycle + a panel session before a non-zero default.
+AUDITOR'S OPINION (verbatim): "Worth building, small and subtle. Seed it with the effects that cost
+the OLED nothing: grey (desaturation) and a cool grade without the dehaze. Keep it in the corners,
+at most half strength there, with the centre clean. Skip dehaze, the blacks slider and the teal
+shadows. Dehaze brings back the mottled texture you asked me to remove. Crushing blacks eats the
+dark end of the glowing bodies. Teal shadows lift your true black, which is what makes this panel
+look expensive. The one thing I'd do differently: don't give it its own clock. Tie it to the hue
+cycle, so the corner grade answers the colour (cooler corners when the palette runs warm, for
+example). Then it reads as the lens and the light responding, not as modes switching. A second
+independent cycle is what turns a wallpaper into a screensaver. Before any cycling, live with one
+fixed subtle corner grade for a day. If you don't miss it when it's off, don't build the cycle."

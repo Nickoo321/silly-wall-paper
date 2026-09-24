@@ -1162,3 +1162,22 @@ Proof: connected components of the dyed-pixel mask on the .jxr, per-mass mean OK
 vary 0/0.3/0.6 (spread across masses rises monotonically, within-mass spread small); two-mass 2x
 crops; a 5-frame series over 10 s with per-mass hue drift < 2 deg (no flicker on merge/recycle);
 key-effect at defaults = no change; report mean_lum.
+
+AP auditor pre-flight (2026-09-24 10:35): film_hairs / film_dust / film_leak are NOT inert, the
+key-effect harness could not see them: a hair's fade envelope is 0 at the start and end of every
+reel (film_artefact_rate 5 s), so shot delays that are multiples of 5 s (10, 60) capture a hair-free
+frame by construction; the leak fires on ~25% of 25 s reels (the t=10 s reel was off); dust did
+change the md5 but ~21 specks of 1-3 px round the MAD to 0.000. Path c[12..15] -> pp3 is uploaded
+and live; BD's dark lean only hides them on bright film. 25 inis set these keys non-zero, including
+acid-rise-12 (0.10 / 0.12 / 0.06): any change to this path must sit behind NEW keys that default to
+today. Executor spec (AP proper): film_artefact_fine (0 = today; 1 = half size, half opacity for
+hairs and dust; when > 0 hair slots go 3 -> 6, film_hairs/film_dust stay the frequency controls) and
+film_artefact_corner (0 = uniform; 1 = spawn positions pulled toward the corners); both in the two
+spare 6-bit fields of rg1.y (field value 0 decodes to exactly today; fill fields, do not repack).
+Motion already works (dust re-seeds every film frame, hairs stick one reel and flutter, the leak
+swells on a 5x clock); do not tie them to the lid. ABL negligible. Harness fix: time-acting keys
+(film_*, rig_readjust, focus_tilt_period) need `--shot-series 12:1.7` from t=11 s so no frame lands
+on a reel boundary, report the max over the series; relabel the FEATURES.md rows for film_hairs and
+film_leak from INERT to "time-gated". Proof: 12-frame series at 2560x1440 per key 0 vs live, MAD and
+max over the series, a 5-frame 2x crop of a hair appearing/fluttering/leaving, DIFFERENCE + WHAT
+ADDS, preset identity on the 25 affected inis with the new keys at 0.

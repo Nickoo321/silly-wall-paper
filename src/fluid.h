@@ -1092,6 +1092,11 @@ struct PostConfig {
     // inside a mass -- keeps its black, while a dark pixel beside bright film
     // is the water itself and still glows.
     float fogMassGate= 0.0f;      // 0 today .. 1 no haze inside masses  fog_mass_gate
+    // brief BO: inside a mass, the grain, the lens split and the cover's
+    // sheen / iridescence / glint halo follow the mass's own brightness and
+    // colour (the massDeep ring, plus a saturation lift), so a pure black
+    // mass stays clean and a dyed one keeps its texture. 0 = today.
+    float artefactLumGate = 0.0f; // 0 today .. 1 artefacts follow mass lum/colour  artefact_lum_gate
     float bloom      = 0.0f;      // 0..1 wide wash master           bloom
     float bloomPx    = 140.0f;    // its radius, px at 1440p         bloom_px
     float lightX     = 0.5f;      // uv; off-frame below the middle  light_x

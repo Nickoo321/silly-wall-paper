@@ -1082,8 +1082,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     float rig[20] = {};
     rig[0] = m_rig.lampX;   rig[1] = m_rig.lampY;
     rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
-    rig[4] = m_rig.tiltAngle;
-    rig[5] = m_rig.tiltAmt;
+    // rig[4..5] (rg1.xy) used to carry the tilt, which the post pass never
+    // read (the display pass gets it through LA_TILT_AMT). They are now two
+    // packs of four 6-bit fields, most significant first, the layout fixed
+    // for briefs BO and BN so neither repacks the other; a field whose key
+    // does not exist yet is written 0:
+    //   rg1.x  artefact_lum_gate : 6 | corner_warp : 6 | corner_warp_r : 6 | bloom_warmth : 6
+    //   rg1.y  glass_streaks : 6 | halation_threshold : 6 | spare : 6 | spare : 6
+    // artefact_lum_gate 0 quantises to 0 and unpacks to exactly 0.0, which is
+    // the shader's off test, so no preset moves by a bit.
+    {
+        auto q6 = [](float v) -> float {
+            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+            return (float)(int)(u * 63.0f + 0.5f);
+        };
+        rig[4] = q6(po.artefactLumGate) * 262144.0f   // artefact_lum_gate (BO)
+               + 0.0f * 4096.0f                        // corner_warp (BN, not yet)
+               + 0.0f * 64.0f                          // corner_warp_r (BN, not yet)
+               + 0.0f;                                 // bloom_warmth (BN, not yet)
+        rig[5] = 0.0f;                                 // glass_streaks | halation_threshold | spare | spare (BN)
+    }
     // rig[6..7] (rg1.zw) are brief BM's lid scratches, packed below.
     // The LENS's own chromatic split (item Z). It lives in the rig block
     // because it is a property of the same lens the rig carries the centre

@@ -402,6 +402,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         po.fog            = getF(S, L"fog", po.fog);
         po.fogPx          = getF(S, L"fog_px", po.fogPx);
         po.fogMassGate    = getF(S, L"fog_mass_gate", po.fogMassGate);
+        po.artefactLumGate = getF(S, L"artefact_lum_gate", po.artefactLumGate);
         po.bloom          = getF(S, L"bloom", po.bloom);
         po.bloomPx        = getF(S, L"bloom_px", po.bloomPx);
         po.lightX         = getF(S, L"light_x", po.lightX);
@@ -1639,6 +1640,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"fog", po.fog, 3);
         putF(S, L"fog_px", po.fogPx, 1);
         putF(S, L"fog_mass_gate", po.fogMassGate, 3);
+        putF(S, L"artefact_lum_gate", po.artefactLumGate, 3);
         putF(S, L"bloom", po.bloom, 3);
         putF(S, L"bloom_px", po.bloomPx, 1);
         putF(S, L"light_x", po.lightX, 3);

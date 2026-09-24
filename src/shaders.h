@@ -2862,14 +2862,18 @@ cbuffer PostPassCB : register(b0) {
 // fold and this pass has never bound.
 cbuffer RigCB : register(b3) {
     float4 rg0;   // x lampX(uv, drifted) y lampY  z axisX(uv)  w axisY(uv)
-    // rg1.xy are the tilt (read by nothing in this pass); rg1.zw are brief
-    // BM's lid scratches, packed like rg4.z (the focus depth and move phase
-    // they used to carry never reached this pass -- the display pass gets
-    // its own copies through the acid slots). Both are exactly 0 when the
-    // scratches are off, which is their only branch.
+    // rg1.xy used to be the tilt, which this pass never read (the display
+    // pass gets it through its acid slot). They are now two packs of four
+    // 6-bit fields (BDU6, most significant first; unused fields are 0),
+    // fixed for briefs BO and BN so neither repacks the other:
+    //   x  artefact_lum_gate : 6 | corner_warp : 6 | corner_warp_r : 6 | bloom_warmth : 6
+    //   y  glass_streaks : 6 | halation_threshold : 6 | spare : 6 | spare : 6
+    // Only artefact_lum_gate (BO) is read so far. rg1.zw are brief BM's lid
+    // scratches, packed like rg4.z. Both are exactly 0 when the scratches
+    // are off, which is their only branch.
     //   z  amount : 8 | density : 8 | len : 8
     //   w  corner : 8 | soft : 8 | tint : 8
-    float4 rg1;   // x tiltAngle(rad) y tiltAmt  z scratch A  w scratch B
+    float4 rg1;   // x BO/BN pack  y BN pack  z scratch A  w scratch B
     // rg2.w is brief BD's four knobs, PACKED the way the lid packs its own
     // (b0's 32 constants are full and the root signature is at the 64-DWORD
     // limit, so a new number has to fit in a slot that already exists):
@@ -3316,6 +3320,61 @@ float4 PSMain(VSOut i) : SV_Target {
         }
         d = lerp(d, g, saturate(wg));
     }
+    // brief BD: ONE "am I deep inside a dye mass?" test, shared by the haze
+    // below and by the lid's sheen and glint halo further down. Four taps
+    // 40 px out: if the WIDE surroundings are dark too, this pixel is inside
+    // something and a lift has no business here; if they take in bright film,
+    // it is the water beside a mass or the LIGHTER BAND along its edge, and
+    // everything stays exactly as it was. The test is spatial, not a test of
+    // the pixel's own level, which is the whole reason it cannot darken that
+    // band (the user, on the panel: "that low-key should stay, it has a cool
+    // effect"). A shape narrower than 40 px never reads as a mass at all, so
+    // droplets keep their reflections too.
+    //
+    // brief BO moved it up here, above the aberration, because the lens split
+    // is now one of the things it gates. It only reads Src (the unaberrated
+    // frame) at the final uv, so the value the haze and the lid see is the
+    // one they always saw.
+    //
+    // artefact_lum_gate (brief BO, rg1.x's first 6-bit field). The user, on
+    // the 1440p dye frames: the grain, the lens split and the cover's sheen
+    // read as fake on a PURE BLACK mass and as natural on a coloured one. So
+    // inside a mass those artefacts follow the mass's own brightness and
+    // colour: g = max(massDeep, satLift), where satLift judges the SAME ring
+    // by its peak channel when it is saturated (a deep blue dye weighs next
+    // to nothing in luminance and is still plainly a colour). Every artefact
+    // is scaled by lerp(1, g, gate); the sheen and the glint halo already
+    // carried massDeep, and for them g REPLACES it (lerp(massDeep, g, gate))
+    // rather than stacking, so a dyed mass gets its sheen back and a black
+    // one stays clean. The glint's core keeps its own rules. At 0 lumG is
+    // exactly 1 and lidG exactly massDeep: today's frame, bit for bit.
+    const float4 bnK = BDU6(rg1.x);
+    float massDeep = 1.0;
+    float lumG = 1.0;      // grain, aberration, iridescence
+    float lidG = 1.0;      // sheen and glint halo (was massDeep)
+    [branch] if (bdK.z > 0.0005 || rg4.z > 0.5 || rg4.w > 0.5 || bnK.x > 0.0005) {
+        float  sdrM = max(pp2.z, 1e-3);
+        float2 mr   = (40.0 * pp4.w) * pp0.xy;
+        float3 sw   = (Src.SampleLevel(linearClamp, uv + float2(mr.x, 0.0), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv - float2(mr.x, 0.0), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv + float2(0.0, mr.y), 0).rgb
+                     + Src.SampleLevel(linearClamp, uv - float2(0.0, mr.y), 0).rgb) * 0.25;
+        massDeep = smoothstep(0.02, 0.18, dot(ToSRGB(max(sw, 0.0) / sdrM), W));
+        lidG = massDeep;
+        [branch] if (bnK.x > 0.0005) {
+            float3 eS  = ToSRGB(max(sw, 0.0) / sdrM);
+            float  mxS = max(eS.r, max(eS.g, eS.b));
+            float  mnS = min(eS.r, min(eS.g, eS.b));
+            float  stS = (mxS - mnS) / max(mxS, 1e-4);
+            float  g   = max(massDeep, smoothstep(0.02, 0.18, mxS)
+                                     * smoothstep(0.15, 0.50, stS));
+            lumG = lerp(1.0, g, saturate(bnK.x));
+            lidG = lerp(massDeep, g, saturate(bnK.x));
+        }
+    }
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
     // ---- LATERAL CHROMATIC ABERRATION (item Z) ---------------------------
     // A real lens focuses red and blue at slightly different MAGNIFICATIONS,
     // so the three channels land on the sensor at slightly different scales:
@@ -3381,6 +3440,8 @@ float4 PSMain(VSOut i) : SV_Target {
             float abR = max(pp6.z, 1.0);
             ab = lerp(1.0, abR / max(rPx, abR), saturate(bdK.w));
         }
+        // brief BO: artefact_lum_gate (lumG = 1 when the gate is 0)
+        ab *= lumG;
         float2 ts = pp0.xy * 0.75;
         float3 s0 = AvgTap(uv, ts);
         d.r += (AvgTap(uv + duv, ts).r - s0.r) * ab;
@@ -3466,26 +3527,8 @@ R"hlsl(
     // Both hang off ONE off-view light position, and that position never sits
     // still: a sum of slow sines, seconds to a minute, so the frame has an
     // idle animation of its own instead of a fixed gradient.
-    // brief BD: ONE "am I deep inside a dye mass?" test, shared by the haze
-    // below and by the lid's sheen and glint halo further down. Four taps
-    // 40 px out: if the WIDE surroundings are dark too, this pixel is inside
-    // something and a lift has no business here; if they take in bright film,
-    // it is the water beside a mass or the LIGHTER BAND along its edge, and
-    // everything stays exactly as it was. The test is spatial, not a test of
-    // the pixel's own level, which is the whole reason it cannot darken that
-    // band (the user, on the panel: "that low-key should stay, it has a cool
-    // effect"). A shape narrower than 40 px never reads as a mass at all, so
-    // droplets keep their reflections too.
-    float massDeep = 1.0;
-    [branch] if (bdK.z > 0.0005 || rg4.z > 0.5 || rg4.w > 0.5) {
-        float  sdrM = max(pp2.z, 1e-3);
-        float2 mr   = (40.0 * pp4.w) * pp0.xy;
-        float3 sw   = (Src.SampleLevel(linearClamp, uv + float2(mr.x, 0.0), 0).rgb
-                     + Src.SampleLevel(linearClamp, uv - float2(mr.x, 0.0), 0).rgb
-                     + Src.SampleLevel(linearClamp, uv + float2(0.0, mr.y), 0).rgb
-                     + Src.SampleLevel(linearClamp, uv - float2(0.0, mr.y), 0).rgb) * 0.25;
-        massDeep = smoothstep(0.02, 0.18, dot(ToSRGB(max(sw, 0.0) / sdrM), W));
-    }
+    // (massDeep, the "am I deep inside a dye mass?" test the haze gate reads,
+    // is computed above the aberration block since brief BO.)
     [branch] if (pp5.y > 0.0005 || pp5.z > 0.0005) {
         float  tq  = pp2.y;
         float  asp = pp0.y / max(pp0.x, 1e-9);           // W/H
@@ -3700,7 +3743,7 @@ R"hlsl(
             // only the deep interior, where there is nothing for a reflection
             // to sit on.
             d += float3(1.00, 0.88, 0.70)
-               * (M * lidC.z * 0.075 * sheenE * sdrL * massDeep);
+               * (M * lidC.z * 0.075 * sheenE * sdrL * lidG);   // BO: lidG = massDeep at gate 0
         }
 
         // ---- IRIDESCENCE: the thin oil film on the cover ----------------
@@ -3713,7 +3756,7 @@ R"hlsl(
                       + 2.6 * sin(q.y * 3.3 - lidA * 1.7)
                       + pp2.y * 0.021;
             float3 ir = 0.5 + 0.5 * cos(ph + float3(0.0, 2.0944, 4.1888));
-            d += (ir - 0.333) * (M * lidD.y * 0.055 * sheenE * sdrL);
+            d += (ir - 0.333) * (M * lidD.y * 0.055 * sheenE * sdrL * lumG);   // BO
         }
 
         // ---- GLINT: the lamp itself, seen in the cover ------------------
@@ -3732,7 +3775,7 @@ R"hlsl(
             // of the frame with nothing to stop it inside a mass, so that one
             // gives up the deep interior and nothing else.
             d += (float3(1.00, 0.90, 0.72) * (core * 0.55)
-                + float3(1.00, 0.56, 0.20) * (halo * 0.13 * massDeep))
+                + float3(1.00, 0.56, 0.20) * (halo * 0.13 * lidG))   // BO: lidG, see above
                  * (M * lidD.x * sdrL);
         }
 
@@ -3934,7 +3977,7 @@ R"hlsl(
             nz = lerp(nz, float3(n0, PHash21(gc + tj + 37.71),
                                      PHash21(gc + tj + 91.37)), saturate(pp2.x));
         }
-        d = Emulsion(d, nz, pp1.y, max(pp2.z, 1e-3), bdK.x, bdK.y);
+        d = Emulsion(d, nz, pp1.y * lumG, max(pp2.z, 1e-3), bdK.x, bdK.y);   // BO: lumG
     }
     // ---- film_noise: the finer, faster layer under the stock's grain -----
     // A new pattern every FRAME OF THE STOCK (film_grain_fps, ignoring the
@@ -3945,7 +3988,7 @@ R"hlsl(
         float  tq = floor(pp2.y * max(pp6.w, 1.0));
         float2 tj = frac(tq * float2(0.0891, 0.1237)) * 557.0;
         float  n0 = PHash21(nc + tj + 211.7);
-        d = Emulsion(d, float3(n0, n0, n0), pp4.y, max(pp2.z, 1e-3), bdK.x, bdK.y);
+        d = Emulsion(d, float3(n0, n0, n0), pp4.y * lumG, max(pp2.z, 1e-3), bdK.x, bdK.y);   // BO: lumG
     }
     // ---- film_stock: the stock's own colour ------------------------------
     // Lifted teal shadows, warm highlights, a slightly different curve per

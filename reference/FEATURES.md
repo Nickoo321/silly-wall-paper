@@ -393,6 +393,7 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] fog` | Light in the water: haze | 0..1, step 0.02 | 0.0 | 0.22 | The water itself glows near the off-view lamp and fades with distance, added only into the dark. It falls to exactly zero far from the lamp, so black stays black. 0 = off |
 | `[post] fog_px` | Haze reach (px at 1440p) | 100..2000, step 25 | 700.0 | 700 | How far the glow of the water carries from the lamp |
 | `[post] fog_mass_gate` | Haze: keep masses black | 0..1, step 0.05 | 0.0 | 0.7 | 0 = the haze lands wherever it is dark. 1 = it is kept out of the inside of a dark mass, which floats in front of the water, and still glows in the water beside it |
+| `[post] artefact_lum_gate` | Masses: artefacts follow colour | 0..1, step 0.05 | 0.0 | 0 | Brief BO. Inside a mass, film grain (+ film_noise), the aberration split, the lid iridescence and the sheen / glint halo follow the mass's own brightness and colour (massDeep ring + saturation lift): a pure black mass stays clean, a dyed one keeps its texture, the edge band is untouched. 0 = today. Packed in rg1.x (first 6-bit field). |
 | `[post] bloom` | Bloom (wide, weak) | 0..1, step 0.02 | 0.0 | 0.30 | The bright film bleeds a very wide, very weak wash into the black. Its radius breathes and the wash drifts with the lamp |
 | `[post] bloom_px` | Bloom radius (px at 1440p) | 40..400, step 5 | 140.0 | 140 | How far that wash spreads |
 | `[post] film_dust` | Film dust | 0..1, step 0.02 | 0.0 | 0.10 | Specks of dust on the film: sparse bright points, a new scattering every film frame. Additive and weighted into the dark, so they are stars on the black and nothing on the bright film |
@@ -552,5 +553,5 @@ traced for this pass; their inline notes say "gate not traced".
 
 ## Totals
 
-**412 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **340 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
+**413 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **341 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
 

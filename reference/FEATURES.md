@@ -559,5 +559,5 @@ traced for this pass; their inline notes say "gate not traced".
 
 ## Totals
 
-**419 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **347 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
+**425 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **353 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
 

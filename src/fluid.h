@@ -748,6 +748,31 @@ struct LiquidAcidConfig {
     float dyeSat       = 0.0f;      // 0..1, 0 = today's neutral        dye_sat
     float dyeLum       = 0.0f;      // 0..1, 0 = today's black          dye_lum
     int   dyeHueFollow = 0;         // 1 = offset from the film   dye_hue_follow
+    // --- brief BK ("too bubbly", lost the sense of darkness) ---------------
+    // dye_droplets: how much of the dye the droplet HOLES take (1 = today,
+    //   every droplet dyed like a mass; 0 = droplets stay black and only the
+    //   masses carry colour). Mass vs droplet = the blob-only field: a gap
+    //   between blobs is a mass, a hole punched into the sheet is a droplet.
+    // dye_masses: the same for the masses (1 = today; 0 = masses black).
+    // dye_droplet_hue/sat/lum: the droplets' OWN dye; -1 = inherit dye_hue /
+    //   dye_sat / dye_lum (so the split costs nothing until it is asked for).
+    //   dye_droplet_hue follows the film exactly as dye_hue does when
+    //   dye_hue_follow is on. Three roles (black / main / accent) over three
+    //   elements (film / masses / droplets) is the user's design space.
+    // dye_smoke: 0 = today's wax (hard stop at the isoline, brightest at the
+    //   thin edge); up to 1 = the dye thickens gradually inward, leaks a
+    //   little out under the thin film and breaks into slow fbm wisps.
+    float dyeDroplets  = 1.0f;      // 0..1, 1 = today            dye_droplets
+    float dyeMasses    = 1.0f;      // 0..1, 1 = today            dye_masses
+    float dyeDropHue   = -1.0f;     // degrees, -1 = dye_hue      dye_droplet_hue
+    float dyeDropSat   = -1.0f;     // 0..1, -1 = dye_sat         dye_droplet_sat
+    float dyeDropLum   = -1.0f;     // 0..1, -1 = dye_lum         dye_droplet_lum
+    float dyeSmoke     = 0.0f;      // 0..1, 0 = today            dye_smoke
+    // film_level: the FLAT oil film's level (the background sheet), applied
+    // in the display pass just before the film is composited. The edge light
+    // (mass_rim, oil_glow, halo, lens highlights) keeps the full palette and
+    // the mass/droplet dye is untouched. 1 = today; ~0.05 = film pitch black.
+    float filmLevel    = 1.0f;      // 0..1, 1 = today            film_level
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it

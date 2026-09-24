@@ -4810,7 +4810,6 @@ void FluidRenderer::UploadAcidConstants() {
             effOil[ci * 3 + 0] = c.r; effOil[ci * 3 + 1] = c.g; effOil[ci * 3 + 2] = c.b;
         }
     }
-
     // ---- DYE THE BLACK (brief AG / AM) -----------------------------------
     // "Add ability to dye the black ink." The references are lava lamps: the
     // dark body is not black, it is a DEEP translucent colour with the lamp
@@ -4853,6 +4852,39 @@ void FluidRenderer::UploadAcidConstants() {
         dyeHueN = hn;
         dyeSat  = fminf(fmaxf(a.dyeSat, 0.0f), 1.0f);
         dyeAmt  = fminf(fmaxf(a.dyeLum, 0.0f), 1.0f);
+    }
+    // ---- brief BK: masses and droplets as two elements -------------------
+    // The droplet holes take their own dye (dye_droplet_hue/sat/lum, each -1
+    // = inherit the mass dye) times dye_droplets, and the masses take theirs
+    // times dye_masses. The droplet colour is built HERE and packed as three
+    // 8-bit channels in one float (r + 256 g + 65536 b, exact below 2^24) --
+    // the acid cbuffer has one scalar left, not a vector. -1 = split off, and
+    // then the shader runs exactly the old dye line. While the split is on,
+    // dye_masses rides on DYE_AMT, which the shader's split path reads as the
+    // mass colour's level and nothing else.
+    float dyeDropRgb = -1.0f;
+    const bool dyeSplit = fabsf(a.dyeDroplets - 1.0f) > 1e-4f || fabsf(a.dyeMasses - 1.0f) > 1e-4f
+                       || a.dyeDropHue >= 0.0f || a.dyeDropSat >= 0.0f || a.dyeDropLum >= 0.0f;
+    if (dyeSplit) {
+        const float dSat = (a.dyeDropSat >= 0.0f) ? a.dyeDropSat : a.dyeSat;
+        const float dLum = (a.dyeDropLum >= 0.0f) ? a.dyeDropLum : a.dyeLum;
+        float r = 0.0f, g = 0.0f, b = 0.0f;
+        if (dSat > 1e-4f && dLum > 1e-4f) {
+            float hue = (a.dyeDropHue >= 0.0f) ? a.dyeDropHue : a.dyeHue;
+            if (a.dyeHueFollow) {
+                float fh, fs, fv;
+                RgbToHsv(&effOil[0], fh, fs, fv);
+                hue += fh * 360.0f;
+            }
+            float hn = fmodf(hue, 360.0f);
+            if (hn < 0.0f) hn += 360.0f;
+            RGB c = HSVtoRGB(hn / 360.0f, fminf(fmaxf(dSat, 0.0f), 1.0f), 1.0f);
+            const float k = fminf(fmaxf(dLum, 0.0f), 1.0f) * fminf(fmaxf(a.dyeDroplets, 0.0f), 1.0f);
+            r = c.r * k; g = c.g * k; b = c.b * k;
+        }
+        auto q8 = [](float v) { return floorf(fminf(fmaxf(v, 0.0f), 1.0f) * 255.0f + 0.5f); };
+        dyeDropRgb = q8(r) + 256.0f * q8(g) + 65536.0f * q8(b);
+        dyeAmt *= fminf(fmaxf(a.dyeMasses, 0.0f), 1.0f);
     }
 
     AcidBlobGPU* dst = (AcidBlobGPU*)m_acidBlobData[fi];
@@ -5169,6 +5201,12 @@ void FluidRenderer::UploadAcidConstants() {
     slot(LA_REFLECT_R,    fmaxf(a.boundaryReflectR, 0.0f));
     slot(LA_REFLECT_AMT,  fminf(fmaxf(a.boundaryReflectAmt, 0.0f), 1.0f));
     slot(LA_DYE_SAT,      dyeSat);
+    // brief BK: the packed droplet dye (-1 = split off) and dye_smoke (0 =
+    // today). With both at those values the shader skips its BK branch.
+    slot(LA_DYE_DROP_RGB, dyeDropRgb);
+    // film_level: the flat film's own level (1 = today, the shader skips it).
+    slot(LA_FILM_LEVEL,   fminf(fmaxf(a.filmLevel, 0.0f), 1.0f));
+    slot(LA_DYE_SMOKE,    fminf(fmaxf(a.dyeSmoke, 0.0f), 1.0f));
     // ---- CAST SHADOWS (brief BC) ----------------------------------------
     // shadow_len is a fraction of the screen HEIGHT, which is exactly the
     // unit the shader's p-space y carries, so it goes across untouched.

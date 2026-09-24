@@ -2933,7 +2933,8 @@ cbuffer RigCB : register(b3) {
     // fixed for briefs BO and BN so neither repacks the other:
     //   x  artefact_lum_gate : 6 | corner_warp : 6 | corner_warp_r : 6 | bloom_warmth : 6
     //   y  glass_streaks : 6 | halation_threshold : 6 | spare : 6 | spare : 6
-    // Only artefact_lum_gate (BO) is read so far. rg1.zw are brief BM's lid
+    // corner_warp_r is 0.4 + 0.5 * field; it and glass_streaks are written 0
+    // unless the warp / the lid is on (fluid.cpp). rg1.zw are brief BM's lid
     // scratches, packed like rg4.z. Both are exactly 0 when the scratches
     // are off, which is their only branch.
     //   z  amount : 8 | density : 8 | len : 8
@@ -3289,6 +3290,109 @@ float LidScratch(float2 P, float2 Lp, float2 F, float dens, float len,
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
+#ifdef BN_OPTICS
+// ---- INSTRUMENT OPTICS (brief BN) -----------------------------------------
+// The user, on the LAPD microscope sheet: "the corners need to almost look
+// oddly distorted, like a real microscope ... but underneath it should still
+// look pretty clear, specifically in the centre."
+//
+// CORNER WARP. A microscope's field is flat and sharp in the middle and goes
+// strange toward the edge of the field stop: off-axis the image is stretched
+// ALONG the arcs round the axis (the tangential image of an astigmatic field)
+// while the radius stays put. Here the frame is treated as a square with its
+// corners at (+-1, +-1); outside `r0` (1 = a corner) each pixel reads from a
+// point turned toward the nearest diagonal, by an angle that grows as
+// ((r - r0) / (1 - r0))^2. That is a tangential MAGNIFICATION on each
+// diagonal -- the corner content smears out along its arc -- paid for by a
+// slight squeeze near the middle of each edge, and it is continuous all the
+// way round because sin(4 theta) is. The radius is never changed, so nothing
+// is ever read from outside the frame.
+//
+// It is tied to the FRAME, not to the drifting lens axis: the field stop is
+// the eyepiece's, and the whole point is a centre that is untouched by
+// construction. At r <= r0 the pixel's uv is returned as it came in -- the
+// middle 40% of the frame lies inside r = 0.4, the lowest r0 the slider
+// allows, so it is bit-identical at every setting. Nothing here adds light;
+// the fluid moving through the warp is what keeps it off a fixed pixel.
+float2 CornerWarp(float2 uv, float k, float r0) {
+    float2 s  = uv * 2.0 - 1.0;
+    float  rn = length(s) * 0.70710678;
+    [branch] if (rn <= r0) return uv;
+    float  t  = saturate((rn - r0) / max(1.0 - r0, 1e-3));
+    // 0.20 rad at k = 1 on the diagonal's neighbourhood: a tangential
+    // magnification of 1 / (1 - 0.8 k) right at the corner (5x at k = 1)
+    float  dA = (0.20 * k * t * t) * sin(4.0 * atan2(s.y, s.x));
+    float  c  = cos(dA), sn = sin(dA);
+    return float2(s.x * c - s.y * sn, s.x * sn + s.y * c) * 0.5 + 0.5;
+}
+// HALATION with a movable knee (brief BN halation_threshold): the halation
+// block's own two-ring gather, taps and weights unchanged, knee lo..hi on
+// the peak channel. Only called when the key is on; returns the normalised sum.
+float3 HalGatherT(float2 ctr, float2 rad, float jt, float sdrH, float lo, float hi) {
+    float3 hot = float3(0.0, 0.0, 0.0);
+    float  hw  = 0.0;
+    [unroll] for (int k = 0; k < 8; k++) {
+        float a2 = (float)k * 0.7853982 + jt;
+        float3 sp = Src.SampleLevel(linearClamp, ctr + float2(cos(a2), sin(a2)) * (0.55 * rad), 0).rgb;
+        hot += sp * smoothstep(lo, hi, max(sp.r, max(sp.g, sp.b)) / sdrH); hw += 1.0;
+    }
+    [unroll] for (int m = 0; m < 12; m++) {
+        float a2 = (float)m * 0.5235988 + jt + 0.2617994;
+        float3 sp = Src.SampleLevel(linearClamp, ctr + float2(cos(a2), sin(a2)) * rad, 0).rgb;
+        hot += sp * smoothstep(lo, hi, max(sp.r, max(sp.g, sp.b)) / sdrH) * 0.6; hw += 0.6;
+    }
+    return hot / max(hw, 1e-5);
+}
+// GLASS STREAKS. The LAPD sheet's thin bright wavy lines across the glass:
+// light caught along a fold or a smear line in the cover, not in the picture.
+// Two lines, near-horizontal, each a ~1.7 px (FWHM, 1440p) core with a very
+// faint 6 px sheen, brighter along wisps and brightest where they pass the
+// lamp's reflection in the cover. They live in LID space exactly like the
+// scratches -- carried by a third of the lid's wander and turned by a tenth
+// of its rotation about its optical centre -- so they drift with the ghosts
+// and the sheen, swing when the rig readjusts, and their waves travel slowly
+// along them on their own clock: nothing sits on a pixel.
+// uv: the pixel (OLED orbit only), ctrL/lidO/lidA/lampR: the lid block's own
+// numbers, pxU: one OUTPUT pixel in 1440p px. Returns the line strength.
+float GlassStreaks(float2 uv, float2 ctrL, float2 lidO, float lidA,
+                   float2 lampR, float aspL, float t, float pxU) {
+    float2 F  = float2(1440.0 * aspL, 1440.0);
+    float2 P  = uv * F - ctrL * F - lidO * (0.35 * F);
+    float  th = 0.10 * lidA;
+    float  c  = cos(th), s = sin(th);
+    float2 Q  = float2(P.x * c + P.y * s, -P.x * s + P.y * c);  // along, across
+    // below 1440p hold the core at one output pixel and dim it by the same
+    // ratio (the scratches' rule), so it is never dotted and keeps its energy
+    float  w0 = 1.0;
+    float  w  = max(w0, 0.75 * pxU);
+    float  wA = w0 / w;
+    float  acc = 0.0;
+    [unroll] for (int k = 0; k < 2; k++) {
+        float  fk = (float)k;
+        float  y0 = (k == 0) ? -0.085 * F.y : 0.060 * F.y;
+        float  f1 = (k == 0) ? 0.0041 : 0.0033;
+        float  f2 = (k == 0) ? 0.0107 : 0.0089;
+        float  a1 = (k == 0) ? 26.0 : 34.0;
+        float  a2 = (k == 0) ? 7.0 : 9.0;
+        float  p1 = Q.x * f1 + fk * 2.1 + t * 0.011;
+        float  p2 = Q.x * f2 + fk * 4.7 - t * 0.017;
+        float  cv = a1 * sin(p1) + a2 * sin(p2);
+        float  dv = a1 * f1 * cos(p1) + a2 * f2 * cos(p2);
+        float  ds = abs(Q.y - y0 - cv) * rsqrt(1.0 + dv * dv);
+        float  ln = exp(-(ds * ds) / (w * w)) * wA
+                  + 0.06 * exp(-(ds * ds) / 36.0);
+        // wisps: the line comes and goes along its length, slowly
+        float  ws = PVNoise(float2(Q.x * (1.0 / 260.0) + fk * 13.1 + t * 0.006, fk * 7.3));
+        float  al = 0.25 + 0.75 * smoothstep(0.30, 0.70, ws);
+        acc += ln * al * ((k == 0) ? 1.0 : 0.75);
+    }
+    float  dl = length((uv - lampR) * float2(aspL, 1.0));
+    return acc * (0.30 + 0.70 / (1.0 + dl * dl * 6.0));
+}
+#endif // BN_OPTICS
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
 float4 PSMain(VSOut i) : SV_Target {
     const float3 W = float3(0.2126, 0.7152, 0.0722);
     // brief BD's four knobs, unpacked once: x grain chroma (1 = today),
@@ -3296,6 +3400,20 @@ float4 PSMain(VSOut i) : SV_Target {
     // w aberration fades with defocus (0 = today's uniform split).
     const float4 bdK = BDU6(rg2.w);
     float2 uv = i.uv;
+#ifdef BN_OPTICS
+    // brief BN corner_warp (rg1.x field 2) and corner_warp_r (field 3,
+    // 0.4..0.9): FIRST, so every tap below reads the warped frame; the grain,
+    // the dither and the film overlay are in SV_Position and stay unwarped.
+    // All BN code is compiled only into the second post PSO (BN_OPTICS, see
+    // FluidRenderer::RunPostPass), so with every BN key at 0 the post pass
+    // runs today's exact bytecode: merely adding untaken branches to one
+    // shader moved 1-2 pixels by one code on the identity presets (the
+    // driver's own ISA compile, not the HLSL, is what changed).
+    [branch] if (rg1.x >= 4096.0) {
+        const float4 bnW = BDU6(rg1.x);
+        [branch] if (bnW.y > 0.0005) uv = CornerWarp(uv, bnW.y, 0.4 + 0.5 * bnW.z);
+    }
+#endif
     // ======================= V3: MOTION ====================================
     // The user's rule for this whole family: nothing may sit at a fixed screen
     // position on an OLED, ever. Their motion model is specific -- a SLIGHT,
@@ -3569,6 +3687,19 @@ R"hlsl(
             hot += sp * ex * 0.6; hw += 0.6;
         }
         hot /= max(hw, 1e-5);
+        // brief BN halation_threshold (rg1.y field 2): 0 = today's knee, and
+        // the gather above is left exactly as it was (a runtime-selected knee
+        // measurably moved default frames). Above 0 the same gather is redone
+        // with the knee lowered toward 0.05..0.25 of SDR white, so the
+        // mid-tones scatter too and the halation becomes the diffusion haze of
+        // a pro-mist filter -- the sharp picture is never blurred, only veiled
+        // by a wide, weak, brightness-weighted copy of itself, still leaning
+        // toward the lamp.
+#ifdef BN_OPTICS
+        const float hThr = BDU6(rg1.y).y;
+        [branch] if (hThr > 0.0005)
+            hot = HalGatherT(ctr, rad, jt, sdrH, 0.55 - 0.50 * hThr, 1.05 - 0.80 * hThr);
+#endif
         // reddened by the two passes through the emulsion
         float3 tint = lerp(float3(1.0, 1.0, 1.0), float3(1.00, 0.34, 0.13), saturate(pp7.w));
         // ...and it only shows where this pixel is DARKER than what it is
@@ -3665,6 +3796,20 @@ R"hlsl(
             bl /= max(bw, 1e-4);
             float wd = 1.0 - smoothstep(0.10, 0.75, lum0);
             float lw = 0.75 + 0.50 * exp(-dl / max(pp6.x * 1.5, 1e-4));
+#ifdef BN_OPTICS
+            // brief BN bloom_warmth (rg1.x field 4): the LAPD tile's veil is
+            // the LAMP's colour, not the film's -- hot yellow-white on the
+            // lamp side, falling to red away from it. The wash keeps its own
+            // luminance exactly (the tint is normalised to Y = 1), so this is
+            // a hue move and nothing else: mean_lum and ABL do not change.
+            const float bWm = BDU6(rg1.x).w;
+            [branch] if (bWm > 0.0005) {
+                float  nl  = exp(-dl / max(pp6.x * 1.5, 1e-4));
+                float3 wc  = lerp(float3(1.00, 0.34, 0.20), float3(1.00, 0.82, 0.55), nl);
+                wc /= dot(wc, W);
+                bl = lerp(bl, dot(bl, W) * wc, saturate(bWm));
+            }
+#endif
             d += bl * (saturate(pp5.z) * 0.20 * wd * lw);
         }
     }
@@ -3694,7 +3839,11 @@ R"hlsl(
     // rides, so the ghosts, the sheen and the glint all arrive together --
     // never one effect moving alone.
     // =====================================================================
+#ifdef BN_OPTICS
+    [branch] if (rg4.z > 0.5 || rg4.w > 0.5 || rg1.z > 0.5 || rg1.y >= 262144.0) {
+#else
     [branch] if (rg4.z > 0.5 || rg4.w > 0.5 || rg1.z > 0.5) {
+#endif
         float  sdrL = max(pp2.z, 1e-3);
         float  aspL = pp0.y / max(pp0.x, 1e-9);            // W/H
         // unpack: see the rg4 comment in the cbuffer above
@@ -3880,6 +4029,27 @@ R"hlsl(
                               sB.z * smoothstep(0.02, 0.10, mx / sdrL));
             d += col * (sA.x * 0.60 * sc * fal * ovr * sdrL);
         }
+#ifdef BN_OPTICS
+        // ---- GLASS STREAKS (brief BN, rg1.y field 1) --------------------
+        // Deliberately NOT gated by massDeep / lidG: they are on the glass,
+        // in front of everything, and a gate would leave them inert over the
+        // masses that fill most of the frame. Not ADDED either: the first
+        // cut was an add leaned off the bright pixels, and on a frame that is
+        // 90% saturated film it was inert too. A line of light on glass
+        // WHITENS what is behind it, so the pixel is pulled toward a pale
+        // warm target at 1.2x SDR white, per channel and never downward
+        // (max): over black it is a bright line, over the magenta film a
+        // paler one, and over a core already brighter than the target
+        // nothing -- the frame's peak cannot rise. Written 0 by the CPU
+        // unless the lid is on, so lidO / lidA are always real here.
+        [branch] if (rg1.y >= 262144.0) {
+            float  gsA = BDU6(rg1.y).x;
+            float  gs  = GlassStreaks(i.uv + float2(rg3.z, rg3.w), ctrL, lidO, lidA,
+                                      lampR, aspL, pp2.y, 1.0 / max(pp4.w, 1e-4));
+            float3 tg  = float3(1.00, 0.90, 0.86) * (1.2 * sdrL);
+            d = max(d, lerp(d, tg, saturate(gsA * gs)));
+        }
+#endif
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)

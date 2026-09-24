@@ -945,6 +945,7 @@ bool FluidRenderer::PostActive() const {
                          po.aberration > 0.0005f ||
                          po.halation > 0.0005f || po.lid > 0.0005f ||
                          po.shimmer > 0.0005f || po.pixelShiftPx > 0.01f ||
+                         po.cornerWarp > 0.0005f ||   // brief BN; the other BN keys ride on bloom/halation/lid
                          (m_cfg.acid.enabled && po.dofMaxPx > 0.01f));
 }
 
@@ -1080,6 +1081,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // vignette centre, all of which are motions of this same body and must be
     // read from these numbers rather than re-derived beside them.
     float rig[20] = {};
+    bool bnOptics = false;   // brief BN: set in the rg1 pack below
     rig[0] = m_rig.lampX;   rig[1] = m_rig.lampY;
     rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
     // rig[4..5] (rg1.xy) used to carry the tilt, which the post pass never
@@ -1096,11 +1098,26 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
             float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
             return (float)(int)(u * 63.0f + 0.5f);
         };
+        // brief BN: corner_warp_r (0.4..0.9) is only written while the warp
+        // itself quantises to at least 1, so with the warp off rg1.x is what
+        // it was before BN existed. glass_streaks needs the lid (its positions
+        // are the lid's), so it is written 0 while the lid is off.
+        const float qcw  = q6(po.cornerWarp);
+        const float qcwr = qcw >= 1.0f ? q6((po.cornerWarpR - 0.4f) / 0.5f) : 0.0f;
+        const float qgs  = po.lid > 0.0005f ? q6(po.glassStreaks) : 0.0f;
+        const float qbw  = q6(po.bloomWarmth);
+        const float qht  = q6(po.halationThreshold);
+        // Any BN field live -> the BN_OPTICS build of the post shader. With all
+        // of them 0 the pass keeps today's PSO, bytecode for bytecode: the
+        // extra code alone, never taken, moved 1-2 identity pixels by a code
+        // through the driver's ISA compile.
+        bnOptics = qcw >= 1.0f || qgs >= 1.0f || qbw >= 1.0f || qht >= 1.0f;
         rig[4] = q6(po.artefactLumGate) * 262144.0f   // artefact_lum_gate (BO)
-               + 0.0f * 4096.0f                        // corner_warp (BN, not yet)
-               + 0.0f * 64.0f                          // corner_warp_r (BN, not yet)
-               + 0.0f;                                 // bloom_warmth (BN, not yet)
-        rig[5] = 0.0f;                                 // glass_streaks | halation_threshold | spare | spare (BN)
+               + qcw * 4096.0f                         // corner_warp (BN)
+               + qcwr * 64.0f                          // corner_warp_r (BN)
+               + qbw;                                  // bloom_warmth (BN)
+        rig[5] = qgs * 262144.0f                       // glass_streaks (BN)
+               + qht * 4096.0f;                        // halation_threshold (BN); spare | spare
     }
     // rig[6..7] (rg1.zw) are brief BM's lid scratches, packed below.
     // The LENS's own chromatic split (item Z). It lives in the rig block
@@ -1204,8 +1221,15 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     rig[14] = m_rig.shiftX * scale / (float)(m_width  > 0 ? m_width  : 1);
     rig[15] = m_rig.shiftY * scale / (float)(m_height > 0 ? m_height : 1);
 
+    // brief BN: the BN_OPTICS post PSO is compiled the first time a BN key
+    // goes live (~0.3 s, once; PSO creation is off the command list) and kept.
+    if (bnOptics && !m_psoPostBN) {
+        const D3D_SHADER_MACRO defs[] = { { "BN_OPTICS", "1" }, { nullptr, nullptr } };
+        MakeGraphicsPso(kPostSrc, m_psoPostBN, defs);
+        printf("post: BN_OPTICS PSO compiled on demand\n");
+    }
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
-    m_cmd->SetPipelineState(m_psoPost.Get());
+    m_cmd->SetPipelineState(bnOptics ? m_psoPostBN.Get() : m_psoPost.Get());
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
     m_cmd->SetGraphicsRoot32BitConstants(6, 20, rig, 0);
     // The sim's own low-res velocity, so the thermal shimmer is ADVECTED by
@@ -2069,7 +2093,7 @@ void FluidRenderer::Shutdown() {
     m_psoAdvectVel.Reset(); m_psoAdvectDye.Reset();
     m_psoSplatVel.Reset(); m_psoSplatDye.Reset(); m_psoSplatDyeCompact.Reset();
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
-    m_psoDisplay.Reset(); m_psoGradient.Reset(); m_psoPost.Reset();
+    m_psoDisplay.Reset(); m_psoGradient.Reset(); m_psoPost.Reset(); m_psoPostBN.Reset();
     m_psoLiquidAcid.Reset();
     m_psoOilMask.Reset(); m_psoOilDrag.Reset(); m_psoOilDyeBlock.Reset();
     m_oilMaskMade = false;

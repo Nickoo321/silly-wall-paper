@@ -692,6 +692,9 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.lampGrey         = getF(S, L"lamp_grey", a.lampGrey);
         a.lampGreySize     = getF(S, L"lamp_grey_size", a.lampGreySize);
         a.lampGreyCool     = getF(S, L"lamp_grey_cool", a.lampGreyCool);
+        a.lampGreyHeart     = getF(S, L"lamp_grey_heart", a.lampGreyHeart);
+        a.lampGreyHeartSize = getF(S, L"lamp_grey_heart_size", a.lampGreyHeartSize);
+        a.lampGreyHeartLift = getF(S, L"lamp_grey_heart_lift", a.lampGreyHeartLift);
         a.shadowTone       = getF(S, L"shadow_tone", a.shadowTone);
         a.shadowToneLift   = getF(S, L"shadow_tone_lift", a.shadowToneLift);
         a.shadowToneSat    = getF(S, L"shadow_tone_sat", a.shadowToneSat);
@@ -2028,6 +2031,9 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"lamp_grey", a.lampGrey, 3);
         putF(S, L"lamp_grey_size", a.lampGreySize, 3);
         putF(S, L"lamp_grey_cool", a.lampGreyCool, 3);
+        putF(S, L"lamp_grey_heart", a.lampGreyHeart, 3);
+        putF(S, L"lamp_grey_heart_size", a.lampGreyHeartSize, 3);
+        putF(S, L"lamp_grey_heart_lift", a.lampGreyHeartLift, 3);
         putF(S, L"shadow_tone", a.shadowTone, 3);
         putF(S, L"shadow_tone_lift", a.shadowToneLift, 3);
         putF(S, L"shadow_tone_sat", a.shadowToneSat, 3);

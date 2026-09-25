@@ -42,6 +42,8 @@
 // are free (laP38 is declared empty so BU-b's planned laP39 can follow).
 // Brief BU-b added laP39 = {highlight tint rgb (folded: hue, sat, amount,
 // desat, gate), tone_balance}: full; laP35.w and laP38 are still free.
+// Brief BX took laP38.yzw (lamp_grey_heart, _size, _lift); laP38.x stays
+// BW's (film_equal_load_patches).
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -203,7 +205,10 @@
     X(HTONE_R,             39, x, "highlight tint r: Y-held WB multiplier M = lerp(1, lin HSV(h, highlight_tone_sat, 1), amt * gate), dot(M, Y709) = 1, times (1 + highlight_tone_desat * gate); 0 = off (computed, brief BU-b)") \
     X(HTONE_G,             39, y, "highlight tint g (computed, brief BU-b)") \
     X(HTONE_B,             39, z, "highlight tint b (computed, brief BU-b)") \
-    X(TONE_BAL,            39, w, "tone_balance, -1..1: split = 0.5 - 0.25 * balance, encoded luma (brief BU-b)")
+    X(TONE_BAL,            39, w, "tone_balance, -1..1: split = 0.5 - 0.25 * balance, encoded luma (brief BU-b)") \
+    X(HEART_K,             38, y, "lamp_grey_heart, 0..1, 0 = off (brief BX)") \
+    X(HEART_SIZE,          38, z, "lamp_grey_heart_size, half-frame units 0.8..2.2 (brief BX)") \
+    X(HEART_LIFT,          38, w, "lamp_grey_heart_lift, 0..0.8 (brief BX)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -218,5 +223,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP39; laP38 declared empty).
+// Number of laP<n> float4s (laP0 .. laP39; laP38.x free for BW, .yzw BX).
 static const int kAcidSlotVecs = 40;

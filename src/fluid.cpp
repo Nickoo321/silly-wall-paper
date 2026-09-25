@@ -2765,7 +2765,7 @@ struct AcidParamsGPU {
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
-    // laP38: free (declared so BU-b's laP39 can follow).
+    // laP38: .x free (BW), .yzw = brief BX's grey heart.
     float p36[4], p37[4], p38[4];
     // brief BU-b: p39 = highlight tint + balance.
     float p39[4];
@@ -5823,6 +5823,11 @@ void FluidRenderer::UploadAcidConstants() {
         slot(LA_GREY_COOL, fminf(fmaxf(a.lampGreyCool, 0.0f), 1.0f));
         slot(LA_GREY_CX,   gx);
         slot(LA_GREY_CY,   gy);
+        // brief BX: the grey heart (centred mask on the same block). No 0.6
+        // factor: amount 1 = fully grey inside the core. 0 skips the branch.
+        slot(LA_HEART_K,    fminf(fmaxf(a.lampGreyHeart, 0.0f), 1.0f));
+        slot(LA_HEART_SIZE, fminf(fmaxf(a.lampGreyHeartSize, 0.8f), 2.2f));
+        slot(LA_HEART_LIFT, fminf(fmaxf(a.lampGreyHeartLift, 0.0f), 0.8f));
     }
     // ---- brief BU: SPLIT TONE --------------------------------------------
     // The user: "make it the opposite of the main hue, and obviously rotate

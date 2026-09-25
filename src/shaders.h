@@ -610,7 +610,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w -
     float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
     float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
-    float4 laP38;     // x -  y -  z -  w -
+    float4 laP38;     // x -  y HEART_K  z HEART_SIZE  w HEART_LIFT
     float4 laP39;     // x HTONE_R  y HTONE_G  z HTONE_B  w TONE_BAL
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
@@ -744,6 +744,48 @@ float3 DarkSat(float3 c, float lvl) {
         }
     }
     return o;
+}
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+// ---- brief BU / BX: LAMP GREY, one Y-flat desaturation, two masks --------
+// The corner (lamp_grey, BU) calls it on the composite right after the film
+// is laid down, with a cool white balance; the centred grey heart
+// (lamp_grey_heart, BX) calls it right before the final trim, neutral, so
+// every rim / halo / lens / glow term on top greys with the film.
+// gk = desaturation weight 0..1, gkCool = share of the Y-normalised cool
+// white balance, liftMul = linear-light multiplier on the result (1 = none,
+// a literal that folds away at the corner's call).
+// Desaturation about the pixel's LINEAR luminance (the composite is
+// sRGB-encoded, and a mix about encoded luma would darken saturated film by
+// 20-40%): Y is kept, so ABL and mean_lum do not move and black stays black.
+// Then the post_chroma hold: that trim scales chroma about the ENCODED luma
+// and clamps at 0, which gives a saturated pixel extra luminance a greyed
+// one no longer gets (measured -1..-2% mean_lum on a bright film), so hold
+// the luminance the ORIGINAL pixel would have after it (times the lift; a
+// target taken from the lifted GREY pixel would be its own luminance, a
+// no-op), exactly as DarkSat does: two fixed-point gain steps.
+float3 LampGreyY(float3 col, float gk, float gkCool, float liftMul) {
+    const float3 GW = float3(0.2126, 0.7152, 0.0722);
+    float3 gl = DsToLin(col);
+    float  gY = dot(gl, GW);
+    gl = gY + (gl - gY) * (1.0 - gk);
+    float3 gc = gl * float3(0.80, 0.94, 1.30);
+    gc *= gY / max(dot(gc, GW), 1e-7);
+    gl = lerp(gl, gc, gkCool);
+    gl *= liftMul;
+    float3 go = DsToSrgb(gl);
+    [branch] if (abs(LA_POST_CHROMA - 1.0) > 0.001) {
+        float  pc = LA_POST_CHROMA;
+        float  y0 = dot(col, GW);
+        float  t0 = dot(DsToLin(max(y0 + (col - y0) * pc, 0.0)), GW) * liftMul;
+        [unroll] for (int it = 0; it < 2; it++) {
+            float y1 = dot(go, GW);
+            float t1 = dot(DsToLin(max(y1 + (go - y1) * pc, 0.0)), GW);
+            go = DsToSrgb(DsToLin(go) * (t0 / max(t1, 1e-8)));
+        }
+    }
+    return go;
 }
 
 // ---- brief BU-b: the luminance the PANEL gets from a composite colour ----
@@ -2471,43 +2513,16 @@ R"hlsl(
     // light". A soft disc on the far corner (the CPU picks it and slides it
     // along the frame edge): full inside 0.35 x size, gone at size (screen
     // heights), and the corner is > 1 screen height from the frame centre,
-    // so the centre never changes. Desaturation about the pixel's LINEAR
-    // luminance (the composite is sRGB-encoded, and a mix about encoded luma
-    // would darken saturated film by 20-40%), then a cool white balance
-    // renormalised to the same Y: luminance is kept, so ABL and mean_lum do
-    // not move and black stays black (held through post_chroma too).
-    // Applied after the tone, so a tinted body in the grey corner greys
-    // with the rest.
+    // so the centre never changes. LampGreyY (by DarkSat): Y-flat
+    // desaturation about the LINEAR luminance, then a cool white balance
+    // renormalised to the same Y, held through post_chroma. Applied after
+    // the tone, so a tinted body in the grey corner greys with the rest.
+    // (The centre is brief BX's grey heart, before the final trim below.)
     [branch] if (LA_GREY_K > 0.0) {
         float gS = max(LA_GREY_SIZE, 0.05);
         float gw = 1.0 - smoothstep(0.35 * gS, gS, length(pp - float2(LA_GREY_CX, LA_GREY_CY)));
         float gk = gw * LA_GREY_K;
-        [branch] if (gk > 0.0) {
-            const float3 GW = float3(0.2126, 0.7152, 0.0722);
-            float3 gl = DsToLin(col);
-            float  gY = dot(gl, GW);
-            gl = gY + (gl - gY) * (1.0 - gk);
-            float3 gc = gl * float3(0.80, 0.94, 1.30);
-            gc *= gY / max(dot(gc, GW), 1e-7);
-            gl = lerp(gl, gc, gk * saturate(LA_GREY_COOL));
-            float3 go = DsToSrgb(gl);
-            // post_chroma (below) scales chroma about the ENCODED luma and
-            // clamps at 0, which gives a saturated pixel extra luminance that
-            // a greyed one no longer gets (measured -1..-2% mean_lum on a
-            // bright film). Hold the luminance the pixel will have AFTER that
-            // trim, exactly as DarkSat does: two fixed-point gain steps.
-            [branch] if (abs(LA_POST_CHROMA - 1.0) > 0.001) {
-                float  pc = LA_POST_CHROMA;
-                float  y0 = dot(col, GW);
-                float  t0 = dot(DsToLin(max(y0 + (col - y0) * pc, 0.0)), GW);
-                [unroll] for (int it = 0; it < 2; it++) {
-                    float y1 = dot(go, GW);
-                    float t1 = dot(DsToLin(max(y1 + (go - y1) * pc, 0.0)), GW);
-                    go = DsToSrgb(DsToLin(go) * (t0 / max(t1, 1e-8)));
-                }
-            }
-            col = go;
-        }
+        [branch] if (gk > 0.0) col = LampGreyY(col, gk, gk * saturate(LA_GREY_COOL), 1.0);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
@@ -3081,6 +3096,28 @@ R"hlsl(
         float3 inkHue = laInk[1].rgb / max(max(laInk[1].r, max(laInk[1].g, laInk[1].b)), 1e-3);
         float  toeL   = dot(col, float3(0.2126, 0.7152, 0.0722));
         col += inkHue * (0.12 * saturate(LA_TOE_TINT) * (1.0 - smoothstep(0.0, 0.22, toeL)));
+    }
+    // ---- brief BX: GREY HEART (lamp_grey_heart) -------------------------
+    // The user: "have a true colour and make it look grayscale in the
+    // middle". The frame keeps its true stage colours; the lamp grey's
+    // Y-flat desaturation (LampGreyY, neutral: no cool) with a CENTRED
+    // elliptical mask, full inside 0.3 x size, one long smoothstep ramp to
+    // none at size (no visible core edge), in half-frame units (x and y each
+    // -1..1 over the frame: edge midpoints r 1, corners r 1.41). Fitted to
+    // the user's own Lightroom radial edit (spec update 2026-09-25): at size
+    // 1.3 the ramp tracks its brightness profile within 0.03 per r bin. The RAW screen interpolant i.uv, never the folded uv, so a
+    // mirror fold does not move it. HERE, after every rim / halo / lens /
+    // glow / shadow / toe term, so the whole centre greys (a B&W print framed
+    // by the stage's own colour); the post_chroma the hold targets is the
+    // very next step, and the grain after it is a scalar. The lift raises the
+    // greyed film's linear luminance by lift x mask (the same weight as the
+    // grey), times alpha, so the masses (and their split tone) never lift.
+    // 0 = skipped.
+    [branch] if (LA_HEART_K > 0.0) {
+        float2 hq = i.uv * 2.0 - 1.0;
+        float  gh = LA_HEART_K * (1.0 - smoothstep(0.3 * LA_HEART_SIZE, LA_HEART_SIZE, length(hq)));
+        [branch] if (gh > 0.0)
+            col = LampGreyY(col, gh, 0.0, 1.0 + LA_HEART_LIFT * gh * alpha);
     }
     // ---- final trim: post_chroma / post_lift -----------------------------
     // A transparent film costs perceptual chroma (10-20%) and a little

@@ -288,6 +288,14 @@ struct LiquidAcidConfig {
     // that is the price of a continuous rotation, and why the curated sweep
     // above exists as the alternative.                    hue_rotate_period
     float hueRotatePeriod = 0.0f;
+    // Weighted hue drift (brief BV rule 4): the hue_rotate_period clock is
+    // WARPED so the palette lingers at the proven anchors (magenta 325 most,
+    // then blue 215, red 355, violet 275) and glides faster through
+    // lime/mustard/olive. The rotation angle becomes W(u), the inverse
+    // cumulative of the density 1 + 4*w*sum(a_i*gauss(hue - anchor_i, 20 deg))
+    // over the ABSOLUTE palette hue; W(0)=0, W(1)=360, monotone, so the wrap
+    // is seamless. 0 = the old linear clock, exactly.     hue_anchor_weight
+    float hueAnchorWeight = 0.0f;
     // HSV saturation multiplier on the effective oil palette (CPU-side, after
     // the sweep and the rotation), so vividness is one panel knob whichever
     // colour source is in use. 1 = the authored colours, untouched.
@@ -667,6 +675,25 @@ struct LiquidAcidConfig {
     float filmHue2Decay = 0.35f;  // 0..2           film_hue2_decay
     float filmHue3      = 0.0f;   // degrees            film_hue3
     float filmHue3Amt   = 0.0f;   // 0..1           film_hue3_amt
+    // --- COLOUR SCHEMES (brief BV) ----------------------------------------
+    //   film_hue3_share  how much of the frame the THIRD hue takes. It moves
+    //       the hue3 thresholds (0.18 / 0.46 of the mix field) down together
+    //       by (1 - share) * 0.16: 1 = today (~18% of the frame), 0.75 ~13%,
+    //       0.5 ~8.5%, 0 ~3% (Monte Carlo of the mix field's target noise).
+    //       Only read while film_hue3_amt > 0.
+    //   film_equal_load  per-pixel, the BASE film only (never a patch): a film
+    //       brighter than the same colour at magenta (325 deg, same S and V)
+    //       is dimmed toward it in linear light, so a yellow/green/cyan film
+    //       loads the panel like the magenta one (ABL flat). Dims only.
+    //   film_hue2_lift / film_hue3_lift  per-pixel, the PATCH share only (k2 /
+    //       k3): raises V toward 1 and S a little on patch pixels whose hue is
+    //       in the gold/amber/yellow/lime band (~35..95 deg), so a yellow patch
+    //       stays bright instead of going olive. All four: 0 (share 1) = today,
+    //       and the shader skips them behind a [branch].
+    float filmHue3Share = 1.0f;   // 0..1       film_hue3_share
+    float filmEqualLoad = 0.0f;   // 0..1       film_equal_load
+    float filmHue2Lift  = 0.0f;   // 0..1       film_hue2_lift
+    float filmHue3Lift  = 0.0f;   // 0..1       film_hue3_lift
     float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
     //   film_hue2_wobble        the contrast hue is not NAILED to an angle:
     //                           it wanders a few degrees either side of it,
@@ -1947,6 +1974,12 @@ private:
     std::vector<float> m_mixField;      // kMixW*kMixH, 0..1
     float    m_mixPhase = 0.0f;         // noise phase; jumps on a readjust
     float    m_mixPhaseTarget = 0.0f;
+    // brief BV: hue_anchor_weight's cumulative density over the absolute
+    // palette hue (257 entries, 0..360 deg), rebuilt only when the weight
+    // changes; m_anchorCdfW = the weight it was built for (-1 = never).
+    float    m_anchorCdf[257] = {};
+    float    m_anchorCdfW = -1.0f;
+    float    AnchorWarpDeg(float u, float h0Deg, float w);
     bool     m_mixSeeded = false;
     void StepHueField(float dt);
     // Private stream for rise_respawn draws. Seeded from the same seed as the

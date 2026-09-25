@@ -34,8 +34,13 @@
 // dark_sat (brief BP)}: full again; the next key needs laP34.
 // Brief AG-b added laP34 = {dye_lum_vary, dye_hue_vary, dye_thick_hue,
 // rise_speed for the identity fallback's drift}: full; the next key needs laP35.
-// Brief BR added laP35 = {dye_core, -, -, -}; .y / .z are reserved for BB / BH
+// Brief BR added laP35 = {dye_core, -, -, -}; .y / .z were reserved for BB / BH
 // (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
+// Brief BV took laP35.yzw (film_hue3_share, film_equal_load, film_hue2_lift) and
+// laP38.x (film_hue3_lift) on the coordinator's instruction, so BB / BH / BQ
+// need new components (laP38.yzw are free). laP36 / laP37 are BU's (lamp grey
+// + split tone, branch bu); on branch bv they are declared EMPTY so laP38 can
+// exist -- BU's merge fills them, and the declarations conflict trivially.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -183,7 +188,11 @@
     X(DYE_HUE_VARY,        34, y, "dye_hue_vary, degrees, 0..90 (brief AG-b)") \
     X(DYE_THICK_HUE,       34, z, "dye_thick_hue, degrees, -90..90 (brief AG-b)") \
     X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)") \
-    X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)")
+    X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)") \
+    X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
+    X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
+    X(HUE2_LIFT,           35, w, "film_hue2_lift, 0..1, yellow-band V/S lift on the hue2 patch share (brief BV)") \
+    X(HUE3_LIFT,           38, x, "film_hue3_lift, 0..1, yellow-band V/S lift on the hue3 patch share (brief BV)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -198,5 +207,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP35).
-static const int kAcidSlotVecs = 36;
+// Number of laP<n> float4s (laP0 .. laP38).
+static const int kAcidSlotVecs = 39;

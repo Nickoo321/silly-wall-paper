@@ -56,3 +56,38 @@ contact sheet of ALL 16 schemes rendered from the app (1280x720, --shot-delay 40
 the mock → handoff\review\schemes\ for the creative chat; frame mean luminance per scheme (rule 2)
 within ±15% of Return to Form; sign check: a crop of the Magenta/Mint seam showing red-orange-yellow.
 Slots: laP38+ (laP35.w free; BU took laP36/37). Post pass rg1.y spares are AP's: do not take.
+
+## AUDITOR PRE-FLIGHT (2026-09-25, main ae91f60) — binding
+1. Sign OK, no flip: AcidHueShift does hsv.x = frac(hsv.x + deg/360) (shaders.h:687-689), standard
+   wheel; the seam runs film + t·hue2 for t 0→1 (k2 = smoothstep(0.56,0.68,mixV)); 325+180 gives
+   red-orange-yellow, -140 gives violet-blue, as specced. The ±10° wobble moves both ends slightly.
+2. film_hue3 / film_hue3_amt ALREADY EXIST (laP30.w/.z); k3 = 1 - smoothstep(0.18,0.46,mixV) (:1805)
+   takes the LOW end of the same field = the threshold split; keeps hue2 presets bit-identical, never
+   overlaps hue2, free. As shipped hue3's area ≈ hue2's, not ≤15%: add film_hue3_share moving the
+   0.18/0.46 thresholds down (default = today's thresholds). Also fix AJ seam reach: it marches only to
+   the hue2 seam (MIXSEAM 0.62) and k3s is 0 there, so rims next to a hue3 patch rotate away from
+   hue3 → march to both seams (~0.32 and 0.62) or drop the hue3 term (small, this executor).
+3. Equal load and lift are per-pixel in the SHADER (a CPU scalar on film_level cannot correct patches,
+   which are rotated per pixel with V held so Y changes with hue). Equal load dims only:
+   oilC *= lerp(1, min(1, Yt/Y), equal_load·(1-k2-k3)), Yt = the magenta target computed on the CPU.
+   Lift applies to the patch share only: k2·lift2, k3·lift3, weighted toward the 40-70° band, raising V
+   and a little S. Split base vs patches or dimming and lifting fight over a yellow patch. All default 0
+   behind a [branch] → bit-identical. Keys: film_equal_load, film_hue2_lift, film_hue3_lift.
+4. Anchor drift: CPU, acid only. fluid.cpp:4855 deg = 360·u → deg = W(u), W = inverse cumulative of
+   density 1 + k·Σ aᵢ·gauss(h - anchorᵢ) over the ABSOLUTE palette hue; 256-entry table rebuilt only
+   when a key changes, binary-search inversion per frame; W monotone, W(0)=0, W(1)=360 → seamless
+   wrap. At hue_anchor_weight 0 keep the old expression EXACTLY (identity by construction). The fluid
+   look's m_hueAngle / color_cycle_period and hue_sweep_period are separate paths: untouched.
+5. Slots: film_hue3_share, film_equal_load, film_hue2_lift, film_hue3_lift → laP35.yzw + laP38.x (or
+   all laP38); hue_anchor_weight CPU-only. Never laP36/37 (BU). Fluid PSO byte-identical (acid code
+   inside #ifdef LIQUID_ACID); prove with dxbc-cmp.
+6. ABSOLUTE FILM HUES FIGHT THE ROTATION: monotone-post-0924 has hue_rotate_period 3600 and its
+   oil_color_1 is orange (~22°); "film 325" is true at one phase only. DECISION: schemes are OFFSET
+   PATTERNS riding the anchor-drift rotation (recommended; ~9 patterns: the offsets + which anchor
+   they linger at), not fixed film hues. hue_sweep_period must be 0 for schemes.
+7. Rule 7 conflicts with BU: BU's split tone = complement of the main hue (325 → 145 mint, 215 → 35
+   orange). BU gets a shadow_tone_hue override (-1 = complement, else a fixed hue such as 275/235/185).
+   Sent to the BU executor.
+8. Start NOW from main; only "Lightroom" and the 4-colour tier need the split tone → render those
+   after BU merges.
+Opinion (relayed verbatim to the user): 7:2:1 is right; build the 16 as ~9 offset patterns + anchors.

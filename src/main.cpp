@@ -629,8 +629,6 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.filmHue3Amt        = getF(S, L"film_hue3_amt",    a.filmHue3Amt);
         a.filmHue3Share      = getF(S, L"film_hue3_share",  a.filmHue3Share);
         a.filmEqualLoad      = getF(S, L"film_equal_load",  a.filmEqualLoad);
-        a.filmHue2Lift       = getF(S, L"film_hue2_lift",   a.filmHue2Lift);
-        a.filmHue3Lift       = getF(S, L"film_hue3_lift",   a.filmHue3Lift);
         a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.filmHue2Wobble     = getF(S, L"film_hue2_wobble",        a.filmHue2Wobble);
         a.filmHue2SeedRows   = getF(S, L"film_hue2_seed_rows",     a.filmHue2SeedRows);
@@ -1925,8 +1923,6 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_hue3_amt", a.filmHue3Amt, 3);
         putF(S, L"film_hue3_share", a.filmHue3Share, 3);
         putF(S, L"film_equal_load", a.filmEqualLoad, 3);
-        putF(S, L"film_hue2_lift", a.filmHue2Lift, 3);
-        putF(S, L"film_hue3_lift", a.filmHue3Lift, 3);
         putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"film_hue2_wobble", a.filmHue2Wobble, 2);
         putF(S, L"film_hue2_seed_rows", a.filmHue2SeedRows, 0);

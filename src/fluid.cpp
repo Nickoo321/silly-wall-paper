@@ -2690,7 +2690,7 @@ struct AcidParamsGPU {
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
-    // brief BV: p38.x film_hue3_lift (.yzw free).
+    // laP38: free (declared so BU-b's laP39 can follow).
     float p36[4], p37[4], p38[4];
     float mix[60][4];
 };
@@ -5577,13 +5577,10 @@ void FluidRenderer::UploadAcidConstants() {
     slot(LA_HUE2_DEG,     hue2Eff);
     slot(LA_HUE3_AMT,     fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f));
     slot(LA_HUE3_DEG,     a.filmHue3);
-    // brief BV: hue3 share (1 = today's thresholds), equal load (base film),
-    // yellow-band lifts (patch shares). 0 / 1 = today; the shader branches
-    // them out.
+    // brief BV: hue3 share (1 = today's thresholds), equal load (base film).
+    // 1 / 0 = today; the shader branches them out.
     slot(LA_HUE3_SHARE,   fminf(fmaxf(a.filmHue3Share, 0.0f), 1.0f));
     slot(LA_EQUAL_LOAD,   fminf(fmaxf(a.filmEqualLoad, 0.0f), 1.0f));
-    slot(LA_HUE2_LIFT,    fminf(fmaxf(a.filmHue2Lift, 0.0f), 1.0f));
-    slot(LA_HUE3_LIFT,    fminf(fmaxf(a.filmHue3Lift, 0.0f), 1.0f));
     // REFLECT_R / REFLECT_AMT: brief AJ, the boundary-reflection reach
     // (screen heights) and how much of the seam's hue a rim takes. 0 reach =
     // today, and the shader skips the whole probe.

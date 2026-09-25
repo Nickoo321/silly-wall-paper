@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.path.join(ROOT, 'reference', 'configs', 'monotone-post-0924.ini')
 PRESETS = os.path.join(ROOT, 'reference', 'presets')
 
-EQ, LIFT, SHARE3 = 0.75, 1.0, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY vs RtF on a yellow film; 0.75 interpolates to ~RtF
+EQ, SHARE3 = 0.75, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY vs RtF on a yellow film; 0.75 interpolates to ~RtF
 
 # (file name, hue2, hue3, shadow hue or None, grade-only, [(named scheme, tier, anchor, note)])
 PATTERNS = [
@@ -27,7 +27,7 @@ PATTERNS = [
  ('Blue Coral', 160, None, None, False,
   [('Blue / Coral', 'HOME 5', 215, 'seam violet-magenta (proven-4)')]),
  ('Violet Amber', 125, None, None, False,
-  [('Violet / Amber', 'HOME 7', 275, 'seam magenta-red; amber secondary kept bright (film_hue2_lift)')]),
+  [('Violet / Amber', 'HOME 7', 275, 'seam magenta-red; amber secondary stays bright (patches are not equal-loaded)')]),
  ('Teal Orange', -160, None, None, False,
   [('Teal / Orange', 'HOME 8', 190, 'seam green-yellow; the teal FILM is equal-loaded')]),
  ('Neon Demon', -140, 30, None, False,
@@ -37,9 +37,9 @@ PATTERNS = [
  ('Warm Arc', -40, 30, None, False,
   [('Warm Arc', 'T2 3-COLOUR', 10, 'listed +30/-40; SWAPPED so the amber member is the smaller third (user rule)')]),
  ('Bright Triad', -120, 120, None, False,
-  [('Bright Triad', 'T3a 3-COLOUR', 325, 'azure + lime; the lime third stays BRIGHT (film_hue3_lift)')]),
+  [('Bright Triad', 'T3a 3-COLOUR', 325, 'azure + lime; the lime third stays BRIGHT (patches are not equal-loaded)')]),
  ('Bright Split', 150, -150, None, False,
-  [('Bright Split', 'T4b 3-COLOUR', 215, 'red + yellow; the yellow third stays BRIGHT (film_hue3_lift)')]),
+  [('Bright Split', 'T4b 3-COLOUR', 215, 'red + yellow; the yellow third stays BRIGHT (patches are not equal-loaded)')]),
  ('Lightroom Triad', None, None, 180, True,
   [('Lightroom Triad', 'T3b 3-COLOUR', 325, 'magenta film + teal shadows + gold highlights: a split-tone GRADE, not three patch colours')]),
  ('Synthwave', -145, 55, 275, False,
@@ -71,9 +71,9 @@ def preset_text(fname, h2, h3, sh, grade, names):
         L.append('; The 4th colour is the BU split tone on the dark tones at a FIXED hue')
         L.append('; (shadow_tone_hue), always on (shadow_tone_period 0), rule 7: cool/violet only.')
     L.append('; Rules (brief BV): oil + droplets black (dye_lum 0, dye_droplet_lum -1); FILMS')
-    L.append('; equal-loaded (film_equal_load); yellow/gold/lime PATCHES kept bright (lifts, which')
-    L.append('; act only on patch pixels in the 35..95 deg band, whichever member is there as the')
-    L.append('; pattern rotates); third colour <= ~15%% of the frame (film_hue3_share %.2f ~ 13%%).' % SHARE3)
+    L.append('; equal-loaded (film_equal_load, dims only); PATCHES are never dimmed, so a')
+    L.append('; yellow/gold/lime member stays bright; third colour <= ~15%% of the frame')
+    L.append('; (film_hue3_share %.2f ~ 13%%).' % SHARE3)
     L.append('[liquid_acid]')
     kv = [('hue_sweep_period', '0'), ('hue_anchor_weight', '1'),
           ('dye_lum', '0'), ('dye_droplet_lum', '-1'),
@@ -81,13 +81,12 @@ def preset_text(fname, h2, h3, sh, grade, names):
     if h2 is None:
         kv += [('film_hue2_amt', '0'), ('film_hue3_amt', '0')]
     else:
-        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'), ('film_hue2_scale', '0.40'),
-               ('film_hue2_lift', '%g' % LIFT)]
+        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'), ('film_hue2_scale', '0.40')]
         if h3 is None:
             kv += [('film_hue3_amt', '0')]
         else:
             kv += [('film_hue3', '%d' % h3), ('film_hue3_amt', '1'),
-                   ('film_hue3_share', '%g' % SHARE3), ('film_hue3_lift', '%g' % LIFT)]
+                   ('film_hue3_share', '%g' % SHARE3)]
     if sh is None:
         kv += [('shadow_tone', '0')]
     else:

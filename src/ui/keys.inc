@@ -363,10 +363,6 @@ KEY_SLIDER("  third hue share", 0, 1, 0.05f, 2, &c.acid.filmHue3Share, nullptr, 
            G_COLOUR, "A", "liquid_acid.film_hue3_amt>0", 0, "", "")
 KEY_SLIDER("Film equal load", 0, 1, 0.05f, 2, &c.acid.filmEqualLoad, nullptr, "liquid_acid", "film_equal_load", false, "Dims a yellow/green/cyan FILM to the brightness the same colour has at magenta, so every hue loads the panel alike (no blinding yellow). Patches are not touched. 0 = off (brief BV)",
            G_COLOUR, "A", "", 0, "zero:off", "")
-KEY_SLIDER("  second hue yellow lift", 0, 1, 0.05f, 2, &c.acid.filmHue2Lift, nullptr, "liquid_acid", "film_hue2_lift", false, "Keeps a gold/amber/yellow/lime SECOND-hue patch bright (value up, a little saturation) so it never goes olive. Only patch pixels in the yellow band. 0 = off (brief BV)",
-           G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "zero:off", "")
-KEY_SLIDER("  third hue yellow lift", 0, 1, 0.05f, 2, &c.acid.filmHue3Lift, nullptr, "liquid_acid", "film_hue3_lift", false, "The same lift for the THIRD hue's patches. 0 = off (brief BV)",
-           G_COLOUR, "A", "liquid_acid.film_hue3_amt>0", 0, "zero:off", "")
 KEY_SLIDER("  seam reflect reach", 0, 0.60f, 0.01f, 2, &c.acid.boundaryReflectR, nullptr, "liquid_acid", "boundary_reflect_r", false, "How far a hue2 SEAM reaches into the droplets around it, as a fraction of the screen HEIGHT. 0 = as before: a droplet carries the seam's colour only while it is standing in the seam, about one droplet across. Raised, the lit rims, lens highlights and glow of droplets this far away rotate toward the seam's own hue, fading smoothly so the nearest stay strongest. The film itself never changes and nothing is blurred",
            G_FILM, "A", "liquid_acid.boundary_reflect_amt>0", 0, "", "")
 KEY_SLIDER("  seam reflect amount", 0, 1, 0.05f, 2, &c.acid.boundaryReflectAmt, nullptr, "liquid_acid", "boundary_reflect_amt", false, "How much of the seam's own hue a rim right beside it takes. 1 = the full seam colour. Only does anything where the reach above is above 0",

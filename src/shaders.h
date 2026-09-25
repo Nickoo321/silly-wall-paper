@@ -607,10 +607,10 @@ cbuffer AcidCB : register(b1) {
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
-    float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w HUE2_LIFT
+    float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w -
     float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
     float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
-    float4 laP38;     // x HUE3_LIFT  y -  z -  w -
+    float4 laP38;     // x -  y -  z -  w -
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -1924,29 +1924,21 @@ R"hlsl(
         lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(LA_RISE_BOTTOM_LIGHT));
         oilC *= lampG;
     }
-    // ---- COLOUR SCHEMES: equal load + yellow lift (brief BV) -------------
-    // Per pixel, split by share so the two never fight over one pixel:
-    //   film_equal_load  the BASE film (1 - k2 - k3) only: dimmed in linear
-    //       light to the luminance the same S/V would have at magenta (325),
-    //       never brightened, so a yellow/green/cyan film loads the panel
-    //       like the magenta one.
-    //   film_hue2_lift / film_hue3_lift  the PATCH shares (k2 / k3) only, and
-    //       only in the gold..lime band (~35..95 deg): V up toward 1 (never
-    //       down) and a little S, so a yellow patch never goes olive.
-    // All three 0 = today: the branch is skipped.
-    [branch] if (LA_EQUAL_LOAD > 0.0005 || LA_HUE2_LIFT > 0.0005 || LA_HUE3_LIFT > 0.0005) {
+    // ---- COLOUR SCHEMES: equal load (brief BV) -----------------------------
+    // film_equal_load, per pixel, the BASE film (1 - k2 - k3) only -- patches
+    // are never touched, so a yellow patch stays bright: dimmed in linear
+    // light to the luminance the same S/V would have at magenta (325), never
+    // brightened, so a yellow/green/cyan film loads the panel like magenta.
+    // 0 = today: the branch is skipped. (The yellow-patch lifts were dropped:
+    // patches sit at V 0.92..1 with nothing to lift, MAD 0.49 / 0.01.)
+    [branch] if (LA_EQUAL_LOAD > 0.0005) {
         const float3 WY = float3(0.2126, 0.7152, 0.0722);
         float3 hsv = AcidRgb2Hsv(oilC);
-        float  hd  = hsv.x * 360.0;
-        float  band = smoothstep(15.0, 35.0, hd) * (1.0 - smoothstep(95.0, 125.0, hd));
-        float  lf  = saturate(bvK2 * LA_HUE2_LIFT + bvK3 * LA_HUE3_LIFT) * band;
         float  wb  = saturate(LA_EQUAL_LOAD) * saturate(1.0 - bvK2 - bvK3);
         float  Y   = dot(DsToLin(oilC), WY);
         float  Yt  = dot(DsToLin(AcidHsv2Rgb(float3(0.9027778, hsv.y, hsv.z))), WY);
         float  gl  = lerp(1.0, min(1.0, Yt / max(Y, 1e-6)), wb);
-        hsv.z = max(hsv.z, lerp(hsv.z, 1.0, lf));
-        hsv.y = lerp(hsv.y, 1.0, 0.25 * lf);
-        oilC = DsToSrgb(DsToLin(AcidHsv2Rgb(hsv)) * gl);
+        oilC = DsToSrgb(DsToLin(oilC) * gl);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)

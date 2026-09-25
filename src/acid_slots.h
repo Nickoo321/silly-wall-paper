@@ -38,9 +38,8 @@
 // (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
 // Brief BU added laP36 = {grey_k, lamp_grey_size, lamp_grey_cool, grey_cx} and
 // laP37 = {split-tone add rgb, grey_cy}: full; the next key needs laP38.
-// Brief BV took laP35.yzw (film_hue3_share, film_equal_load, film_hue2_lift) and
-// laP38.x (film_hue3_lift), so BB / BH / BQ need new components (laP38.yzw free;
-// BU-b plans laP39).
+// Brief BV took laP35.yz (film_hue3_share, film_equal_load); laP35.w and laP38
+// are free (laP38 is declared empty so BU-b's planned laP39 can follow).
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -198,9 +197,7 @@
     X(TONE_B,              37, z, "split tone add b (computed, brief BU)") \
     X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)") \
     X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
-    X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
-    X(HUE2_LIFT,           35, w, "film_hue2_lift, 0..1, yellow-band V/S lift on the hue2 patch share (brief BV)") \
-    X(HUE3_LIFT,           38, x, "film_hue3_lift, 0..1, yellow-band V/S lift on the hue3 patch share (brief BV)")
+    X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0

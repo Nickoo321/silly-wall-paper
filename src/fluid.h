@@ -685,15 +685,9 @@ struct LiquidAcidConfig {
     //       brighter than the same colour at magenta (325 deg, same S and V)
     //       is dimmed toward it in linear light, so a yellow/green/cyan film
     //       loads the panel like the magenta one (ABL flat). Dims only.
-    //   film_hue2_lift / film_hue3_lift  per-pixel, the PATCH share only (k2 /
-    //       k3): raises V toward 1 and S a little on patch pixels whose hue is
-    //       in the gold/amber/yellow/lime band (~35..95 deg), so a yellow patch
-    //       stays bright instead of going olive. All four: 0 (share 1) = today,
-    //       and the shader skips them behind a [branch].
+    //       Both: 0 (share 1) = today, and the shader skips them.
     float filmHue3Share = 1.0f;   // 0..1       film_hue3_share
     float filmEqualLoad = 0.0f;   // 0..1       film_equal_load
-    float filmHue2Lift  = 0.0f;   // 0..1       film_hue2_lift
-    float filmHue3Lift  = 0.0f;   // 0..1       film_hue3_lift
     float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
     //   film_hue2_wobble        the contrast hue is not NAILED to an angle:
     //                           it wanders a few degrees either side of it,

@@ -11,7 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = os.path.join(ROOT, 'reference', 'configs', 'monotone-post-0924.ini')
 PRESETS = os.path.join(ROOT, 'reference', 'presets')
 
-EQ, LIFT, SHARE3 = 1.0, 1.0, 0.75   # rules 2/3/5, values from the A/B sheets
+EQ, LIFT, SHARE3 = 0.75, 1.0, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY vs RtF on a yellow film; 0.75 interpolates to ~RtF
 
 # (file name, hue2, hue3, shadow hue or None, grade-only, [(named scheme, tier, anchor, note)])
 PATTERNS = [

@@ -819,6 +819,36 @@ struct LiquidAcidConfig {
     // 0.75, so with smoke up this key does less; dye_lamp_follow < 1 pushes
     // Tw toward 0, i.e. toward this floor (at dye_core 1 it thins nothing).
     float dyeCore       = 0.42f;    // 0.42..1, 0.42 = today      dye_core
+    // --- brief BU: lamp grey + split tone (display pass, acid PSO only) ----
+    // LAMP GREY: the dye far from the lamp "gets less light". A soft disc of
+    // lamp_grey_size screen heights on the corner diagonally opposite the rig
+    // lamp (CPU pick with hysteresis, slides corner to corner along the frame
+    // edge over 90 s) is desaturated about its own LINEAR luminance by up to
+    // 0.6 x lamp_grey at the corner, plus a Y-normalised cool shift of
+    // lamp_grey_cool of that. Y is kept, so ABL / mean_lum do not move; never
+    // the centre (the frame centre is > 1 screen height from any corner).
+    // 0 = today (the shader skips the branch).
+    float lampGrey      = 0.0f;     // 0..1, 0 = today            lamp_grey
+    float lampGreySize  = 0.40f;    // 0.25..0.6 screen heights   lamp_grey_size
+    float lampGreyCool  = 0.20f;    // 0..1                       lamp_grey_cool
+    // SPLIT TONE: the black masses take the complement of the main (film)
+    // hue, following hue_rotate / the sweep, lifted by at most
+    // shadow_tone_lift (sRGB-encoded, of SDR white) -- the one BU piece that
+    // gives up true black, by the user's call. Gated on/off with a 50% duty
+    // on its own clock (shadow_tone_period, default 2225 s = 3600 / golden
+    // ratio, so it never locks to the hue cycle), smoothstep edges of
+    // shadow_tone_fade s; fully on for the first ~14.5 min after launch.
+    // Mask = (1 - film alpha) x (1 - smoothstep(0.02, 0.15, luma)): film and
+    // lit dye untouched, rims painted over it afterwards. 0 = today.
+    float shadowTone       = 0.0f;     // 0..1, 0 = today          shadow_tone
+    float shadowToneLift   = 0.06f;    // 0..0.15                  shadow_tone_lift
+    float shadowToneSat    = 0.80f;    // 0..1                     shadow_tone_sat
+    float shadowTonePeriod = 2225.0f;  // s, 0 = always on         shadow_tone_period
+    float shadowToneFade   = 120.0f;   // s per on/off edge        shadow_tone_fade
+    // shadow_tone_hue: < 0 = the complement of the main hue (above, turns
+    // with it); 0..360 = a FIXED absolute HSV hue in degrees (275 violet,
+    // 235 blue, 185 teal) that does not rotate. CPU only, no shader slot.
+    float shadowToneHue    = -1.0f;    // deg, -1 = complement     shadow_tone_hue
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
@@ -1504,6 +1534,14 @@ public:
     // prints them, which makes a short series at different t a real test.
     // { lampX, lampY, lensX, lensY, tiltDeg, focus, shiftX, shiftY }
     void RigState(float out[8]) const;
+    // brief BU: the lamp-grey region centre (p-units), its target corner
+    // (0 TL, 1 TR, 2 BR, 3 BL), whether it is sliding, and the split tone's
+    // current pre-multiplied add. --shot prints them beside the rig.
+    void BuState(float out[7]) const {
+        out[0] = m_greyCx; out[1] = m_greyCy; out[2] = (float)m_greyCorner;
+        out[3] = (m_greySlideT >= 0.0f) ? 1.0f : 0.0f;
+        out[4] = m_toneAdd[0]; out[5] = m_toneAdd[1]; out[6] = m_toneAdd[2];
+    }
     // width*height*4 floats, row-major RGBA, linear scRGB (1.0 = 80 nits).
     bool CaptureOffscreen(std::vector<float>& outRgba);
 
@@ -1794,6 +1832,17 @@ private:
     float m_lidTargX = 0.0f, m_lidTargY = 0.0f, m_lidTargR = 0.0f;
     bool  m_camInit = false;
     uint32_t m_camRng = 0x9E3779B9u;
+    // brief BU: lamp-grey corner state (UploadAcidConstants). m_greyS is the
+    // region centre's position along the frame perimeter in p-units (0 = TL,
+    // clockwise); a corner change slides it the shorter way round.
+    static constexpr float kGreySlideS = 90.0f;
+    int   m_greySX = 0, m_greySY = 0;   // hysteretic lamp side, +-1 (0 = unset)
+    int   m_greyCorner = -1;
+    float m_greyS = 0.0f, m_greySFrom = 0.0f, m_greySDelta = 0.0f;
+    float m_greySlideT = -1.0f;         // >= 0 while sliding
+    float m_greyLastT = -1.0f;
+    float m_greyCx = 0.0f, m_greyCy = 0.0f;
+    float m_toneAdd[3] = { 0.0f, 0.0f, 0.0f };
     // A readjustment moves the WHOLE rig, not just the focus: these are the
     // lamp's and the lens centre's endpoints for the current eased move, so
     // they travel on the same spring and arrive together.

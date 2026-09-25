@@ -608,6 +608,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
     float4 laP35;     // x DYE_CORE  y -  z -  w -
+    float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
+    float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -2311,6 +2313,68 @@ R"hlsl(
         [branch] if (LA_DARK_SAT > 0.0005) oilC = DarkSat(oilC, LA_FILM_LEVEL);
     }
     float3 col = lerp(inkC, oilC, alpha);
+)hlsl"
+// (split: MSVC caps a single string literal at 16380 bytes)
+R"hlsl(
+    // ---- brief BU: SPLIT TONE + LAMP GREY ---------------------------------
+    // Both act on the composite right here, after the film and the dye are
+    // laid down and BEFORE every rim/halo/lens/glow term below, so droplet
+    // and mass edges keep their colour and paint over both. Both branches are
+    // skipped at their defaults (zero add / GREY_K 0): byte-identical.
+    //
+    // SPLIT TONE (shadow_tone): the dark tones of the MASSES take the
+    // complement of the main film hue. The CPU folds hue, saturation, lift,
+    // the on/off gate and the amount into one add; the mask keeps it off the
+    // film (alpha) and off anything already lit (luma above ~0.15, e.g. dyed
+    // bodies). It lifts true black by at most shadow_tone_lift: the user's
+    // call over the auditor's objection.
+    [branch] if (LA_TONE_R + LA_TONE_G + LA_TONE_B > 0.0) {
+        float tY = dot(col, float3(0.2126, 0.7152, 0.0722));
+        float tM = (1.0 - alpha) * (1.0 - smoothstep(0.02, 0.15, tY));
+        col += float3(LA_TONE_R, LA_TONE_G, LA_TONE_B) * tM;
+    }
+    // LAMP GREY (lamp_grey): "as if the dye far from the lamp gets less
+    // light". A soft disc on the far corner (the CPU picks it and slides it
+    // along the frame edge): full inside 0.35 x size, gone at size (screen
+    // heights), and the corner is > 1 screen height from the frame centre,
+    // so the centre never changes. Desaturation about the pixel's LINEAR
+    // luminance (the composite is sRGB-encoded, and a mix about encoded luma
+    // would darken saturated film by 20-40%), then a cool white balance
+    // renormalised to the same Y: luminance is kept, so ABL and mean_lum do
+    // not move and black stays black (held through post_chroma too).
+    // Applied after the tone, so a tinted body in the grey corner greys
+    // with the rest.
+    [branch] if (LA_GREY_K > 0.0) {
+        float gS = max(LA_GREY_SIZE, 0.05);
+        float gw = 1.0 - smoothstep(0.35 * gS, gS, length(pp - float2(LA_GREY_CX, LA_GREY_CY)));
+        float gk = gw * LA_GREY_K;
+        [branch] if (gk > 0.0) {
+            const float3 GW = float3(0.2126, 0.7152, 0.0722);
+            float3 gl = DsToLin(col);
+            float  gY = dot(gl, GW);
+            gl = gY + (gl - gY) * (1.0 - gk);
+            float3 gc = gl * float3(0.80, 0.94, 1.30);
+            gc *= gY / max(dot(gc, GW), 1e-7);
+            gl = lerp(gl, gc, gk * saturate(LA_GREY_COOL));
+            float3 go = DsToSrgb(gl);
+            // post_chroma (below) scales chroma about the ENCODED luma and
+            // clamps at 0, which gives a saturated pixel extra luminance that
+            // a greyed one no longer gets (measured -1..-2% mean_lum on a
+            // bright film). Hold the luminance the pixel will have AFTER that
+            // trim, exactly as DarkSat does: two fixed-point gain steps.
+            [branch] if (abs(LA_POST_CHROMA - 1.0) > 0.001) {
+                float  pc = LA_POST_CHROMA;
+                float  y0 = dot(col, GW);
+                float  t0 = dot(DsToLin(max(y0 + (col - y0) * pc, 0.0)), GW);
+                [unroll] for (int it = 0; it < 2; it++) {
+                    float y1 = dot(go, GW);
+                    float t1 = dot(DsToLin(max(y1 + (go - y1) * pc, 0.0)), GW);
+                    go = DsToSrgb(DsToLin(go) * (t0 / max(t1, 1e-8)));
+                }
+            }
+            col = go;
+        }
+    }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(

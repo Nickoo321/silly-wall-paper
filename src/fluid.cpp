@@ -2680,9 +2680,11 @@ struct AcidParamsGPU {
     float p34[4];
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
+    // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
+    float p36[4], p37[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1680, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1712, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -2735,6 +2737,47 @@ static_assert(sizeof(InkParamsGPU) == 160, "InkCB layout");
 // orange into olive on the way to yellow.) The oil colours and the ink stops
 // are rotated here rather than in the pixel shader because the shader picks a
 // flat fill per pixel out of the blob buffer.
+// brief BU: the split tone's on/off gate, 0..1, on its own clock. 50% duty:
+// fully on for the first half-period minus the fades, a smoothstep fade of
+// `fade` seconds at each edge, off for the other half. Shifted by one fade so
+// it starts fully ON at t = 0 (a freshly launched wallpaper shows the tint
+// for its first ~14.5 min at the default 2225 s; the edges are then at
+// t = 872..992 s, off, and 2105..2225 s back on). period <= 0 = always on.
+// tools-side replica: the BU proof's gear log (report) uses this formula.
+static float ShadowToneGate(double t, float period, float fade) {
+    if (period <= 0.5f) return 1.0f;
+    const double P = period;
+    const double half = 0.5 * P;
+    const double f = fmin(fmax((double)fade, 0.0), 0.5 * half);
+    double v = fmod(t + f, P);
+    if (v < 0.0) v += P;
+    auto ss = [](double e0, double e1, double x) {
+        if (e1 - e0 < 1e-6) return x >= e1 ? 1.0 : 0.0;
+        double u = (x - e0) / (e1 - e0);
+        u = u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u);
+        return u * u * (3.0 - 2.0 * u);
+    };
+    return (float)(ss(0.0, f, v) * (1.0 - ss(half - f, half, v)));
+}
+
+// brief BU: OKLab hue (radians) of an sRGB-ENCODED colour, for the split
+// tone's complement. The HSV complement (h + 0.5) misses the perceptual
+// opposite by up to ~23 deg (worst on the blues and the pinks this look runs),
+// so the tint's hue is solved in OKLab instead.
+static float BuOkHueEnc(float r, float g, float b) {
+    auto lin = [](float c) {
+        c = fmaxf(c, 0.0f);
+        return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+    };
+    const float lr = lin(r), lg = lin(g), lb = lin(b);
+    const float l = cbrtf(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
+    const float m = cbrtf(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
+    const float s = cbrtf(0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb);
+    const float A = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s;
+    const float B = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s;
+    return atan2f(B, A);
+}
+
 static void RgbToHsv(const float c[3], float& h, float& sv, float& v) {
     const float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
     const float mn = fminf(c[0], fminf(c[1], c[2]));
@@ -5222,7 +5265,7 @@ void FluidRenderer::UploadAcidConstants() {
         p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
         p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
         p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
-        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35 };
+        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35, p.p36, p.p37 };
     auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
 
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
@@ -5502,6 +5545,138 @@ void FluidRenderer::UploadAcidConstants() {
     // a clamp leaves the default's float32 bits untouched, so every preset
     // that does not set the key renders byte-identical. 1 = even fill.
     slot(LA_DYE_CORE,      fminf(fmaxf(a.dyeCore, 0.0f), 1.0f));
+    // ---- brief BU: LAMP GREY -------------------------------------------
+    // The user: "graying out from the lamp ... as if the dye is getting less
+    // light ... rule of thirds, one corner at a time". The shader greys a
+    // soft disc around (GREY_CX, GREY_CY); this picks WHERE: the corner
+    // diagonally opposite the lamp, by the sign of lamp - 0.5 on each axis
+    // with +-0.04 hysteresis (a lamp drifting across the middle must not
+    // flicker the region). A continuous far-from-lamp weight would light two
+    // corners at once, hence the CPU pick. When the far corner changes, the
+    // centre SLIDES to it along the frame edge (never through the middle)
+    // over kGreySlideS, eased, so there is always exactly one region. The
+    // state runs whatever lamp_grey is, so turning the key on shows the
+    // right corner at once; GREY_K 0 skips the shader branch (identity).
+    {
+        const float A = aspect;
+        const float P = 2.0f * A + 2.0f;                // perimeter, p-units
+        const float cornerS[4] = { 0.0f, A, A + 1.0f, 2.0f * A + 1.0f };   // TL TR BR BL
+        const float dtG = (m_greyLastT < 0.0f) ? 0.0f
+                        : fminf(fmaxf(m_time - m_greyLastT, 0.0f), 1.0f);
+        m_greyLastT = m_time;
+        const float lx = m_rig.lampX - 0.5f, ly = m_rig.lampY - 0.5f;
+        const float Hy = 0.04f;
+        if (m_greySX == 0) {
+            m_greySX = (lx >= 0.0f) ? 1 : -1;
+            m_greySY = (ly >= 0.0f) ? 1 : -1;
+        } else {
+            if (lx >  Hy) m_greySX =  1; else if (lx < -Hy) m_greySX = -1;
+            if (ly >  Hy) m_greySY =  1; else if (ly < -Hy) m_greySY = -1;
+        }
+        // lamp right (+1) -> the LEFT edge is far; lamp below (+1) -> the TOP.
+        const bool right = (m_greySX < 0), bottom = (m_greySY < 0);
+        const int  want  = bottom ? (right ? 2 : 3) : (right ? 1 : 0);
+        if (m_greyCorner < 0) {
+            m_greyCorner = want;
+            m_greyS = cornerS[want];
+            m_greySlideT = -1.0f;
+        } else if (want != m_greyCorner) {
+            // the shorter way round the frame from wherever the centre is now
+            // (a readjust mid-slide simply re-aims it)
+            float d = fmodf(cornerS[want] - m_greyS, P);
+            if (d >  0.5f * P + 1e-4f) d -= P;
+            if (d < -0.5f * P - 1e-4f) d += P;
+            m_greyCorner = want;
+            m_greySFrom  = m_greyS;
+            m_greySDelta = d;
+            m_greySlideT = 0.0f;
+        }
+        if (m_greySlideT >= 0.0f) {
+            m_greySlideT += dtG;
+            const float u = fminf(m_greySlideT / kGreySlideS, 1.0f);
+            m_greyS = m_greySFrom + m_greySDelta * (u * u * (3.0f - 2.0f * u));
+            if (u >= 1.0f) { m_greyS = cornerS[m_greyCorner]; m_greySlideT = -1.0f; }
+        } else {
+            m_greyS = cornerS[m_greyCorner];   // at rest: absorbs a resize
+        }
+        float s = fmodf(m_greyS, P);
+        if (s < 0.0f) s += P;
+        float gx, gy;
+        if (s < A)                 { gx = s;                    gy = 0.0f; }
+        else if (s < A + 1.0f)     { gx = A;                    gy = s - A; }
+        else if (s < 2.0f * A + 1.0f) { gx = A - (s - (A + 1.0f)); gy = 1.0f; }
+        else                       { gx = 0.0f;                 gy = 1.0f - (s - (2.0f * A + 1.0f)); }
+        m_greyCx = gx; m_greyCy = gy;
+        slot(LA_GREY_K,    0.6f * fminf(fmaxf(a.lampGrey, 0.0f), 1.0f));
+        slot(LA_GREY_SIZE, fminf(fmaxf(a.lampGreySize, 0.05f), 1.0f));
+        slot(LA_GREY_COOL, fminf(fmaxf(a.lampGreyCool, 0.0f), 1.0f));
+        slot(LA_GREY_CX,   gx);
+        slot(LA_GREY_CY,   gy);
+    }
+    // ---- brief BU: SPLIT TONE --------------------------------------------
+    // The user: "make it the opposite of the main hue, and obviously rotate
+    // with the main hue. Make it turn on/off, out of sync with the hue, the
+    // same way gears are like 3 and 5 so they always switch teeth." The main
+    // hue is effOil[0] AFTER the sweep and hue_rotate_period (above), so the
+    // tint turns with the film; its complement is taken in OKLab (see below).
+    // Folded here into one
+    // pre-multiplied add (level lift x gate x amount) so the shader does one
+    // test and one multiply-add. The gate (ShadowToneGate) is a 50% duty
+    // on/off on its OWN clock; 2225 s against the 3600 s hue period is the
+    // golden ratio, which never repeats a (hue, on/off) pairing. Gate 0 (the
+    // off half) uploads 0 and the shader branch is skipped, exactly as at
+    // shadow_tone 0. Dark tones of the MASSES only (the shader's mask); this
+    // is the one BU piece that lifts true black, by at most the lift key.
+    {
+        float tr = 0.0f, tg = 0.0f, tb = 0.0f;
+        const float amt  = fminf(fmaxf(a.shadowTone, 0.0f), 1.0f);
+        const float lift = fminf(fmaxf(a.shadowToneLift, 0.0f), 0.25f);
+        if (amt > 1e-4f && lift > 1e-6f) {
+            const float g = ShadowToneGate((double)m_time, a.shadowTonePeriod, a.shadowToneFade);
+            if (g > 1e-5f) {
+                // The tint is an HSV colour (value 1, shadow_tone_sat) whose
+                // HSV hue is SOLVED so that what lands on the black -- the
+                // encoded add at this frame's amplitude k -- sits at the film's
+                // OKLab hue + 180 deg: 96 coarse steps, then a 1/4608 refine.
+                // ~220 cbrt per frame on the CPU, nothing on the GPU.
+                const float k   = lift * g * amt;
+                const float sat = fminf(fmaxf(a.shadowToneSat, 0.0f), 1.0f);
+                const float tgt = BuOkHueEnc(effOil[0], effOil[1], effOil[2]) + 3.14159265f;
+                auto err = [&](float hh) {
+                    const RGB c = HSVtoRGB(hh - floorf(hh), sat, 1.0f);
+                    float d = BuOkHueEnc(c.r * k, c.g * k, c.b * k) - tgt;
+                    d = fmodf(d, 6.2831853f);
+                    if (d >  3.14159265f) d -= 6.2831853f;
+                    if (d < -3.14159265f) d += 6.2831853f;
+                    return fabsf(d);
+                };
+                float fh, fs, fv;
+                RgbToHsv(&effOil[0], fh, fs, fv);
+                float best = fh + 0.5f, be = 1e9f;
+                if (a.shadowToneHue >= 0.0f) {
+                    // shadow_tone_hue: a FIXED absolute hue (brief BV), no
+                    // rotation with the film, no solve.
+                    best = fmodf(a.shadowToneHue, 360.0f) / 360.0f;
+                } else if (sat > 1e-3f) {
+                    for (int i = 0; i < 96; i++) {
+                        const float hh = i / 96.0f, e = err(hh);
+                        if (e < be) { be = e; best = hh; }
+                    }
+                    const float c0 = best;
+                    for (int i = -24; i <= 24; i++) {
+                        const float hh = c0 + i / 4608.0f, e = err(hh);
+                        if (e < be) { be = e; best = hh; }
+                    }
+                }
+                const RGB c = HSVtoRGB(best - floorf(best), sat, 1.0f);
+                tr = c.r * k; tg = c.g * k; tb = c.b * k;
+            }
+        }
+        m_toneAdd[0] = tr; m_toneAdd[1] = tg; m_toneAdd[2] = tb;
+        slot(LA_TONE_R, tr);
+        slot(LA_TONE_G, tg);
+        slot(LA_TONE_B, tb);
+    }
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the

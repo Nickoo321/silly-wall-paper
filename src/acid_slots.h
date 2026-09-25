@@ -36,6 +36,8 @@
 // rise_speed for the identity fallback's drift}: full; the next key needs laP35.
 // Brief BR added laP35 = {dye_core, -, -, -}; .y / .z are reserved for BB / BH
 // (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
+// Brief BU added laP36 = {grey_k, lamp_grey_size, lamp_grey_cool, grey_cx} and
+// laP37 = {split-tone add rgb, grey_cy}: full; the next key needs laP38.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -183,7 +185,15 @@
     X(DYE_HUE_VARY,        34, y, "dye_hue_vary, degrees, 0..90 (brief AG-b)") \
     X(DYE_THICK_HUE,       34, z, "dye_thick_hue, degrees, -90..90 (brief AG-b)") \
     X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)") \
-    X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)")
+    X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)") \
+    X(GREY_K,              36, x, "0.6 * lamp_grey, 0 = off (brief BU)") \
+    X(GREY_SIZE,           36, y, "lamp_grey_size, screen heights 0.25..0.6 (brief BU)") \
+    X(GREY_COOL,           36, z, "lamp_grey_cool, 0..1 (brief BU)") \
+    X(GREY_CX,             36, w, "grey region centre x, p-units (computed: far corner + 90 s slide, brief BU)") \
+    X(TONE_R,              37, x, "split tone add r = HSV(h, shadow_tone_sat, 1) * lift * gate * shadow_tone, h solved to the film OKLab hue + 180 (computed, brief BU)") \
+    X(TONE_G,              37, y, "split tone add g (computed, brief BU)") \
+    X(TONE_B,              37, z, "split tone add b (computed, brief BU)") \
+    X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -198,5 +208,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP35).
-static const int kAcidSlotVecs = 36;
+// Number of laP<n> float4s (laP0 .. laP37).
+static const int kAcidSlotVecs = 38;

@@ -849,6 +849,23 @@ struct LiquidAcidConfig {
     // with it); 0..360 = a FIXED absolute HSV hue in degrees (275 violet,
     // 235 blue, 185 teal) that does not rotate. CPU only, no shader slot.
     float shadowToneHue    = -1.0f;    // deg, -1 = complement     shadow_tone_hue
+    // brief BU-b: the HIGHLIGHT half of the split tone (Lightroom semantics)
+    // + Balance. Unlike the shadow half (an additive lift on the masses),
+    // highlights HOLD Y: a white-balance multiply toward the tint on the FILM
+    // (alpha), renormalised to the pixel's own linear luminance, chroma-pulled
+    // so no channel exceeds the pixel's own max (no clip, no ABL change).
+    // Weight = alpha x smoothstep(split - 0.25, split + 0.05, encoded Y), the
+    // split = 0.5 - 0.25 x tone_balance (encoded luma). The CPU folds hue,
+    // sat, amount, desat and BU's on/off gate into one RGB (laP39.xyz).
+    // highlight_tone_hue < 0 = the OKLab complement of the RESOLVED shadow
+    // hue (= the film's own hue when the shadow hue is the complement).
+    float highlightToneHue   = -1.0f;  // deg, -1 = complement     highlight_tone_hue
+    float highlightToneAmt   = 0.0f;   // 0..1, 0 = today          highlight_tone_amt
+    float highlightToneSat   = 0.5f;   // 0..1                     highlight_tone_sat
+    float highlightToneDesat = 0.0f;   // 0..1, 0 = today          highlight_tone_desat
+    // Lightroom Balance: > 0 moves the split down (highlight tint reaches
+    // into darker film, the shadow band shrinks), < 0 up. 0 = today.
+    float toneBalance        = 0.0f;   // -1..1                    tone_balance
 
     // --- edge PROFILE (oil_edge_curve) ------------------------------------
     // The user, on the live panel: "smudge the border more -- it looks like it
@@ -1542,6 +1559,12 @@ public:
         out[3] = (m_greySlideT >= 0.0f) ? 1.0f : 0.0f;
         out[4] = m_toneAdd[0]; out[5] = m_toneAdd[1]; out[6] = m_toneAdd[2];
     }
+    // brief BU-b: the highlight tint's folded RGB (laP39.xyz), the gate and
+    // the gate clock's phase origin (reset when the tone turns on from 0).
+    void BubState(float out[5]) const {
+        out[0] = m_toneHi[0]; out[1] = m_toneHi[1]; out[2] = m_toneHi[2];
+        out[3] = m_toneGate; out[4] = m_toneT0;
+    }
     // width*height*4 floats, row-major RGBA, linear scRGB (1.0 = 80 nits).
     bool CaptureOffscreen(std::vector<float>& outRgba);
 
@@ -1843,6 +1866,15 @@ private:
     float m_greyLastT = -1.0f;
     float m_greyCx = 0.0f, m_greyCy = 0.0f;
     float m_toneAdd[3] = { 0.0f, 0.0f, 0.0f };
+    // brief BU-b: highlight tint (folded) + the tone gate's phase origin.
+    // m_toneT0 moves to "now" when every tone key goes from 0 to nonzero (or
+    // the acid look comes back after a gap), so switching the tone on always
+    // STARTS the ON half; never touched while the keys stay put.
+    float m_toneHi[3] = { 0.0f, 0.0f, 0.0f };
+    float m_toneGate  = 0.0f;
+    float m_toneT0    = 0.0f;
+    int   m_tonePrevOn = -1;              // -1 = not seen yet (launch)
+    float m_toneSeenT  = -1.0f;
     // A readjustment moves the WHOLE rig, not just the focus: these are the
     // lamp's and the lens centre's endpoints for the current eased move, so
     // they travel on the same spring and arrive together.

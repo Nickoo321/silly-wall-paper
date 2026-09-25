@@ -610,6 +610,8 @@ cbuffer AcidCB : register(b1) {
     float4 laP35;     // x DYE_CORE  y -  z -  w -
     float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
     float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
+    float4 laP38;     // x -  y -  z -  w -
+    float4 laP39;     // x HTONE_R  y HTONE_G  z HTONE_B  w TONE_BAL
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
 };
@@ -742,6 +744,29 @@ float3 DarkSat(float3 c, float lvl) {
         }
     }
     return o;
+}
+
+// ---- brief BU-b: the luminance the PANEL gets from a composite colour ----
+// x = linear (709-coded) composite after post_chroma / post_lift / the clip.
+// The gamut stretch below (gamut 2 = BT.2020, 1 = P3) turns a saturated
+// film into out-of-gamut values whose NEGATIVE channels are clamped to 0 on
+// the way out, and that clamp ADDS luminance (measured: the magenta film's
+// G -> -0.075 clamp is +33% of its displayed Y). A shift that holds any
+// fixed-weight Y still loses that bonus (-19% mean_lum at desat 0.5), so
+// the highlight tone holds THIS instead: exact, and 1-homogeneous
+// (BubLum(k x) = k BubLum(x), k >= 0), so a scale is one step.
+float BubLum(float3 x) {
+    float3 y = x;
+    if (gamut > 1.5) {
+        y = float3(dot(float3( 1.66049, -0.58764, -0.07285), x),
+                   dot(float3(-0.12455,  1.13290, -0.00835), x),
+                   dot(float3(-0.01815, -0.10058,  1.11873), x));
+    } else if (gamut > 0.5) {
+        y = float3(dot(float3( 1.22494, -0.22494,  0.0),     x),
+                   dot(float3(-0.04206,  1.04206,  0.0),     x),
+                   dot(float3(-0.01964, -0.07868,  1.09832), x));
+    }
+    return dot(max(y, 0.0), float3(0.2126, 0.7152, 0.0722));
 }
 
 // ---- the 20x12 hue2 MIX FIELD, one bilinear fetch (brief AE / AJ) --------
@@ -2330,8 +2355,68 @@ R"hlsl(
     // call over the auditor's objection.
     [branch] if (LA_TONE_R + LA_TONE_G + LA_TONE_B > 0.0) {
         float tY = dot(col, float3(0.2126, 0.7152, 0.0722));
-        float tM = (1.0 - alpha) * (1.0 - smoothstep(0.02, 0.15, tY));
+        float tS = smoothstep(0.02, 0.15, tY);
+        // tone_balance (BU-b) scales the shadow band with the split point
+        // (0.5 - 0.25 b) / 0.5; a separate branch so balance 0 keeps BU's
+        // constant-folded smoothstep bit for bit.
+        [branch] if (LA_TONE_BAL != 0.0) {
+            float tK = 1.0 - 0.5 * LA_TONE_BAL;
+            tS = smoothstep(0.02 * tK, 0.15 * tK, tY);
+        }
+        float tM = (1.0 - alpha) * (1.0 - tS);
         col += float3(LA_TONE_R, LA_TONE_G, LA_TONE_B) * tM;
+    }
+    // HIGHLIGHT TONE (brief BU-b, Lightroom split toning): the lit FILM
+    // shifts colour toward the highlight tint at CONSTANT displayed
+    // luminance (the shadow half above lifts; this half never adds light --
+    // the film is most of the frame, and ABL). Worked in DISPLAY light:
+    // d0 = what post_chroma, post_lift and the saturate() below will make of
+    // this pixel, hT = the luminance the panel shows for it (BubLum: the
+    // gamut stretch and its clamp included). Weight = alpha x smoothstep over
+    // the encoded hT around the split (0.5 - 0.25 x tone_balance), 0.25 below
+    // to 0.05 above it: the lit film (encoded ~0.5) takes ~85% at balance
+    // 0, all of it at +0.5, ~40% at -0.5 (the first band, 0.40..0.05 below,
+    // left balance >= 0 inert on this look). Then a white-balance multiply toward the tint
+    // (lamp grey's construction), the film desaturation, a CAP (no channel
+    // above the pixel's own max: magenta -> gold drives red, which already
+    // sits at the clip), and the luminance put back EXACTLY: a scale down if
+    // brighter, else a bisection toward the flat grey at that max (which
+    // keeps the cap). Last, the exact inverse of post_lift / post_chroma
+    // back into the composite. The CPU folds hue, sat, amount, desat and the
+    // gate into LA_HTONE (0 = off, branch skipped).
+    [branch] if (LA_HTONE_R + LA_HTONE_G + LA_HTONE_B > 0.0) {
+        const float3 GW = float3(0.2126, 0.7152, 0.0722);
+        float  hPc = max(LA_POST_CHROMA, 1e-3), hPl = max(LA_POST_LIFT, 1e-3);
+        float  hY0 = dot(col, GW);
+        float3 d0 = DsToLin(saturate(max(hY0 + (col - hY0) * hPc, 0.0) * hPl));
+        float  hT = BubLum(d0);
+        float  hSp = 0.5 - 0.25 * LA_TONE_BAL;
+        float  hW = alpha * smoothstep(hSp - 0.25, hSp + 0.05, DsToSrgb(hT.xxx).x);
+        [branch] if (hW > 0.0) {
+            float3 hU = float3(LA_HTONE_R, LA_HTONE_G, LA_HTONE_B);
+            float  hMag = dot(hU, GW);
+            float3 hc = d0 * (hU / hMag);
+            float  hY = dot(hc, GW);
+            hc = hY + (hc - hY) * (1.0 - saturate(hMag - 1.0));
+            float hM0 = max(max(d0.r, max(d0.g, d0.b)), hT);
+            float hM1 = max(hc.r, max(hc.g, hc.b));
+            if (hM1 > hM0) hc *= hM0 / hM1;
+            float3 hx = lerp(d0, hc, hW);
+            float  hL = BubLum(hx);
+            [branch] if (hL >= hT) {
+                hx *= hT / max(hL, 1e-8);
+            } else {
+                float lo = 0.0, hi = 1.0;
+                [unroll] for (int it = 0; it < 7; it++) {
+                    float mid = 0.5 * (lo + hi);
+                    if (BubLum(lerp(hx, hM0.xxx, mid)) < hT) lo = mid; else hi = mid;
+                }
+                hx = lerp(hx, hM0.xxx, 0.5 * (lo + hi));
+            }
+            float3 he = DsToSrgb(hx);
+            float  hy = dot(he, GW) / hPl;
+            col = max(hy + (he / hPl - hy) / hPc, 0.0);
+        }
     }
     // LAMP GREY (lamp_grey): "as if the dye far from the lamp gets less
     // light". A soft disc on the far corner (the CPU picks it and slides it

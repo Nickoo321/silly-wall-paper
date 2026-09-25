@@ -6,7 +6,10 @@
 # per label/entry point. slots = src\acid_slots.h (its `X(name, laP#, comp)`
 # rows drive the LA_* macros compiled into the acid PSO).
 #
-# Usage: python tools\dxbc-cmp.py <old_shaders.h> <new_shaders.h> <acid_slots.h>
+# Usage: python tools\dxbc-cmp.py <old_shaders.h> <new_shaders.h> <acid_slots.h> [<old_acid_slots.h>]
+# The acid PSO needs the LA_* slot macros on BOTH sides (the old side used to get
+# only LIQUID_ACID and failed with "undeclared identifier LA_*", brief BU-b fix):
+# the old side uses <old_acid_slots.h> when given, else the same <acid_slots.h>.
 import ctypes, re, sys, hashlib
 from ctypes import c_void_p, c_char_p, c_size_t, c_uint, POINTER, Structure, byref
 d3dc = ctypes.WinDLL('d3dcompiler_47.dll')
@@ -27,11 +30,14 @@ def literal(path, var):
     s=t.index('static const char* %s = '%var); e=t.index(')hlsl";',s)+len(')hlsl";')
     return ''.join(re.findall(r'R"hlsl\((.*?)\)hlsl"',t[s:e],re.S)).encode('utf-8')
 old,new,slots=sys.argv[1:4]
-rows=re.findall(r'(?m)^\s*X\(\s*(\w+)\s*,\s*(\d+)\s*,\s*([xyzw])',open(slots).read())
-acidDefs=[('LIQUID_ACID','1')]+[('LA_'+n,'laP%s.%s'%(v,c)) for n,v,c in rows]
+oldSlots=sys.argv[4] if len(sys.argv)>4 else slots
+def acid_defs(path):
+    rows=re.findall(r'(?m)^\s*X\(\s*(\w+)\s*,\s*(\d+)\s*,\s*([xyzw])',open(path).read())
+    return [('LIQUID_ACID','1')]+[('LA_'+n,'laP%s.%s'%(v,c)) for n,v,c in rows]
+acidDefs=acid_defs(slots); acidDefsOld=acid_defs(oldSlots)
 so,sn=literal(old,'kDisplaySrc'),literal(new,'kDisplaySrc')
 print('kDisplaySrc bytes old/new',len(so),len(sn))
-for label,do,dn in [('fluid',[],[]),('ink',[('INK','1')],[('INK','1')]),('acid',[('LIQUID_ACID','1')],acidDefs)]:
+for label,do,dn in [('fluid',[],[]),('ink',[('INK','1')],[('INK','1')]),('acid',acidDefsOld,acidDefs)]:
     for entry,tgt in [('VSMain','vs_5_0'),('PSMain','ps_5_0')]:
         a=compile(so,entry,tgt,do); b=compile(sn,entry,tgt,dn)
         print(label,entry,len(a),len(b),'IDENTICAL' if a==b else 'DIFFERS', hashlib.md5(a).hexdigest()[:8], hashlib.md5(b).hexdigest()[:8])

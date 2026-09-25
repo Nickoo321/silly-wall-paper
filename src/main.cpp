@@ -51,10 +51,12 @@
 #include <cmath>
 #include <share.h>
 #include <vector>
+#include <algorithm>
 #include <string>
 #include "fluid.h"
 #include "app_state.h"
 #include "moods.h"
+#include "ui/ui_model.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -943,7 +945,8 @@ static bool MaximizedAppActive() {
 // ---------------------------------------------------------------------------
 
 static bool  g_hdrActive = false;
-float        g_maxNits = 0.0f;    // shared with settings.cpp
+float        g_maxNits = 0.0f;    // shared with the settings window (ui/)
+bool AppHdrActive() { return g_hdrActive; }
 static float g_sdrWhiteNits = 80.0f;
 
 // The user's "SDR content brightness" slider (HDR mode only). SDR content —
@@ -1019,7 +1022,7 @@ enum TrayCmd : UINT {
     CMD_PAUSE_ON = 8, CMD_PAUSE_OFF = 9,
     CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
     CMD_MOODS_TOGGLE = 33, CMD_MOODS_NEXT = 34, CMD_MOOD_BASE = 800,
-    CMD_PRESET_BASE = 600,
+    CMD_PRESET_BASE = 2000,   // up to kMaxTrayPresets entries (no 50 cap any more)
     CMD_PEAK_OFF = 10, CMD_PEAK_AUTO = 11, CMD_PEAK_300 = 12, CMD_PEAK_600 = 13,
     CMD_PEAK_800 = 15, CMD_PEAK_1000 = 14,
     CMD_GAMUT_SRGB = 20, CMD_GAMUT_P3 = 21, CMD_GAMUT_2020 = 22,
@@ -1037,33 +1040,70 @@ static void ApplyPreset(const std::wstring& path);
 static void SaveCurrentAsPreset();
 static void ShowTrayMenuBody(HWND hwnd, HMENU presets);
 
+static const size_t kMaxTrayPresets = 2000;
+
+// Which look a preset file carries: its [look] section (style= string, or the int forms
+// the old checkboxes wrote). No [look] section at all = a partial overlay (Mirror - *).
+static int PresetLookGroup(const wchar_t* path) {
+    wchar_t sec[512] = {};
+    if (GetPrivateProfileSectionW(L"look", sec, 512, path) == 0) return 3;   // overlay
+    // same rule as LoadConfigFromIni: style= string first, a PRESENT int key overrides it,
+    // ink wins ties (reading just [look] keeps the menu instant with 60+ files)
+    wchar_t style[32] = {};
+    GetPrivateProfileStringW(L"look", L"style", L"", style, 32, path);
+    bool acid = _wcsicmp(style, L"liquid_acid") == 0;
+    bool ink = _wcsicmp(style, L"ink") == 0;
+    acid = GetPrivateProfileIntW(L"look", L"liquid_acid", acid ? 1 : 0, path) != 0;
+    ink = GetPrivateProfileIntW(L"look", L"ink", ink ? 1 : 0, path) != 0;
+    return ink ? 2 : (acid ? 1 : 0);
+}
+
 static void ShowTrayMenu(HWND hwnd) {
-    // enumerate mood files fresh each time the menu opens (one recipe folder)
+    // enumerate mood files fresh each time the menu opens (one recipe folder), sorted and
+    // grouped into submenus by the look they carry (UI-REHAUL 1a: no 50 cap)
     g_presetPaths.clear();
     HMENU presets = CreatePopupMenu();
     {
         wchar_t dir[MAX_PATH], pattern[MAX_PATH];
         MoodsGetDirectory(dir);
         swprintf_s(pattern, L"%s\\*.ini", dir);
+        std::vector<std::wstring> names;
         WIN32_FIND_DATAW fd;
         HANDLE find = FindFirstFileW(pattern, &fd);
         if (find != INVALID_HANDLE_VALUE) {
             do {
-                std::wstring full = std::wstring(dir) + L"\\" + fd.cFileName;
-                std::wstring name = fd.cFileName;
-                size_t dot = name.rfind(L".ini");
-                if (dot != std::wstring::npos) name.resize(dot);
-                AppendMenuW(presets, MF_STRING,
-                            CMD_PRESET_BASE + g_presetPaths.size(), name.c_str());
-                g_presetPaths.push_back(full);
-            } while (FindNextFileW(find, &fd) && g_presetPaths.size() < 50);
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) names.push_back(fd.cFileName);
+            } while (FindNextFileW(find, &fd));
             FindClose(find);
         }
+        std::sort(names.begin(), names.end(), [](const std::wstring& x, const std::wstring& y) {
+            return _wcsicmp(x.c_str(), y.c_str()) < 0;
+        });
+        static const wchar_t* kGroup[4] = { L"Fluid (WE)", L"Liquid Acid", L"Ink", L"Overlays" };
+        HMENU sub[4] = { CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu() };
+        int count[4] = {};
+        for (const std::wstring& file : names) {
+            if (g_presetPaths.size() >= kMaxTrayPresets) break;
+            std::wstring full = std::wstring(dir) + L"\\" + file;
+            std::wstring name = file;
+            size_t dot = name.rfind(L".ini");
+            if (dot != std::wstring::npos) name.resize(dot);
+            int g = PresetLookGroup(full.c_str());
+            AppendMenuW(sub[g], MF_STRING, CMD_PRESET_BASE + g_presetPaths.size(), name.c_str());
+            g_presetPaths.push_back(full);
+            count[g]++;
+        }
+        for (int g = 0; g < 4; g++) {
+            if (count[g] == 0) { DestroyMenu(sub[g]); continue; }
+            wchar_t lbl[64];
+            swprintf_s(lbl, L"%s (%d)", kGroup[g], count[g]);
+            AppendMenuW(presets, MF_POPUP, (UINT_PTR)sub[g], lbl);
+        }
         if (g_presetPaths.empty())
-            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no moods yet)");
+            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no presets yet)");
         AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(presets, MF_STRING, CMD_PRESET_SAVE, L"Save current as new preset");
-        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open moods folder");
+        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open presets folder");
     }
     ShowTrayMenuBody(hwnd, presets);
 }
@@ -1269,7 +1309,7 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         }
         default:
-            if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + 100 &&
+            if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + kMaxTrayPresets &&
                 LOWORD(wp) - CMD_PRESET_BASE < g_presetPaths.size()) {
                 ApplyPreset(g_presetPaths[LOWORD(wp) - CMD_PRESET_BASE]);
             } else if (LOWORD(wp) >= CMD_MOOD_BASE && LOWORD(wp) < CMD_MOOD_BASE + 100) {
@@ -1994,7 +2034,10 @@ static void SaveFullConfig(const FluidConfig& c) {
 
 static void ApplyPreset(const std::wstring& path) {
     if (!g_renderer) return;
-    CloseSettingsWindow();
+    // The settings window stays open (UI-REHAUL R1: it reads every value live each frame,
+    // so there is nothing to rebuild). The UI model snapshots the config for one undo entry.
+    // --shot (read-only) never involves the UI model.
+    if (!g_configReadOnly) UiBeginWholeChange();
 
     // merge the (possibly partial) preset over the current state
     FluidConfig fresh = g_renderer->Config();
@@ -2022,6 +2065,7 @@ static void ApplyPreset(const std::wstring& path) {
     SaveFullConfig(fresh);
     UpdateTrayTip();
     MoodsAdoptPath(*g_renderer, path);   // keep conductor label/journey in sync
+    if (!g_configReadOnly) UiEndWholeChange(path);   // [ui] active_preset / overlays + undo entry
 
     const wchar_t* name = wcsrchr(path.c_str(), L'\\');
     ShowTrayBalloon(L"Preset applied", name ? name + 1 : path.c_str());
@@ -2039,6 +2083,7 @@ static void SaveCurrentAsPreset() {
         if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
             if (g_renderer) WriteConfigToIni(path, g_renderer->Config(), false);
             MoodsRescan();
+            if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
             wchar_t msg[128];
             swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the moods folder if you like.", n);
             ShowTrayBalloon(L"Preset saved", msg);
@@ -2616,6 +2661,16 @@ static int RunShotMode() {
     renderer.InitOffscreen(o.width, o.height, cfg);
     g_renderer = &renderer;
     renderer.SetCoverageWanted(g_moodSettings.enabled);
+    {   // settings-window model on the renderer's config; hooks = the calls the old window made
+        UiModelInit(renderer.Config());
+        UiLoadActivePreset();
+        UiHooks h;
+        h.reinitWanderers = [] { if (g_renderer) g_renderer->ReinitWanderers(); };
+        h.ensureLook = [] { if (g_renderer) g_renderer->EnsureLookResources(); };
+        h.setResolutions = [](int simRes, int dyeRes) { if (g_renderer) g_renderer->SetResolutions(simRes, dyeRes); };
+        h.applyPreset = [](const std::wstring& p) { ApplyPreset(p); };
+        UiSetHooks(h);
+    }
 
     const float dt = 1.0f / 144.0f;   // fixed timestep, no vsync, no sleeping
     FrameInput fin;                   // --mouse-none: all-zero, no user input
@@ -2766,17 +2821,86 @@ static int RunShotMode() {
 }
 
 // ---------------------------------------------------------------------------
+// --ui-shot / --ui-dump: the settings window rendered headless on WARP (UI-REHAUL 1a).
+// Like --shot: returns before the single-instance mutex, no WorkerW, no tray, no renderer,
+// config read-only (auditor pre-flight 7). Flags: --ini <ini> (the config the window edits;
+// treated as the applied preset when it carries a [look] section), --hdr on|off,
+// --panel-max <nits>, plus the --ui-* flags parsed in ui/ui_window.cpp.
+// ---------------------------------------------------------------------------
+static bool UiShotModeRequested() {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    bool found = false;
+    for (int i = 1; i < argc && !found; i++)
+        if (wcscmp(argv[i], L"--ui-shot") == 0 || wcscmp(argv[i], L"--ui-dump") == 0) found = true;
+    LocalFree(argv);
+    return found;
+}
+
+static int RunUiShotMode() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    std::wstring ini;
+    bool hdrOn = false;
+    float panelMax = 1000.0f;
+    for (int i = 1; i < argc; i++) {
+        if (wcscmp(argv[i], L"--ini") == 0 && i + 1 < argc) ini = argv[++i];
+        else if (wcscmp(argv[i], L"--hdr") == 0 && i + 1 < argc) hdrOn = _wcsicmp(argv[++i], L"on") == 0;
+        else if (wcscmp(argv[i], L"--panel-max") == 0 && i + 1 < argc) panelMax = (float)_wtof(argv[++i]);
+    }
+    g_configReadOnly = true;
+    InitSettingsPath();
+    if (!ini.empty()) {
+        wchar_t full[MAX_PATH];
+        if (!GetFullPathNameW(ini.c_str(), MAX_PATH, full, nullptr) ||
+            GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES) {
+            fprintf(stderr, "[ui] --ini file not found: %ls\n", ini.c_str());
+            LocalFree(argv);
+            return 2;
+        }
+        wcscpy_s(g_configIniPath, MAX_PATH, full);
+        ini = full;
+    }
+    if (FAILED(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))) {
+        LocalFree(argv);
+        return 3;
+    }
+    g_hdrActive = hdrOn;
+    g_maxNits = panelMax;
+    FluidConfig cfg;
+    LoadSettings();
+    LoadFullConfig(cfg);
+    srand(1234);
+    InitMoods();
+    MoodsApplyBase(cfg);
+    UiModelInit(cfg);
+    UiLoadActivePreset();
+    if (UiActivePresetPath().empty() && !ini.empty() && UiFileHasLookSection(ini))
+        UiSetActivePresetPath(ini);    // a preset ini opened directly = that preset applied
+    int rc = UiRunHeadless(cfg, argc, argv);
+    LocalFree(argv);
+    CoUninitialize();
+    return rc;
+}
+
+// ---------------------------------------------------------------------------
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // Headless capture: no window, no WorkerW, no tray, no single-instance
     // handshake (a running wallpaper must not be disturbed), no config writes.
     if (ShotModeRequested()) return RunShotMode();
+    if (UiShotModeRequested()) return RunUiShotMode();
 
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"FluidWallpaper_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
         // Second launch = "open the settings of the running instance".
         HWND tray = FindWindowW(L"FluidWallpaperTray", nullptr);
         if (tray) {
+            // let the running instance take the foreground for the window it opens
+            DWORD pid = 0;
+            GetWindowThreadProcessId(tray, &pid);
+            if (pid) AllowSetForegroundWindow(pid);
             PostMessageW(tray, WM_COMMAND, CMD_SETTINGS, 0);
         } else {
             MessageBoxW(nullptr,

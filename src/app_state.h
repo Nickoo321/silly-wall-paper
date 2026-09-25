@@ -39,6 +39,10 @@ extern wchar_t  g_configIniPath[MAX_PATH];
 extern bool     g_configReadOnly;
 extern FluidRenderer* g_renderer;
 
-void ShowSettingsWindow();          // settings.cpp — creates or focuses the panel
-void CloseSettingsWindow();         // settings.cpp — closes it (preset loads reopen fresh)
+void ShowSettingsWindow();          // ui/ui_window.cpp — creates or focuses the panel
+void CloseSettingsWindow();         // ui/ui_window.cpp — closes it
+bool AppHdrActive();                // main.cpp — live Windows HDR state (g_hdrActive)
+// --ui-shot / --ui-dump headless settings-window capture (ui/ui_window.cpp); main.cpp has
+// already loaded the config read-only into cfg. Returns the process exit code.
+int  UiRunHeadless(FluidConfig& cfg, int argc, wchar_t** argv);
 void ShowAnalyzerWindow();          // analyzer.cpp — nits heat-map inspector

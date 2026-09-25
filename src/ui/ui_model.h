@@ -73,7 +73,8 @@ struct UiHeader {
     std::string preset;           // stem of the active preset, or "no preset"
     std::string presetPath;
     std::string overlays;         // "Mirror - quad (overlay)" ...
-    std::string cycle;            // "Cycle off" / "Cycle on" (stage name: animators.h, 1b)
+    std::string cycle;            // "Cycle off" / "Cycle · 3/13 · <stage> · 2:10 left · paused for editing"
+    bool cycling = false;
     std::string hdr;              // "HDR on 1000 nt BT.2020"
     std::string mirror;           // "Mirror off" / "Mirror quad"
     int dirty = 0;
@@ -131,6 +132,22 @@ void UiApplyPresetHeadless(const std::wstring& path);   // same merge as main.cp
 
 void UiSetLook(unsigned look);               // look radio: one undo entry, same write path
 UiHeader UiComputeHeader();
+
+// ---- phase 1b (UI-ANIMATORS-MODEL) ----------------------------------------------------------
+// The COMPOSED BASE dirty is measured against: while cycling, the current stage's
+// CycleStageBase(); otherwise code defaults + [meta] base + the active preset + overlays.
+const FluidConfig& UiComposedBase();
+float UiComposedPeak();
+void  UiRecomputeTarget();
+// Save writes into this file: the cycle's current stage file while cycling, else the preset.
+std::wstring UiSaveTarget();
+// Once per UI frame: re-targets when the director moves to another stage / phase.
+void  UiModelTick();
+// Locked because something is animating the key RIGHT NOW (a stage transition's lerp, a
+// journey leg): read-only for those seconds, not dirty, never saved. target = where it is going.
+bool  UiRowAnimLocked(int row, std::string* why, float* target = nullptr);
+// the value written into an ini for this row ("%.6g" / int / 0|1)
+std::wstring UiIniText(int row, float v);
 bool UiAutostartCached();
 bool UiFileHasLookSection(const std::wstring& path);
 std::string UiNarrow(const std::wstring& w);

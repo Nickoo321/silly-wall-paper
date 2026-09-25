@@ -12,6 +12,7 @@
 #include "ui_model.h"
 #include "../app_state.h"
 #include "ui_cycle.h"
+#include "ui_presets.h"
 
 #pragma comment(lib, "advapi32.lib")
 
@@ -324,13 +325,37 @@ void RecomputeTarget() {
     s_target = FluidConfig{};
     s_peakTarget = -1.0f;
     s_gamutTarget = 2;
+    // cycling: the current stage's COMPOSED BASE (FluidConfig{} + stage_N_base + stage_N_file,
+    // shell keys from the live config) -- UI-ANIMATORS-MODEL section 1
+    if (UiCycleOn()) {
+        FluidConfig b;
+        if (UiCycleStageBase(b)) {
+            s_target = b;
+            s_peakTarget = g_hdrPeakNits;      // a stage without [hdr] keeps the user's peak
+            s_gamutTarget = g_gamutMode;
+            std::wstring f = UiCycleStageFile();
+            wchar_t buf[64] = {};
+            if (!f.empty()) GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, f.c_str());
+            if (buf[0]) s_peakTarget = (float)_wtof(buf);
+            if (!f.empty()) {
+                int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", s_gamutTarget, f.c_str());
+                if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
+            }
+            return;
+        }
+    }
     if (!s_activePreset.empty() && GetFileAttributesW(s_activePreset.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // a partial "Save as" names the preset it sits on: [meta] base= loads first
+        std::wstring base = UiPresetBase(s_activePreset);
+        if (!base.empty() && GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES)
+            LoadConfigFromFile(base.c_str(), s_target);
         LoadConfigFromFile(s_activePreset.c_str(), s_target);
         // composed base: the applied overlays (Mirror - *) are part of what "unchanged" means
         for (const std::wstring& ov : s_overlays)
             if (GetFileAttributesW(ov.c_str()) != INVALID_FILE_ATTRIBUTES) LoadConfigFromFile(ov.c_str(), s_target);
-        wchar_t buf[64] = {};
-        GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, s_activePreset.c_str());
+        wchar_t bb[64] = {}, buf[64] = {};
+        if (!base.empty()) GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", bb, 64, base.c_str());
+        GetPrivateProfileStringW(L"hdr", L"peak_nits", bb, buf, 64, s_activePreset.c_str());
         if (buf[0]) s_peakTarget = (float)_wtof(buf);
         int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, s_activePreset.c_str());
         if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
@@ -504,6 +529,7 @@ static bool Differs(const KeyRow& r, float a, float b) {
 
 bool UiDirty(int i) {
     if (!UiCountsForDirty(i)) return false;
+    if (UiRowAnimLocked(i, nullptr)) return false;   // animating right now, not an edit
     return Differs(s_rows[i], UiValue(i), UiTarget(i));
 }
 
@@ -742,29 +768,14 @@ void UiLoadActivePreset() {
 const std::wstring& UiActivePresetPath() { return s_activePreset; }
 
 bool UiSaveActivePreset() {
-    if (g_configReadOnly || s_activePreset.empty() || !UiFileHasLookSection(s_activePreset)) return false;
-    WriteConfigToIni(s_activePreset.c_str(), *s_cfg, false);
-    UiPresetsRescan();
-    RecomputeTarget();
-    printf("[ui] saved live config into %ls\n", s_activePreset.c_str());
-    return true;
+    // PARTIAL: only the keys that differ from the composed base, into the preset / stage file
+    std::wstring t = UiSaveTarget();
+    if (t.empty()) return false;
+    return UiSavePartial(t, nullptr);
 }
 
 bool UiSavePresetAs(const std::wstring& nameIn, std::wstring* outPath) {
-    if (g_configReadOnly) return false;
-    std::wstring name;
-    for (wchar_t ch : nameIn) if (!wcschr(L"\\/:*?\"<>|", ch)) name += ch;
-    while (!name.empty() && name.back() == L' ') name.pop_back();
-    if (name.empty()) return false;
-    std::wstring dir = UiPresetsDir();
-    CreateDirectoryW(dir.c_str(), nullptr);
-    std::wstring path = dir + L"\\" + name + L".ini";
-    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return false;   // never overwrite silently
-    WriteConfigToIni(path.c_str(), *s_cfg, false);
-    UiPresetsRescan();
-    UiNotifyPresetSaved(path);
-    if (outPath) *outPath = path;
-    return true;
+    return UiSaveAsPartial(nameIn, true, outPath, nullptr);
 }
 
 void UiApplyPresetHeadless(const std::wstring& path) {
@@ -802,17 +813,39 @@ void UiSetLook(unsigned look) {
 UiHeader UiComputeHeader() {
     UiHeader h;
     h.look = UiLookName(UiCurrentLook());
-    h.presetPath = UiNarrow(s_activePreset);
-    if (s_activePreset.empty()) h.preset = "no preset";
+    const UiCycleStatusView cs = UiCycleStatus();
+    h.cycling = cs.on;
+    std::wstring presetPath = s_activePreset;
+    if (cs.on) {
+        std::wstring f = UiCycleStageFile();
+        if (!f.empty()) presetPath = f;          // the preset name = the stage's file
+    }
+    h.presetPath = UiNarrow(presetPath);
+    if (presetPath.empty()) h.preset = "no preset";
     else {
-        h.preset = UiNarrow(Stem(s_activePreset));
-        if (GetFileAttributesW(s_activePreset.c_str()) == INVALID_FILE_ATTRIBUTES) h.preset += " (file missing)";
+        h.preset = UiNarrow(Stem(presetPath));
+        if (GetFileAttributesW(presetPath.c_str()) == INVALID_FILE_ATTRIBUTES) h.preset += " (file missing)";
     }
     for (auto& o : s_overlays) { if (!h.overlays.empty()) h.overlays += ", "; h.overlays += UiNarrow(Stem(o)); }
-    // No mood / stage NAME in 1a: the conductor's name was the "Neon" lie (it named a mood
-    // even with cycling off) and the conductor is being replaced; the stage name comes from
-    // animators.h CycleState() in 1b.
-    h.cycle = UiCycleOn() ? "Cycle on" : "Cycle off";
+    const char* sep = " \xC2\xB7 ";   // middle dot, UTF-8
+    // No mood NAME ever (the old "Neon" lie); when cycling, the director's own state
+    // (UI-ANIMATORS-MODEL section 5): "Cycle · 3/13 · <stage> · 2:10 left · paused for editing"
+    if (cs.on) {
+        char b[256];
+        std::string stage = h.preset;
+        if (cs.transitioning && cs.next >= 0) stage += " \xE2\x86\x92 " + UiNarrow(UiCycleStage(cs.next).name);
+        snprintf(b, sizeof(b), "Cycle%s%d/%d%s%s", sep, cs.stage + 1, cs.count, sep, stage.c_str());
+        h.cycle = b;
+        int secs = (int)ceilf(fmaxf(cs.remainingSec, 0.0f));
+        if (cs.phase == 1 /*DWELL*/) snprintf(b, sizeof(b), "%d:%02d left", secs / 60, secs % 60);
+        else if (cs.lerp) snprintf(b, sizeof(b), "gliding %d:%02d", secs / 60, secs % 60);
+        else if (cs.phase == 3 /*WARMUP*/) snprintf(b, sizeof(b), "warming up");
+        else snprintf(b, sizeof(b), "fading");
+        h.cycle += sep + std::string(b);
+        if (cs.paused) h.cycle += sep + std::string("paused for editing");
+    } else {
+        h.cycle = "Cycle off";
+    }
     static const char* gam[] = { "sRGB", "Display-P3", "BT.2020" };
     const char* gname = (g_gamutMode >= 0 && g_gamutMode <= 2) ? gam[g_gamutMode] : "?";
     char b[128];
@@ -831,14 +864,80 @@ UiHeader UiComputeHeader() {
     char d[48];
     if (h.dirty == 0) snprintf(d, sizeof(d), "no changes");
     else snprintf(d, sizeof(d), "%d change%s", h.dirty, h.dirty == 1 ? "" : "s");
-    const char* sep = " \xC2\xB7 ";   // middle dot, UTF-8
-    h.text = h.look + sep + h.preset;
+    if (cs.on) {
+        h.look = "Cycle";
+        h.text = h.cycle + sep + UiLookName(UiCurrentLook());
+    } else {
+        h.text = h.look + sep + h.preset;
+    }
     if (!h.overlays.empty()) h.text += " + " + h.overlays;
-    h.text += sep + std::string(d) + sep + h.hdr + sep + h.mirror + sep + h.cycle;
+    h.text += sep + std::string(d) + sep + h.hdr + sep + h.mirror;
+    if (!cs.on) h.text += sep + h.cycle;
     if (g_currentFps > 0.5f) {
         char f[32];
         snprintf(f, sizeof(f), "%.0f fps", g_currentFps);
         h.text += sep + std::string(f);
     }
     return h;
+}
+
+// ============================================================================ phase 1b
+const FluidConfig& UiComposedBase() { return s_target; }
+float UiComposedPeak() { return s_peakTarget; }
+void  UiRecomputeTarget() { RecomputeTarget(); }
+
+std::wstring UiSaveTarget() {
+    if (UiCycleOn()) {
+        std::wstring f = UiCycleStageFile();
+        if (!f.empty()) return f;
+    }
+    return s_activePreset;
+}
+
+void UiModelTick() {
+    static int lastOn = -1, lastStage = -2, lastNext = -2, lastPhase = -1;
+    const UiCycleStatusView cs = UiCycleStatus();
+    const int on = cs.on ? 1 : 0;
+    if (on != lastOn || cs.stage != lastStage || cs.next != lastNext || cs.phase != lastPhase) {
+        lastOn = on; lastStage = cs.stage; lastNext = cs.next; lastPhase = cs.phase;
+        RecomputeTarget();
+    }
+}
+
+bool UiRowAnimLocked(int i, std::string* why, float* target) {
+    const KeyRow& r = s_rows[i];
+    if (r.off < 0 || (r.flags & (KF_MACHINE | KF_SHELL))) return false;
+    const UiCycleStatusView cs = UiCycleStatus();
+    if (cs.on && cs.lerp && Differs(r, UiValue(i), ReadAt(s_target, r))) {
+        if (why) {
+            char b[160];
+            int secs = (int)ceilf(fmaxf(cs.remainingSec, 0.0f));
+            snprintf(b, sizeof(b), "animating: stage transition, lands in %d:%02d", secs / 60, secs % 60);
+            *why = b;
+        }
+        if (target) *target = ReadAt(s_target, r);
+        return true;
+    }
+    if (UiJourneyActive()) {
+        static const char* kJourneyKeys[][2] = {
+            { "color", "hue_center" }, { "color", "hue_range" }, { "behavior", "dark_floor" },
+            { "behavior", "wanderers" }, { "behavior", "idle_splats" },
+        };
+        for (auto& k : kJourneyKeys)
+            if (r.sec == k[0] && r.key == k[1]) {
+                if (why) *why = "animating: the stage's journey owns this key";
+                if (target) *target = UiValue(i);
+                return true;
+            }
+    }
+    return false;
+}
+
+std::wstring UiIniText(int i, float v) {
+    const KeyRow& r = s_rows[i];
+    wchar_t b[48];
+    if (r.isCheck || r.b) swprintf_s(b, L"%d", v > 0.5f ? 1 : 0);
+    else if (r.i) swprintf_s(b, L"%d", (int)lroundf(v));
+    else swprintf_s(b, L"%.6g", v);
+    return b;
 }

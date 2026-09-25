@@ -1,6 +1,7 @@
 #include "fluid.h"
-#include "shaders.h"
+#include "shaders_gen.h"   // generated from src/shaders/*.hlsl (cmake/embed_hlsl.cmake)
 #include "acid_slots.h"
+#include "rig_slots.h"
 #include <d3dcompiler.h>
 #include <cstdio>
 #include <cstring>
@@ -18,7 +19,7 @@ extern void WpLog(const char* fmt, ...);          // main.cpp: rolling log file
 extern void ForegroundDesc(char* out, size_t cap);
 #define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) Fail(#expr, _hr); } while (0)
 
-// Must match cbuffer CB in shaders.h (22 DWORDs).
+// Must match cbuffer CB in src/shaders/compute.hlsl (22 DWORDs).
 struct SimCB {
     float texelW, texelH;
     float dt;
@@ -416,7 +417,7 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     makeCS("CSAdvectDye", m_psoAdvectDye);
     makeCS("CSSplatVelocity", m_psoSplatVel);
     makeCS("CSSplatDye", m_psoSplatDye);
-    {   // finite-support variant for ink drops (see DROP_COMPACT in shaders.h)
+    {   // finite-support variant for ink drops (see DROP_COMPACT in src/shaders/compute.hlsl)
         const D3D_SHADER_MACRO defs[] = { { "DROP_COMPACT", "1" }, { nullptr, nullptr } };
         ComPtr<ID3DBlob> cs = Compile(kComputeSrc, "CSSplatDye", "cs_5_0", defs);
         D3D12_COMPUTE_PIPELINE_STATE_DESC cd = {};
@@ -1101,10 +1102,30 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // first 8 and the rest are reserved for the lid ghosts, the flare and the
     // vignette centre, all of which are motions of this same body and must be
     // read from these numbers rather than re-derived beside them.
-    float rig[20] = {};
+    // Every float and packed field is a row of src/rig_slots.h, written only
+    // through RigPut (checked by tools/rig-check.ps1). RigPut ADDS a packed
+    // field's code at 2^shift into its float; the codes are exact integers
+    // below 2^24, so the sum is exact in any order and bit-identical to the
+    // single expressions this used to be.
+    float rig[kRigFloats] = {};
+    auto RigPut = [&rig](RigSlot s, float v) {
+        const RigSlotInfo& r = kRigSlots[s];
+        if (r.bits == 0) rig[r.index] = v; else rig[r.index] += v * r.scale;
+    };
+    // the field's quantiser: clamp to 0..1, round to the table's width
+    auto RigQ = [](RigSlot s, float v) -> float {
+        float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+        return (float)(int)(u * kRigSlots[s].maxq + 0.5f);
+    };
+    // same over lo..hi (the lid's ranges)
+    auto RigQz = [](RigSlot s, float v, float lo, float hi) -> float {
+        float u = (v - lo) / (hi - lo);
+        u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
+        return (float)(int)(u * kRigSlots[s].maxq + 0.5f);
+    };
     bool bnOptics = false;   // brief BN: set in the rg1 pack below
-    rig[0] = m_rig.lampX;   rig[1] = m_rig.lampY;
-    rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
+    RigPut(RG_LAMP_X, m_rig.lampX);   RigPut(RG_LAMP_Y, m_rig.lampY);
+    RigPut(RG_AXIS_X, m_rig.axisX);   RigPut(RG_AXIS_Y, m_rig.axisY);
     // rig[4..5] (rg1.xy) used to carry the tilt, which the post pass never
     // read (the display pass gets it through LA_TILT_AMT). They are now two
     // packs of four 6-bit fields, most significant first, the layout fixed
@@ -1115,39 +1136,35 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // artefact_lum_gate 0 quantises to 0 and unpacks to exactly 0.0, which is
     // the shader's off test, so no preset moves by a bit.
     {
-        auto q6 = [](float v) -> float {
-            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-            return (float)(int)(u * 63.0f + 0.5f);
-        };
         // brief BN: corner_warp_r (0.4..0.9) is only written while the warp
         // itself quantises to at least 1, so with the warp off rg1.x is what
         // it was before BN existed. glass_streaks needs the lid (its positions
         // are the lid's), so it is written 0 while the lid is off.
-        const float qcw  = q6(po.cornerWarp);
-        const float qcwr = qcw >= 1.0f ? q6((po.cornerWarpR - 0.4f) / 0.5f) : 0.0f;
-        const float qgs  = po.lid > 0.0005f ? q6(po.glassStreaks) : 0.0f;
-        const float qbw  = q6(po.bloomWarmth);
-        const float qht  = q6(po.halationThreshold);
+        const float qcw  = RigQ(RG_CORNER_WARP, po.cornerWarp);
+        const float qcwr = qcw >= 1.0f ? RigQ(RG_CORNER_WARP_R, (po.cornerWarpR - 0.4f) / 0.5f) : 0.0f;
+        const float qgs  = po.lid > 0.0005f ? RigQ(RG_GLASS_STREAKS, po.glassStreaks) : 0.0f;
+        const float qbw  = RigQ(RG_BLOOM_WARMTH, po.bloomWarmth);
+        const float qht  = RigQ(RG_HALATION_THRESHOLD, po.halationThreshold);
         // Any BN field live -> the BN_OPTICS build of the post shader. With all
         // of them 0 the pass keeps today's PSO, bytecode for bytecode: the
         // extra code alone, never taken, moved 1-2 identity pixels by a code
         // through the driver's ISA compile.
         bnOptics = qcw >= 1.0f || qgs >= 1.0f || qbw >= 1.0f || qht >= 1.0f;
-        rig[4] = q6(po.artefactLumGate) * 262144.0f   // artefact_lum_gate (BO)
-               + qcw * 4096.0f                         // corner_warp (BN)
-               + qcwr * 64.0f                          // corner_warp_r (BN)
-               + qbw;                                  // bloom_warmth (BN)
-        rig[5] = qgs * 262144.0f                       // glass_streaks (BN)
-               + qht * 4096.0f;                        // halation_threshold (BN); spare | spare
+        RigPut(RG_ARTEFACT_LUM_GATE, RigQ(RG_ARTEFACT_LUM_GATE, po.artefactLumGate));   // (BO)
+        RigPut(RG_CORNER_WARP, qcw);                   // (BN)
+        RigPut(RG_CORNER_WARP_R, qcwr);                // (BN)
+        RigPut(RG_BLOOM_WARMTH, qbw);                  // (BN)
+        RigPut(RG_GLASS_STREAKS, qgs);                 // (BN)
+        RigPut(RG_HALATION_THRESHOLD, qht);            // (BN); rg1.y's low two fields spare
     }
     // rig[6..7] (rg1.zw) are brief BM's lid scratches, packed below.
     // The LENS's own chromatic split (item Z). It lives in the rig block
     // because it is a property of the same lens the rig carries the centre
     // of: the split is radial about that centre, so the two numbers have to
     // travel together or the null point drifts away from the axis.
-    rig[8]  = fminf(fmaxf(po.aberration, 0.0f), 1.0f);
-    rig[9]  = fmaxf(po.aberrationPx, 0.0f) * scale;
-    rig[10] = fminf(fmaxf(po.aberrationField, 0.0f), 2.0f);
+    RigPut(RG_ABERRATION,       fminf(fmaxf(po.aberration, 0.0f), 1.0f));
+    RigPut(RG_ABERRATION_PX,    fmaxf(po.aberrationPx, 0.0f) * scale);
+    RigPut(RG_ABERRATION_FIELD, fminf(fmaxf(po.aberrationField, 0.0f), 2.0f));
     // ---- brief BD, four knobs in rg2.w -----------------------------------
     // b0's 32 constants are full and the root signature is at the 64-DWORD
     // limit, so these ride in the one float rg2 had spare, packed the way the
@@ -1158,16 +1175,10 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // unpack to exactly 1.0 / 0.0 / 0.0 / 0.0, so no preset that leaves these
     // alone moves by a bit.
     //   grainChroma : 6 | grainDensity : 6 | fogMassGate : 6 | aberrCoc : 6
-    {
-        auto q6 = [](float v) -> float {
-            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-            return (float)(int)(u * 63.0f + 0.5f);
-        };
-        rig[11] = q6(po.filmGrainChroma)  * 262144.0f
-                + q6(po.filmGrainDensity) * 4096.0f
-                + q6(po.fogMassGate)      * 64.0f
-                + q6(po.aberrationCoc);
-    }
+    RigPut(RG_GRAIN_CHROMA,   RigQ(RG_GRAIN_CHROMA,   po.filmGrainChroma));
+    RigPut(RG_GRAIN_DENSITY,  RigQ(RG_GRAIN_DENSITY,  po.filmGrainDensity));
+    RigPut(RG_FOG_MASS_GATE,  RigQ(RG_FOG_MASS_GATE,  po.fogMassGate));
+    RigPut(RG_ABERRATION_COC, RigQ(RG_ABERRATION_COC, po.aberrationCoc));
     // ---- THE LID (task V2) -- ALL OF IT IN rg4 ---------------------------
     // rg2 is the lens's chromatic split (item Z) and rg3 is reserved for the
     // camera executor's V3 motion, so the lid gets ONE float4. Twelve numbers
@@ -1186,27 +1197,19 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // With the lid off all four floats are written as exact 0, which is what
     // the shader's one branch tests.
     {
-        auto qz = [](float v, float lo, float hi, int bits) -> float {
-            float u = (v - lo) / (hi - lo);
-            u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u);
-            const float m = (float)((1 << bits) - 1);
-            return (float)(int)(u * m + 0.5f);
-        };
         const float L = fminf(fmaxf(po.lid, 0.0f), 1.0f);
-        if (L <= 0.0005f) {
-            rig[16] = rig[17] = rig[18] = rig[19] = 0.0f;
-        } else {
-            rig[16] = qz(m_rig.lidX, -0.5f, 0.5f, 12) * 4096.0f
-                    + qz(m_rig.lidY, -0.5f, 0.5f, 12);
-            rig[17] = qz(m_rig.lidRot, -4.0f, 4.0f, 12) * 4096.0f
-                    + qz(fmaxf(po.lidRefractPx, 0.0f) * scale, 0.0f, 24.0f, 12);
-            rig[18] = qz(L * po.lidGhost, 0.0f, 1.0f, 8) * 65536.0f
-                    + qz(L * po.lidRings, 0.0f, 1.0f, 8) * 256.0f
-                    + qz(L * po.lidSheen, 0.0f, 1.0f, 8);
-            rig[19] = qz(L * po.lidGlint, 0.0f, 1.0f, 7) * 131072.0f
-                    + qz(L * po.lidIris,  0.0f, 1.0f, 7) * 1024.0f
-                    + qz(fmaxf(po.lidSheenPx, 8.0f) * scale, 8.0f, 1400.0f, 6) * 16.0f
-                    + qz(po.lidGhostSpread, 0.0f, 2.0f, 4);
+        if (L > 0.0005f) {   // else rg4 stays the exact 0 it was initialised to
+            RigPut(RG_LID_X,           RigQz(RG_LID_X, m_rig.lidX, -0.5f, 0.5f));
+            RigPut(RG_LID_Y,           RigQz(RG_LID_Y, m_rig.lidY, -0.5f, 0.5f));
+            RigPut(RG_LID_ROT,         RigQz(RG_LID_ROT, m_rig.lidRot, -4.0f, 4.0f));
+            RigPut(RG_LID_REFRACT_PX,  RigQz(RG_LID_REFRACT_PX, fmaxf(po.lidRefractPx, 0.0f) * scale, 0.0f, 24.0f));
+            RigPut(RG_LID_GHOST,       RigQz(RG_LID_GHOST, L * po.lidGhost, 0.0f, 1.0f));
+            RigPut(RG_LID_RINGS,       RigQz(RG_LID_RINGS, L * po.lidRings, 0.0f, 1.0f));
+            RigPut(RG_LID_SHEEN,       RigQz(RG_LID_SHEEN, L * po.lidSheen, 0.0f, 1.0f));
+            RigPut(RG_LID_GLINT,       RigQz(RG_LID_GLINT, L * po.lidGlint, 0.0f, 1.0f));
+            RigPut(RG_LID_IRIS,        RigQz(RG_LID_IRIS,  L * po.lidIris,  0.0f, 1.0f));
+            RigPut(RG_LID_SHEEN_PX,    RigQz(RG_LID_SHEEN_PX, fmaxf(po.lidSheenPx, 8.0f) * scale, 8.0f, 1400.0f));
+            RigPut(RG_LID_GHOST_SPREAD, RigQz(RG_LID_GHOST_SPREAD, po.lidGhostSpread, 0.0f, 2.0f));
         }
     }
     // ---- brief BM: the lid's SCRATCHES, in rg1.zw -------------------------
@@ -1219,28 +1222,24 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     //   rg1.z  amount : 8 | density : 8 | len : 8
     //   rg1.w  corner : 8 | soft : 8 | tint : 8
     {
-        auto q8 = [](float v) -> float {
-            float u = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
-            return (float)(int)(u * 255.0f + 0.5f);
-        };
-        const float qa = q8(po.lidScratch);
-        if (po.lid > 0.0005f && qa >= 1.0f) {
-            rig[6] = qa * 65536.0f + q8(po.lidScratchDensity) * 256.0f
-                   + q8(po.lidScratchLen);
-            rig[7] = q8(po.lidScratchCorner) * 65536.0f
-                   + q8(po.lidScratchSoft) * 256.0f + q8(po.lidScratchTint);
-        } else {
-            rig[6] = rig[7] = 0.0f;
+        const float qa = RigQ(RG_SCRATCH_AMOUNT, po.lidScratch);
+        if (po.lid > 0.0005f && qa >= 1.0f) {   // else rg1.zw stay exact 0
+            RigPut(RG_SCRATCH_AMOUNT,  qa);
+            RigPut(RG_SCRATCH_DENSITY, RigQ(RG_SCRATCH_DENSITY, po.lidScratchDensity));
+            RigPut(RG_SCRATCH_LEN,     RigQ(RG_SCRATCH_LEN,     po.lidScratchLen));
+            RigPut(RG_SCRATCH_CORNER,  RigQ(RG_SCRATCH_CORNER,  po.lidScratchCorner));
+            RigPut(RG_SCRATCH_SOFT,    RigQ(RG_SCRATCH_SOFT,    po.lidScratchSoft));
+            RigPut(RG_SCRATCH_TINT,    RigQ(RG_SCRATCH_TINT,    po.lidScratchTint));
         }
     }
     // rg3 (12..15) -- MOTION (item V3). rg4 (16..19) is the lid, filled just
     // above: the two branches were given a slot each and neither had to
     // repack the other.
-    rig[12] = fminf(fmaxf(po.shimmer, 0.0f), 1.0f);
-    rig[13] = fmaxf(po.shimmerPx, 0.0f) * scale;
+    RigPut(RG_SHIMMER,    fminf(fmaxf(po.shimmer, 0.0f), 1.0f));
+    RigPut(RG_SHIMMER_PX, fmaxf(po.shimmerPx, 0.0f) * scale);
     // the orbit is authored in px at 1440p and handed over in uv
-    rig[14] = m_rig.shiftX * scale / (float)(m_width  > 0 ? m_width  : 1);
-    rig[15] = m_rig.shiftY * scale / (float)(m_height > 0 ? m_height : 1);
+    RigPut(RG_SHIFT_X, m_rig.shiftX * scale / (float)(m_width  > 0 ? m_width  : 1));
+    RigPut(RG_SHIFT_Y, m_rig.shiftY * scale / (float)(m_height > 0 ? m_height : 1));
 
     // brief BN: the BN_OPTICS post PSO is compiled the first time a BN key
     // goes live (~0.3 s, once; PSO creation is off the command list) and kept.
@@ -1252,7 +1251,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
     m_cmd->SetPipelineState(bnOptics ? m_psoPostBN.Get() : m_psoPost.Get());
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
-    m_cmd->SetGraphicsRoot32BitConstants(6, 20, rig, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(6, kRigFloats, rig, 0);
     // The sim's own low-res velocity, so the thermal shimmer is ADVECTED by
     // the fluid rather than wobbling on its own clock: a burst that moves the
     // oil pushes the heat ahead of it (the user's rule -- every post effect's
@@ -2739,7 +2738,7 @@ void FluidRenderer::HandleInput(const FrameInput& in) {
 // section of kDisplaySrc.
 // ===========================================================================
 
-// GPU mirrors â€” must match struct AcidBlobGPU / cbuffer AcidCB in shaders.h.
+// GPU mirrors â€” must match struct AcidBlobGPU / cbuffer AcidCB in src/shaders/display.hlsl.
 // .c = the comb anisotropy (mouse_oil_mode 2): x = stretch amount along the
 // drag direction, yz = that direction. All zero unless the comb is running.
 // .c.w = the blob's dye identity in (0,1) (brief AG-b; read for holes only).
@@ -2774,7 +2773,7 @@ struct AcidParamsGPU {
 static_assert(sizeof(AcidParamsGPU) == 1744, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
-// AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
+// AcidDrops in src/shaders/display.hlsl: xy = centre uv, z = visible radius SIGNED (negative
 // = a water droplet trapped in the oil, positive = an oil droplet on the open
 // ink), w = reserved.
 struct AcidDropGPU { float a[4]; };
@@ -2810,7 +2809,7 @@ float FluidRenderer::NextAcidDyeId() {
 // Must match StructuredBuffer<uint2> DropCells: (first index, count).
 struct DropCellGPU { uint32_t first, count; };
 
-// GPU mirror of cbuffer InkCB in shaders.h (the SHARED ink-in-water block).
+// GPU mirror of cbuffer InkCB in src/shaders/display.hlsl (the SHARED ink-in-water block).
 struct InkParamsGPU {
     float p0[4], p1[4], p2[4], p3[4], p4[4];
     float paper[4], tintThin[4], tintThick[4];
@@ -2818,7 +2817,7 @@ struct InkParamsGPU {
 };
 static_assert(sizeof(InkParamsGPU) == 160, "InkCB layout");
 
-// CPU mirror of AcidHueShift in shaders.h: rotate HUE ONLY, holding saturation
+// CPU mirror of AcidHueShift in src/shaders/display.hlsl: rotate HUE ONLY, holding saturation
 // and value, so a swept colour is exactly as vivid at its new hue as it was at
 // its old one. (A W3C matrix hue-rotate holds luma instead and turns a bright
 // orange into olive on the way to yellow.) The oil colours and the ink stops
@@ -5308,7 +5307,7 @@ void FluidRenderer::UploadAcidConstants() {
     //
     // This used to dye the ink RAMP (effInk) here, on the theory that the dark
     // masses are drawn from it. They are not. Measured on 2026-09-22 (branch
-    // dye4, trace written out in full at the dye block in shaders.h): the LIVE
+    // dye4, trace written out in full at the dye block in display.hlsl): the LIVE
     // preset runs ink_mode=water, and in water mode the mass colour comes from
     // InkWater()'s paper_color, never from laInk[] -- which this shader reads
     // in exactly two places, the (dead) bands branch and the toe_tint lift,

@@ -13,11 +13,32 @@ set(IMGUI_SOURCES ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR
     ${IMGUI_DIR}/backends/imgui_impl_win32.cpp ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp)
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")   # third party: no warnings
 
+# HLSL lives in src/shaders/*.hlsl; cmake/embed_hlsl.cmake turns it into raw-string literals
+# (auto-split under MSVC's 16380-byte literal cap) in the build tree's generated/shaders_gen.h,
+# which fluid.cpp includes. Not committed; touching a .hlsl regenerates it. Byte-identity check:
+# tools/shaders-identity.py.
+set(SHADER_NAMES compute display post gradient)
+set(SHADER_FILES)
+foreach(_s IN LISTS SHADER_NAMES)
+    list(APPEND SHADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/shaders/${_s}.hlsl)
+endforeach()
+string(REPLACE ";" "," SHADER_LIST "${SHADER_NAMES}")
+set(SHADERS_GEN ${CMAKE_CURRENT_BINARY_DIR}/generated/shaders_gen.h)
+add_custom_command(
+    OUTPUT ${SHADERS_GEN}
+    COMMAND ${CMAKE_COMMAND} -DIN_DIR=${CMAKE_CURRENT_SOURCE_DIR}/src/shaders -DOUT=${SHADERS_GEN}
+            -DSHADERS=${SHADER_LIST} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_hlsl.cmake
+    DEPENDS ${SHADER_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_hlsl.cmake
+    COMMENT "Embedding src/shaders/*.hlsl"
+    VERBATIM)
+source_group("Shaders" FILES ${SHADER_FILES})
+
 add_executable(FluidWallpaper WIN32 src/main.cpp src/fluid.cpp src/ui/ui_model.cpp src/ui/ui_window.cpp src/ui/ui_cycle.cpp src/ui/ui_presets.cpp
-    src/analyzer.cpp src/cycle.cpp src/journey.cpp src/app.rc ${IMGUI_SOURCES})
+    src/analyzer.cpp src/cycle.cpp src/journey.cpp src/app.rc ${IMGUI_SOURCES} ${SHADERS_GEN} ${SHADER_FILES})
+set_source_files_properties(${SHADER_FILES} PROPERTIES HEADER_FILE_ONLY ON)   # data, not compiled
 target_compile_definitions(FluidWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(FluidWallpaper PRIVATE /utf-8)   # source files are UTF-8 (em dashes in UI strings)
-target_include_directories(FluidWallpaper PRIVATE ${IMGUI_DIR})
+target_include_directories(FluidWallpaper PRIVATE ${IMGUI_DIR} ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(FluidWallpaper PRIVATE d3d12 d3d11 dxgi d3dcompiler user32 shell32 ole32 windowscodecs dwmapi)
 
 # OilWallpaper — standalone lava-lamp oil-blob proof of concept (src_oil/).

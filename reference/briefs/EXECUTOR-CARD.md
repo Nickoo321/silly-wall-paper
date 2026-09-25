@@ -27,9 +27,9 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
   did not intentionally change.
   Fast tier = 15 rows from tools\preset-identity.manifest.psd1; run with -Tier fast; the 1553a7f
   baseline is retired (its list predates the manifest).
-- MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`.
-  `tools\slot-check.ps1` prints the three largest pieces (and fails over 16000): split before
-  adding more than ~20 lines to one within ~2.3 KB of the cap.
+- HLSL lives in `src\shaders\*.hlsl` (CLOUD-1); the build embeds it (`cmake\embed_hlsl.cmake`,
+  auto-split under MSVC's 16380-byte literal cap), so there is no manual split any more. The
+  files ARE the embedded bytes: don't reflow them in a refactor, prove with `tools\dxbc-cmp.py`.
 - Root signature is at the 64-DWORD limit — cbuffer slack only, don't add root params.
 - New key's range/step comes from a real A/B sheet (3-5 values), not a guess (slider-range-policy:
   a blur useful over 0.1-3 cannot ship as a 0-50 slider — it hides the good zone).
@@ -55,7 +55,9 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - `src\fluid.h` — config structs + defaults; key names in trailing comments.
 - `src\fluid.cpp` — sim, constants upload, post pass (`RunPostPass`).
 - `src\acid_slots.h` — the packed acid cbuffer's slot table (names for every `laP<n>.<c>`).
-- `src\shaders.h` — HLSL string literals: acid sim/display `kAcid*`, post `kPostSrc`, display pass.
+- `src\shaders\` — the HLSL: `compute.hlsl` (kComputeSrc), `display.hlsl` (kDisplaySrc: fluid/ink/acid),
+  `post.hlsl` (kPostSrc), `gradient.hlsl`; embedded at build time into `build2\generated\shaders_gen.h`.
+- `src\rig_slots.h` — the post pass's rig block b3 (rg0..rg4), one row per float / packed field.
 - `src\settings.cpp` — slider table: label, min, max, step, decimals, pointer, section, key, help.
 - Other `src\`: `analyzer.cpp`, `app.rc`, `app_state.h`, `journey.cpp/h`, `moods.cpp/h`, `scenes.cpp`.
 - `reference\configs\acid-rise-12.ini` — the LIVE preset, one comment line per key.
@@ -84,14 +86,18 @@ gitignored but NOT OneDrive-ignored in the main repo) — sweep old shots period
 ## 3.5. Before merging a branch that touches the acid cbuffer
 
 **Run `tools\slot-check.ps1` before merging** (any branch that touches `UploadAcidConstants`,
-`cbuffer AcidCB` or any HLSL literal; no GPU, <1 s; exit 1 = do not merge). Every packed acid
+`cbuffer AcidCB` or any `.hlsl`; no GPU, <1 s; exit 1 = do not merge). Every packed acid
 scalar has a NAME in `src\acid_slots.h` (one row: name, float4, component). The upload writes
 `slot(LA_<NAME>, v)`; the acid HLSL reads `LA_<NAME>` (a define `kAcidSlotMacros` hands to
 D3DCompile) — never `laP13.x`. The checker fails on a slot written but unread, read but unwritten,
 written twice, two names on one component, any raw `laP<n>.<c>`, C++/HLSL cbuffer order mismatch,
-a stale comment table, or a literal piece over 16000 bytes; it also prints the free components and
-the three largest literals. New key: add a row, `slot(...)` it, read it, then
-`tools\slot-check.ps1 -Fix` regenerates the cbuffer comment table in `shaders.h`.
+a stale comment table, or a source line the generator cannot split; it also prints the free
+components and the three largest generated pieces. New key: add a row, `slot(...)` it, read it, then
+`tools\slot-check.ps1 -Fix` regenerates the cbuffer comment table in `display.hlsl`.
+Post-pass rig block (b3): `tools\rig-check.ps1` (same idea, checker only) — writes go through
+`RigPut(RG_<NAME>, v)` from `src\rig_slots.h`; it fails on drift against the HLSL reads and the
+BDU6/LidU8/LidU12/LidU7764 unpack layouts. Run it before merging anything touching `RunPostPass`'s
+rig block or `RigCB`.
 
 ## 3.6. Per-key inert test / shader bytecode diff
 
@@ -99,8 +105,11 @@ the three largest literals. New key: add a row, `slot(...)` it, read it, then
 [-Size 1280x720] [-Delay 10] [-Out <dir>]` (brief BJ) renders a preset's baseline, then per key
 whose live value differs from its fluid.h/settings.cpp default, renders it back at default and
 reports md5 (INERT) + whole-frame MAD; holds the GPU lock once for the whole run.
-`python tools\dxbc-cmp.py <old_shaders.h> <new_shaders.h> <acid_slots.h>` compiles both copies'
-kDisplaySrc with d3dcompiler_47.dll (no build) and prints IDENTICAL/DIFFERS per PSO/stage — no GPU.
+`python tools\dxbc-cmp.py <old> <new> <acid_slots.h> [--display-only]` compiles both sides with
+d3dcompiler_47.dll (no build) and prints IDENTICAL/DIFFERS for EVERY PSO/stage (display fluid/ink/
+acid, post + BN_OPTICS, gradient, every compute entry + DROP_COMPACT) — no GPU. Each side is an old
+`shaders.h` or a `src\shaders` directory (e.g. `git show main:src/shaders.h > old.h`, or a copy of
+the old `src\shaders\`).
 
 ## 4. Current state
 

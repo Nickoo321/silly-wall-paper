@@ -2068,6 +2068,7 @@ void FluidRenderer::ResetLookState() {
     m_dropletSeededFor = -1;
     m_dropletSpawnAcc = 0.0f;
     m_mixSeeded = false;
+    m_coverSeeded = false;
     // the 64x36 velocity copy the blobs advect with is of the OLD field
     for (float& v : m_velCpu) v = 0.0f;
     // [drops] emitter: re-prime its first interval, drop any pending tail
@@ -3318,78 +3319,128 @@ void FluidRenderer::StepHueField(float dt) {
     // extra rise, authored in screen heights per minute
     const float riseX = fmaxf(a.filmHue2Rise, 0.0f) / 60.0f;
 
-    std::vector<float> next((size_t)N, 0.0f);
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
-    const bool seeding = !m_mixSeeded;
-    for (int y = 0; y < TH; y++) {
-        for (int x = 0; x < kMixW; x++) {
-            const float u = ((float)x + 0.5f) / (float)kMixW;
-            const float v = ((float)y + 0.5f) / (float)kMixH;   // >1 = below the edge
-            float vu = 0.0f, vv = 0.0f;
-            {
-                float fx = u * kVelW - 0.5f, fy = fminf(v, 1.0f) * kVelH - 0.5f;
-                int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
-                float tx = fx - x0, ty = fy - y0;
-                auto at = [&](int xi, int yi, int c) {
-                    xi = xi < 0 ? 0 : (xi >= kVelW ? kVelW - 1 : xi);
-                    yi = yi < 0 ? 0 : (yi >= kVelH ? kVelH - 1 : yi);
-                    return m_velCpu[((size_t)yi * kVelW + xi) * 2 + c];
-                };
-                vu = (at(x0, y0, 0) * (1 - tx) + at(x0 + 1, y0, 0) * tx) * (1 - ty)
-                   + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
-                vv = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
-                   + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
-                vu /= fmaxf((float)m_simW, 1.0f);
-                vv /= fmaxf((float)m_simH, 1.0f);
-            }
-            // ONLY UP. uv y is down, so the vertical velocity is clamped at or
-            // below zero: a patch can be carried up fast or slow, sideways,
-            // stretched -- but it can never travel down the screen, which is
-            // the other half of the user's rule.
-            float velV = vv - a.riseSpeed * 0.35f - riseX;
-            if (SR > 0 && velV > 0.0f) velV = 0.0f;
-            const float bu = u - vu * dt;
-            const float bv = v - velV * dt;          // never above v: from below
-            float src;
-            {
-                float fx = bu * kMixW - 0.5f, fy = bv * kMixH - 0.5f;
-                int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
-                float tx = fx - x0, ty = fy - y0;
-                auto at = [&](int xi, int yi) {
-                    xi = xi < 0 ? 0 : (xi >= kMixW ? kMixW - 1 : xi);
-                    yi = yi < 0 ? 0 : (yi >= TH ? TH - 1 : yi);
-                    return m_mixField[(size_t)yi * kMixW + xi];
-                };
-                src = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
-                    + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
-            }
-            // Injection happens ONLY below the bottom edge (or everywhere when
-            // film_hue2_seed_rows is 0, which is the old behaviour kept for
-            // the A/B). On the first frame the whole grid is laid at once --
-            // that is the initial condition of a cold start, before anything
-            // is on screen, not something appearing in front of the user.
-            const bool makeHere = (SR == 0) || (y >= kMixH) || seeding;
-            if (makeHere) {
-                const float nz  = vnoise(u * aspect * freq + t * 0.7f,
-                                         v * freq - t * 0.5f, 0);
-                const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
-                                         v * freq * 2.3f + t * 0.3f, 7);
-                const float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
-                const float k = seeding ? 1.0f : (1.0f - expf(-decay * dt));
-                next[(size_t)y * kMixW + x] = src + (tgt - src) * k;
-            } else {
-                // Visible row: pure advection. Deliberately NO decay here --
-                // with the shipped 0.35 the relaxation time is under three
-                // seconds, so a patch that entered at the bottom would be
-                // gone before it had climbed a tenth of the screen and the
-                // feature would not exist. Decay now shapes the material
-                // while it is still being made, below the edge.
-                next[(size_t)y * kMixW + x] = src;
+    // One step of one field. The live field and the coverage logger's shadow
+    // fields (--cover-sweep) run the SAME body; only the bias differs.
+    auto stepField = [&](std::vector<float>& field, bool seeding, float bias) {
+        std::vector<float> next((size_t)N, 0.0f);
+        for (int y = 0; y < TH; y++) {
+            for (int x = 0; x < kMixW; x++) {
+                const float u = ((float)x + 0.5f) / (float)kMixW;
+                const float v = ((float)y + 0.5f) / (float)kMixH;   // >1 = below the edge
+                float vu = 0.0f, vv = 0.0f;
+                {
+                    float fx = u * kVelW - 0.5f, fy = fminf(v, 1.0f) * kVelH - 0.5f;
+                    int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+                    float tx = fx - x0, ty = fy - y0;
+                    auto at = [&](int xi, int yi, int c) {
+                        xi = xi < 0 ? 0 : (xi >= kVelW ? kVelW - 1 : xi);
+                        yi = yi < 0 ? 0 : (yi >= kVelH ? kVelH - 1 : yi);
+                        return m_velCpu[((size_t)yi * kVelW + xi) * 2 + c];
+                    };
+                    vu = (at(x0, y0, 0) * (1 - tx) + at(x0 + 1, y0, 0) * tx) * (1 - ty)
+                       + (at(x0, y0 + 1, 0) * (1 - tx) + at(x0 + 1, y0 + 1, 0) * tx) * ty;
+                    vv = (at(x0, y0, 1) * (1 - tx) + at(x0 + 1, y0, 1) * tx) * (1 - ty)
+                       + (at(x0, y0 + 1, 1) * (1 - tx) + at(x0 + 1, y0 + 1, 1) * tx) * ty;
+                    vu /= fmaxf((float)m_simW, 1.0f);
+                    vv /= fmaxf((float)m_simH, 1.0f);
+                }
+                // ONLY UP. uv y is down, so the vertical velocity is clamped at or
+                // below zero: a patch can be carried up fast or slow, sideways,
+                // stretched -- but it can never travel down the screen, which is
+                // the other half of the user's rule.
+                float velV = vv - a.riseSpeed * 0.35f - riseX;
+                if (SR > 0 && velV > 0.0f) velV = 0.0f;
+                const float bu = u - vu * dt;
+                const float bv = v - velV * dt;          // never above v: from below
+                float src;
+                {
+                    float fx = bu * kMixW - 0.5f, fy = bv * kMixH - 0.5f;
+                    int x0 = (int)floorf(fx), y0 = (int)floorf(fy);
+                    float tx = fx - x0, ty = fy - y0;
+                    auto at = [&](int xi, int yi) {
+                        xi = xi < 0 ? 0 : (xi >= kMixW ? kMixW - 1 : xi);
+                        yi = yi < 0 ? 0 : (yi >= TH ? TH - 1 : yi);
+                        return field[(size_t)yi * kMixW + xi];
+                    };
+                    src = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
+                        + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+                }
+                // Injection happens ONLY below the bottom edge (or everywhere when
+                // film_hue2_seed_rows is 0, which is the old behaviour kept for
+                // the A/B). On the first frame the whole grid is laid at once --
+                // that is the initial condition of a cold start, before anything
+                // is on screen, not something appearing in front of the user.
+                const bool makeHere = (SR == 0) || (y >= kMixH) || seeding;
+                if (makeHere) {
+                    const float nz  = vnoise(u * aspect * freq + t * 0.7f,
+                                             v * freq - t * 0.5f, 0);
+                    const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
+                                             v * freq * 2.3f + t * 0.3f, 7);
+                    float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
+                    // film_hue2_cover (FINAL-CYCLE C): the value noise has mean ~0.5
+                    // and bilinear advection pulls the extremes toward it, so the
+                    // share above the 0.62 seam shrinks on the way up (10-15% at
+                    // 150 s). A bias on the TARGET moves the whole distribution:
+                    // more material past the hue2 seam, less below the hue3 one.
+                    // Still made only here, below the edge. 0 skips it (identity).
+                    if (bias != 0.0f) tgt = fminf(fmaxf(tgt + bias, 0.0f), 1.0f);
+                    const float k = seeding ? 1.0f : (1.0f - expf(-decay * dt));
+                    next[(size_t)y * kMixW + x] = src + (tgt - src) * k;
+                } else {
+                    // Visible row: pure advection. Deliberately NO decay here --
+                    // with the shipped 0.35 the relaxation time is under three
+                    // seconds, so a patch that entered at the bottom would be
+                    // gone before it had climbed a tenth of the screen and the
+                    // feature would not exist. Decay now shapes the material
+                    // while it is still being made, below the edge.
+                    next[(size_t)y * kMixW + x] = src;
+                }
             }
         }
-    }
-    m_mixField.swap(next);
+        field.swap(next);
+    };
+    stepField(m_mixField, !m_mixSeeded, a.filmHue2Cover);
     m_mixSeeded = true;
+    // Coverage logger shadow fields: diagnostics only, empty unless the shot
+    // run asked for a sweep, and nothing drawn ever reads them.
+    if (!m_coverBias.empty()) {
+        if (m_coverFields.size() != m_coverBias.size()) {
+            m_coverFields.assign(m_coverBias.size(), std::vector<float>());
+            m_coverSeeded = false;
+        }
+        for (auto& f : m_coverFields)
+            if ((int)f.size() != N) { f.assign((size_t)N, 0.5f); m_coverSeeded = false; }
+        for (size_t i = 0; i < m_coverFields.size(); i++)
+            stepField(m_coverFields[i], !m_coverSeeded, m_coverBias[i]);
+        m_coverSeeded = true;
+    }
+}
+
+bool FluidRenderer::MixCoverage(int i, float out[8]) const {
+    const std::vector<float>* f = &m_mixField;
+    if (i >= 0) {
+        if ((size_t)i >= m_coverFields.size()) return false;
+        f = &m_coverFields[(size_t)i];
+    }
+    const int NV = kMixW * kMixH;          // the VISIBLE rows come first
+    if ((int)f->size() < NV) return false;
+    int c[7] = {};
+    double sum = 0.0;
+    for (int k = 0; k < NV; k++) {
+        const float v = (*f)[(size_t)k];
+        sum += v;
+        if (v > 0.62f) c[0]++;
+        if (v > 0.68f) c[1]++;
+        if (v >= 0.56f && v <= 0.68f) c[2]++;
+        if (v < 0.32f) c[3]++;
+        if (v < 0.28f) c[4]++;
+        if (v < 0.24f) c[5]++;
+        if (v < 0.20f) c[6]++;
+    }
+    for (int k = 0; k < 7; k++) out[k] = (float)c[k] / (float)NV;
+    out[7] = (float)(sum / NV);
+    return true;
 }
 
 void FluidRenderer::StepAcidBlobs(float dt) {

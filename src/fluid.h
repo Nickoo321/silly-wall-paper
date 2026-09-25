@@ -687,6 +687,12 @@ struct LiquidAcidConfig {
     //       loads the panel like the magenta one (ABL flat). Dims only.
     //       Both: 0 (share 1) = today, and the shader skips them.
     float filmHue3Share = 1.0f;   // 0..1       film_hue3_share
+    //   film_hue2_cover (FINAL-CYCLE C) how much of the frame the SECOND hue
+    //       takes: a CPU bias on the mix field's target, tgt' = saturate(tgt +
+    //       cover), made below the edge like every patch. + = more of the
+    //       second hue and less of the third (both ends of the same field);
+    //       0 = today, bit-identical (StepHueField skips it). No slot.
+    float filmHue2Cover = 0.0f;   // bias       film_hue2_cover
     float filmEqualLoad = 0.0f;   // 0..1       film_equal_load
     float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
     //   film_hue2_wobble        the contrast hue is not NAILED to an angle:
@@ -2128,6 +2134,25 @@ private:
     float    AnchorWarpDeg(float u, float h0Deg, float w) const;
     bool     m_mixSeeded = false;
     void StepHueField(float dt);
+    // FINAL-CYCLE C coverage logger (CPU only, never drawn): shadow copies of
+    // the mix field stepped with the SAME velocity and noise but their own
+    // film_hue2_cover bias (--cover-sweep a,b,..), so one headless run
+    // measures several biases; the sim never reads the mix field, so the
+    // flow they ride is the same flow the live field rides.
+    std::vector<float>              m_coverBias;
+    std::vector<std::vector<float>> m_coverFields;
+    bool                            m_coverSeeded = false;
+public:
+    void SetCoverSweep(const std::vector<float>& biases) { m_coverBias = biases; m_coverFields.clear(); m_coverSeeded = false; }
+    int  CoverSweepCount() const { return (int)m_coverBias.size(); }
+    float CoverSweepBias(int i) const { return m_coverBias[(size_t)i]; }
+    // Share of the VISIBLE mix cells (i = -1 the live field, else sweep i):
+    // out[0] > 0.62 (the hue2 seam), out[1] > 0.68 (full hue2), out[2] in the
+    // 0.56..0.68 seam band, out[3..6] < 0.32 / 0.28 / 0.24 / 0.20 (the hue3
+    // midpoint at film_hue3_share 1 / 0.75 / 0.5 / 0.25), out[7] field mean.
+    // False when the field is not running.
+    bool MixCoverage(int i, float out[8]) const;
+private:
     // Private stream for rise_respawn draws. Seeded from the same seed as the
     // population, stepped only by respawns, so a --shot replays exactly and
     // the fluid's own rand() sequence is never touched.

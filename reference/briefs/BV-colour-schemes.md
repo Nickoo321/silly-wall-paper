@@ -1,0 +1,58 @@
+# BV COLOUR SCHEMES — base hue + wheel scheme (brief, 2026-09-25)
+
+Source: the creative chat's shortlist (handoff\review\colour-mocks\combos-home.png, combos-mixups.png,
+mock.py; numpy mocks, NOT app renders), built against the user's four proven photos
+(handoff\review\proven\). User: proven = 1 colour or 2 (primary + secondary); 3 or 4 colours = a rare
+mix-up. Weights 7 : 2 : 1. Read EXECUTOR-CARD.md + AGENTS.md first. Depends on BU (split tone) merged.
+
+## Slot mapping (colours ride on the existing rotation; the whole palette rotates together)
+- Colour 1 = film hue (base).
+- Colour 2 = film_hue2 (signed offset from colour 1) + film_hue2_amt. Home pairs = big FLAT patches
+  like the photos: amt ~0.8-1, scale ~0.3-0.5, narrow seam.
+- Colour 3 = NEW film_hue3 (offset) + film_hue3_amt (+ scale/seed if the hue2 field needs a second
+  independent field; say how: a second patch field or a split of the hue2 field by threshold).
+  3- and 4-colour tiers only, smaller than colour 2 (≤ ~15% of the frame).
+- Colour 4 = the BU split-tone shadow tint (shadow_tone hue), darks only; 4-colour tier, plus a
+  subtle version in home "Lightroom".
+- Droplet dye and mass dye OFF in every tier (dye_lum 0, dye_droplet_lum -1): oil and droplets are
+  always black; rims pick up the patch hue through boundary reflections.
+
+## Sign = seam path. Degrees on the standard wheel (0 red, 60 yellow, 120 green, 180 cyan, 240 blue,
+300 magenta), + = increasing hue; the band between the two colours shows the hues the offset passes
+through and is a big part of why the photos work. If the shader's sign is the other way, FLIP it: the
+named seam colours are the spec.
+
+## The schemes (a preset each: reference\presets\Scheme - <name>.ini, partial overlays on monotone-post-0924)
+HOME, weight 7: 1 Return to Form: film 325 only (proven-1). 2 Lightroom: film 325 + teal shadow tint
+185 subtle. 3 Magenta/Mint: 325, hue2 +180, warm seam red-orange-yellow (proven-2). 4 Magenta/Cyan:
+325, hue2 -140, cool seam violet-blue (proven-3). 5 Blue/Coral: 215, hue2 +160, seam violet-magenta
+(proven-4). 6 Red/Sky: 355, hue2 -140. 7 Violet/Amber: 275, hue2 +125. 8 Teal/Orange: 190, hue2 -160.
+3-COLOUR, weight 2 (preference order): T1 Neon Demon 325, hue2 -140, hue3 +30 (no yellow/orange
+anywhere; best). T5 Euphoria 275, +125, -45. T2 Warm Arc 10, +30, -40. T3 Triad 325, -120, +120.
+T4 Split 215, +150, -150.
+4-COLOUR, weight 1: Q2 Synthwave 325, hue2 -145, hue3 +55, shadow 275 (best). Q3 Microscope 230,
+-105, +140, shadow 275. Q1 Square+ 325, +180, +90, shadow 235.
+
+## Rules (each becomes a key or a documented CPU rule; say which)
+1. Oil and droplets black in every tier.
+2. EQUAL LOAD: dim yellow/green/cyan FILMS so full-frame brightness ≈ today's magenta (ABL flat, no
+   blinding yellow) → a per-hue luminance weighting of film_level (CPU-side curve, key film_equal_load
+   0..1, default 0 = bit-identical).
+3. Gold/amber/yellow PATCHES need their own brightness lift or they go olive/mustard (mock T3/T4/Q1)
+   → key film_hue2_lift / film_hue3_lift, default 0.
+4. Weighted hue drift: the rotation lingers at proven anchors (magenta ~325 most, then blue 215,
+   red 355, violet 275) and glides faster through lime/mustard/olive → the hue rotation phase becomes
+   a warped clock (CPU-side, derived phase; key hue_anchor_weight 0..1, default 0 = linear = identical).
+5. Proportions: home pair film ≥ ~50% of the frame, colour 2 up to ~40%; third ≤ ~15%; fourth darks
+   only.
+6. Scheme changes FADE the extra colours out, swap the offsets, fade back in; never snap (director
+   transition; hue2/hue3 amt ramps).
+7. Shadow tint stays cool/violet, never yellow/olive.
+
+## Proof block (EXECUTOR-CARD §6): key-effect MAD for film_hue3/_amt/_lift, film_equal_load,
+hue_anchor_weight (with --shot-series 12:1.7 for the time keys); ALL new keys default to bit-identical
+(parity md5 + preset-identity fast MATCH + dxbc-cmp on the fluid PSO); one sheet per new key; one
+contact sheet of ALL 16 schemes rendered from the app (1280x720, --shot-delay 40) side by side with
+the mock → handoff\review\schemes\ for the creative chat; frame mean luminance per scheme (rule 2)
+within ±15% of Return to Form; sign check: a crop of the Magenta/Mint seam showing red-orange-yellow.
+Slots: laP38+ (laP35.w free; BU took laP36/37). Post pass rg1.y spares are AP's: do not take.

@@ -110,3 +110,9 @@ the film, film_hue2_lift/film_hue3_lift set > 0 on the yellow/gold/lime members.
 BU FOLLOW-UP (BU-b, after BU merges, own pre-flight): highlights tint + balance for the split tone
 (highlight_tone_hue, highlight_tone_amt, tone_balance; Lightroom semantics), so T3b and "Lightroom"
 can be built as a grade. Mock next: handoff\review\colour-mocks\combos-question-fix.png.
+
+## DECISIONS 3 (creative chat, 2026-09-25 ~08:40; agreed): keep all 14 patterns; Teal/Orange → 3-colour
+tier; Synthwave third +55 → +70; Square+ stays; luminance ACCEPTED as is (no brighten follow-up);
+home weights RtF ×3, Lightroom ×2, photo pairs ×1.5, Red/Sky + Violet/Amber ×1; BLOCKING GAP: second
+colour coverage 10-15% → raise toward the photos' 30-45% for HOME pairs, prove Magenta/Mint vs proven-2
+before ship (FINAL-CYCLE.md §C).

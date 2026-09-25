@@ -163,3 +163,7 @@ ui1 anyway) 654-733, 960, 1001-1029, 1073-1120, 1233, 1397; app_state.h:30. Repl
 director's preset folder. Proof after removal: parity md5 + dxbc-cmp IDENTICAL.
 WE variants for the cycle = the ~26 fluid moods (only "WE parity (fluid)" + the 4 Journey moods matter
 for the first cycle); the 41 acid/ink/mirror copies in moods\ are redundant with reference/presets.
+
+## DECISIONS 2 (creative chat, 2026-09-25 ~08:40; implementation agreed): see FINAL-CYCLE.md §A/§B —
+stages 2hue/rotate/lapd OUT, acid-rise-12 KEEP, ink + mirror KEEP (wild); hue bursts under oil = rare
+tamed event (user chose it over "off" in the chat's popup); WE entry splat burst + ink entry drop.

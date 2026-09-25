@@ -666,6 +666,15 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.dyeHueVary       = getF(S, L"dye_hue_vary", a.dyeHueVary);
         a.dyeThickHue      = getF(S, L"dye_thick_hue", a.dyeThickHue);
         a.dyeCore          = getF(S, L"dye_core", a.dyeCore);
+        a.lampGrey         = getF(S, L"lamp_grey", a.lampGrey);
+        a.lampGreySize     = getF(S, L"lamp_grey_size", a.lampGreySize);
+        a.lampGreyCool     = getF(S, L"lamp_grey_cool", a.lampGreyCool);
+        a.shadowTone       = getF(S, L"shadow_tone", a.shadowTone);
+        a.shadowToneLift   = getF(S, L"shadow_tone_lift", a.shadowToneLift);
+        a.shadowToneSat    = getF(S, L"shadow_tone_sat", a.shadowToneSat);
+        a.shadowTonePeriod = getF(S, L"shadow_tone_period", a.shadowTonePeriod);
+        a.shadowToneFade   = getF(S, L"shadow_tone_fade", a.shadowToneFade);
+        a.shadowToneHue    = getF(S, L"shadow_tone_hue", a.shadowToneHue);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1908,6 +1917,15 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"dye_hue_vary", a.dyeHueVary, 1);
         putF(S, L"dye_thick_hue", a.dyeThickHue, 1);
         putF(S, L"dye_core", a.dyeCore, 3);
+        putF(S, L"lamp_grey", a.lampGrey, 3);
+        putF(S, L"lamp_grey_size", a.lampGreySize, 3);
+        putF(S, L"lamp_grey_cool", a.lampGreyCool, 3);
+        putF(S, L"shadow_tone", a.shadowTone, 3);
+        putF(S, L"shadow_tone_lift", a.shadowToneLift, 3);
+        putF(S, L"shadow_tone_sat", a.shadowToneSat, 3);
+        putF(S, L"shadow_tone_period", a.shadowTonePeriod, 0);
+        putF(S, L"shadow_tone_fade", a.shadowToneFade, 0);
+        putF(S, L"shadow_tone_hue", a.shadowToneHue, 0);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);
@@ -2734,6 +2752,15 @@ static int RunShotMode() {
             ShotLog("[rig] lamp %.4f,%.4f  lens %.4f,%.4f  tilt %+.1fdeg  "
                     "focus %.4f  shift %+.3f,%+.3f px\n",
                     rg[0], rg[1], rg[2], rg[3], rg[4], rg[5], rg[6], rg[7]);
+            // brief BU: where the lamp-grey region is and what the split tone
+            // adds, so a series can be checked against the frames.
+            const LiquidAcidConfig& la = renderer.Config().acid;
+            if (la.enabled && (la.lampGrey > 1e-4f || la.shadowTone > 1e-4f)) {
+                float bu[7];
+                renderer.BuState(bu);
+                ShotLog("[bu] grey centre %.4f,%.4f corner %d sliding %d  tone %.5f,%.5f,%.5f\n",
+                        bu[0], bu[1], (int)bu[2], (int)bu[3], bu[4], bu[5], bu[6]);
+            }
         }
         // DIAGNOSTIC ONLY (brief A): FW_ACID_DUMP=1 writes a CSV of the acid
         // sim's CPU state beside each capture. Off unless the env var is set.

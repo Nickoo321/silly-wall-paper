@@ -30,7 +30,11 @@
 //   stage_count=N  current=K (written back: resume here after a restart)
 //   stage_K_file=<path, relative to the ini's folder, or absolute>
 //   stage_K_base=<optional base ini under the file>
-//   stage_K_dwell=<s, default 600>  stage_K_transition=cut|fade|lerp
+//   dwell=180 (default stage dwell, s)  jitter=0.3   -- every dwell max 240 s
+//   stage_K_dwell=<s, default [cycle] dwell>  stage_K_transition=cut|fade|lerp
+//   stage_K_overlay=1  (a partial ini, e.g. a Mirror preset, applied ON TOP of the
+//                       running look for its dwell, then removed: short fade, no
+//                       warm-up; counts as "the other look" so overlays never chain)
 //   stage_K_fade=<s total, split 3:5>  stage_K_fade_out / stage_K_fade_in
 //   stage_K_warmup=<sim s; default = the measured per-look value>
 //   stage_K_jitter=<+- fraction of dwell, default 0.3>
@@ -56,7 +60,8 @@ enum CyclePhase      { CYCLE_OFF = 0, CYCLE_DWELL, CYCLE_FADE_OUT, CYCLE_WARMUP,
 struct CycleStage {
     std::wstring file;             // as written (relative to the ini folder, or absolute)
     std::wstring base;             // optional declared base; empty = FluidConfig{} defaults
-    float dwellSec   = 600.0f;
+    float dwellSec   = -1.0f;      // -1 = [cycle] dwell; every dwell is clamped to 240 s
+    bool  overlay    = false;      // stage_N_overlay=1: partial ini ON TOP of the running look
     int   transition = CYCLE_TR_DEFAULT;
     float fadeOutSec = -1.0f;      // -1 = [cycle] fade_out
     float fadeInSec  = -1.0f;      // -1 = [cycle] fade_in
@@ -82,6 +87,8 @@ struct CycleConfig {
     int      warmupSteps = 8;      // sim steps per shown frame while black
     float    warmupStepHz = 144.0f;
     float    lerpSec = 4.0f;       // fluid -> fluid transition length
+    float    dwellSec = 180.0f;    // [cycle] dwell: default stage dwell (max 240)
+    float    jitter = 0.3f;        // [cycle] jitter: default +- fraction
     float    earlyDarkPct = 92.0f; // dark-screen trigger (fluid stages)
     float    minDwellSec = 60.0f;
     std::vector<CycleStage> stages;
@@ -119,6 +126,11 @@ bool CycleBoot(FluidConfig& cfg);
 // frame's dt, applies stages at the black point, returns what to render.
 CycleFrame CycleTick(FluidRenderer& r, float dt);
 bool CycleCoverageWanted();                  // renderer.SetCoverageWanted() value
+// keys.inc row pointers (via src/ui/ui_cycle.cpp): [cycle] enabled / dwell / lerp / jitter
+bool*  CycleUiEnabledPtr();
+float* CycleUiDwellPtr();
+float* CycleUiLerpPtr();
+float* CycleUiJitterPtr();
 void CycleSetLogger(void (*fn)(const char*));
 void CycleDescribe(char* out, size_t cap);   // one status line for the shot log
 // A preset picked by hand while cycling: the director lets go (session only).

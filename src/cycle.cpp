@@ -23,7 +23,13 @@ namespace {
 // no measurement (not in the first cycle): it borrows the oil value.
 const float kWarmupDefault[3] = { 6.0f, 14.0f, 14.0f };   // fluid, liquid_acid, ink
 const float kWarmupExtraCap = 30.0f;   // max extra sim s waiting for the hue glide
-const float kDefaultJitter = 0.3f;
+// User 2026-09-25: "it should really keep moving, but like up to 4 mins per
+// definite stage" -> every dwell (per stage, [cycle] dwell, CLI, and the
+// jittered target) is clamped to this.
+const float kMaxDwellSec = 240.0f;
+// An overlay stage's own fades (it snaps a fold on/off, no look switch, no
+// warm-up): short, unless the stage sets stage_N_fade_out / _fade_in.
+const float kSoftFadeOut = 0.6f, kSoftFadeIn = 0.9f;
 
 CycleConfig  s_cfg;
 std::wstring s_iniPath;              // where [cycle] was read from
@@ -44,6 +50,14 @@ int   s_lerpSub = LERP_SHIFT;
 FluidConfig s_from, s_target;
 // the journey of the current fluid stage
 bool  s_journeyWasActive = false;
+// overlay stages (stage_N_overlay=1): a partial ini applied ON TOP of the look
+// stage s_base for its dwell, then removed by restoring s_preOverlay
+int   s_base = -1;                   // the look stage under the current overlay
+FluidConfig s_preOverlay;
+float s_prePeak = -1.0f;
+int   s_preGamut = 2;
+bool  s_soft = false;                // this FADE_OUT/FADE_IN is an overlay on/off
+int   s_softStage = -1;              // the overlay stage whose fade keys apply
 // CLI overrides
 float    s_dwellOverride = -1.0f;
 float    s_jitterOverride = -1.0f;
@@ -177,24 +191,36 @@ int OkCount() {
     return n;
 }
 bool Valid(int i) { return i >= 0 && i < (int)s_cfg.stages.size() && s_cfg.stages[i].ok; }
-bool IsFluid(int i) { return Valid(i) && s_cfg.stages[i].look == CYCLE_LOOK_FLUID; }
+bool IsOverlay(int i) { return Valid(i) && s_cfg.stages[i].overlay; }
+bool IsFluid(int i) { return Valid(i) && !s_cfg.stages[i].overlay && s_cfg.stages[i].look == CYCLE_LOOK_FLUID; }
+// the look stage actually running (an overlay's base)
+int LookStage(int i) { return IsOverlay(i) ? s_base : i; }
 
 float DwellOf(int i) {
-    if (s_dwellOverride > 0.0f) return s_dwellOverride;
-    return Valid(i) ? fmaxf(s_cfg.stages[i].dwellSec, 1.0f) : 600.0f;
+    float v = s_dwellOverride > 0.0f ? s_dwellOverride
+            : (Valid(i) && s_cfg.stages[i].dwellSec > 0.0f ? s_cfg.stages[i].dwellSec : s_cfg.dwellSec);
+    return fminf(fmaxf(v, 1.0f), kMaxDwellSec);
 }
 float JitterOf(int i) {
     if (s_jitterOverride >= 0.0f) return s_jitterOverride;
-    const float j = Valid(i) && s_cfg.stages[i].jitter >= 0.0f ? s_cfg.stages[i].jitter : kDefaultJitter;
+    const float j = Valid(i) && s_cfg.stages[i].jitter >= 0.0f ? s_cfg.stages[i].jitter : s_cfg.jitter;
     return fminf(fmaxf(j, 0.0f), 0.9f);
 }
 float FadeOutOf(int i) {
+    if (s_soft) {
+        const float v = Valid(s_softStage) ? s_cfg.stages[s_softStage].fadeOutSec : -1.0f;
+        return v >= 0.0f ? v : kSoftFadeOut;
+    }
     if (!Valid(i)) return s_cfg.fadeOutSec;
     const CycleStage& st = s_cfg.stages[i];
     if (st.transition == CYCLE_TR_CUT) return 0.0f;
     return st.fadeOutSec >= 0.0f ? st.fadeOutSec : s_cfg.fadeOutSec;
 }
 float FadeInOf(int i) {
+    if (s_soft) {
+        const float v = Valid(s_softStage) ? s_cfg.stages[s_softStage].fadeInSec : -1.0f;
+        return v >= 0.0f ? v : kSoftFadeIn;
+    }
     if (!Valid(i)) return s_cfg.fadeInSec;
     const CycleStage& st = s_cfg.stages[i];
     if (st.transition == CYCLE_TR_CUT) return 0.0f;
@@ -348,7 +374,7 @@ void PushHistory(int from, int to) {
 void AttachJourney(int i) {
     JourneyDetach();
     s_journeyWasActive = false;
-    if (!IsFluid(i)) return;
+    if (!IsFluid(i)) return;                 // overlays never carry a journey
     const CycleStage& st = s_cfg.stages[i];
     if (!st.journey.empty()) JourneyAttachNamed(st.journey.c_str(), st.path.c_str());
     else                     JourneyAttach(st.path.c_str());
@@ -377,8 +403,10 @@ void EnterDwell(FluidRenderer& r, int i) {
     s_dwellT = 0.0f;
     s_darkSince = -1.0f;
     const float j = JitterOf(i);
-    s_dwellTarget = DwellOf(i) * (1.0f - j + 2.0f * j * NextUnit());
-    r.SetCoverageWanted(IsFluid(i));    // dark trigger + the next hue bridge
+    s_dwellTarget = fminf(DwellOf(i) * (1.0f - j + 2.0f * j * NextUnit()), kMaxDwellSec);
+    s_soft = false;
+    s_softStage = -1;
+    r.SetCoverageWanted(IsFluid(LookStage(i)));   // dark trigger + the next hue bridge
     AttachJourney(i);
     Log("[cycle] dwelling in %d %ls (%.1f s = %.0f s +-%.0f%%)%s\n",
         i + 1, s_cfg.stages[i].name.c_str(), s_dwellTarget, DwellOf(i), j * 100.0f,
@@ -396,6 +424,7 @@ void ApplyStage(FluidRenderer& r, int i) {
     r.EnsureLookResources();        // PSO compile on first use (the screen is black)
     const double compileMs = r.LastLookCompileMs() + r.PrecompilePostPsos();
     r.ResetLookState();
+    s_base = -1;                    // a fresh composition drops any overlay
     PushHistory(s_cur, i);
     s_cur = i;
     s_next = -1;
@@ -424,17 +453,26 @@ int PickNext() {
         }
         return -1;
     }
-    // alternate_random: uniform over the stages whose LOOK differs from the
-    // current one; never the same file twice in a row
+    // alternate_random: weighted over the stages whose LOOK differs from the
+    // running one; never the same file twice in a row. An overlay stage counts
+    // as "the other look", so overlays never chain: after one, the next is a
+    // look stage of a different look than the one under the overlay.
     if (!s_rngSeeded) SeedRng();
-    const int curLook = Valid(s_cur) ? s_cfg.stages[s_cur].look : -1;
+    const bool onOverlay = IsOverlay(s_cur);
+    const int  ls = LookStage(s_cur);
+    const int  curLook = Valid(ls) ? s_cfg.stages[ls].look : -1;
     const std::wstring curPath = Valid(s_cur) ? s_cfg.stages[s_cur].path : L"";
+    auto samePath = [&](int j) { return _wcsicmp(s_cfg.stages[j].path.c_str(), curPath.c_str()) == 0; };
     std::vector<int> cands;
-    for (int j = 0; j < n; j++)
-        if (Valid(j) && j != s_cur && s_cfg.stages[j].look != curLook) cands.push_back(j);
+    for (int j = 0; j < n; j++) {
+        if (!Valid(j) || j == s_cur || samePath(j)) continue;
+        const bool ov = s_cfg.stages[j].overlay;
+        if (onOverlay) { if (!ov && s_cfg.stages[j].look != curLook) cands.push_back(j); }
+        else if (Valid(s_cur) ? (ov || s_cfg.stages[j].look != curLook) : !ov) cands.push_back(j);
+    }
     if (cands.empty())
         for (int j = 0; j < n; j++)
-            if (Valid(j) && j != s_cur && _wcsicmp(s_cfg.stages[j].path.c_str(), curPath.c_str()) != 0)
+            if (Valid(j) && j != s_cur && !samePath(j) && !s_cfg.stages[j].overlay)
                 cands.push_back(j);
     if (cands.empty()) return -1;
     // weighted draw (stage_N_weight, default 1); logged so a seeded run shows it
@@ -495,6 +533,8 @@ void GoOff(const char* why) {
 
 // Does cur -> target lerp (both fluid, not forced to fade/cut)?
 bool WantsLerp(int target) {
+    // leaving an overlay always fades: the lerp's t=1 config would drop the
+    // overlay's keys (a mirror fold) in one visible snap
     if (!IsFluid(s_cur) || !IsFluid(target)) return false;
     const int tr = s_cfg.stages[target].transition;
     return tr == CYCLE_TR_DEFAULT || tr == CYCLE_TR_LERP;
@@ -545,6 +585,9 @@ void FinishLerp(FluidRenderer& r) {
 
 void BeginSwitch(FluidRenderer& r, int target) {
     if (!Valid(target)) return;
+    // an overlay can only go on over a formed look: not mid black / hard fade
+    if (IsOverlay(target) && (s_phase == CYCLE_WARMUP || (s_phase == CYCLE_FADE_OUT && !s_soft))) return;
+    if (s_phase == CYCLE_FADE_OUT && s_soft) return;   // a soft switch is 0.6 s: let it land
     if (s_phase == CYCLE_WARMUP) {          // still black: re-target in place
         ApplyStage(r, target);
         r.ReleaseHueShift(false);
@@ -565,6 +608,12 @@ void BeginSwitch(FluidRenderer& r, int target) {
         BeginLerp(r, target);
         return;
     }
+    // Soft switch (short fade, no black hold, no sim reset): an overlay goes on
+    // over the running look, or comes off back onto exactly its base stage.
+    const bool haveLook = Valid(LookStage(s_cur));
+    s_soft = haveLook && (IsOverlay(target) || (IsOverlay(s_cur) && target == s_base));
+    s_softStage = s_soft ? (IsOverlay(target) ? target : s_cur) : -1;
+    if (IsOverlay(target) && !haveLook) return;   // nothing to fold: never an overlay first
     // from DWELL (fade 1) or mid FADE_IN (fade s_fade): dim from where it is
     s_fadeFrom = (s_phase == CYCLE_FADE_IN) ? s_fade : 1.0f;
     s_next = target;
@@ -575,6 +624,45 @@ void BeginSwitch(FluidRenderer& r, int target) {
     Log("[cycle] switching %ls -> %ls (fade out %.2f s)\n",
         Valid(s_cur) ? s_cfg.stages[s_cur].name.c_str() : L"-",
         s_cfg.stages[target].name.c_str(), FadeOutOf(target));
+}
+
+// The bottom of a SOFT fade: put an overlay on (restoring any previous one
+// first) or take it off, in memory, keeping the sim, the look and its PSOs.
+void SoftPoint(FluidRenderer& r) {
+    const int target = s_next;
+    FluidConfig& c = r.Config();
+    if (IsOverlay(s_cur)) {                  // restore the pre-overlay values
+        c = s_preOverlay;
+        g_hdrPeakNits = s_prePeak;
+        g_gamutMode = s_preGamut;
+    } else {
+        s_base = s_cur;
+    }
+    if (IsOverlay(target)) {
+        s_preOverlay = c;
+        s_prePeak = g_hdrPeakNits;
+        s_preGamut = g_gamutMode;
+        const FluidConfig shell = c;
+        LoadConfigFromFile(s_cfg.stages[target].path.c_str(), c);
+        c.simRes = shell.simRes; c.dyeRes = shell.dyeRes;       // SHELL keys stay
+        c.fpsLimit = shell.fpsLimit; c.mirrorSecond = shell.mirrorSecond;
+        c.acid.enabled = shell.acid.enabled;                     // an overlay never
+        c.ink.enabled = shell.ink.enabled;                       // switches the look
+        r.ReinitWanderers();
+        Log("[cycle] overlay %d %ls ON over %d %ls\n", target + 1, s_cfg.stages[target].name.c_str(),
+            s_base + 1, Valid(s_base) ? s_cfg.stages[s_base].name.c_str() : L"-");
+    } else {
+        r.ReinitWanderers();
+        Log("[cycle] overlay OFF, back on %d %ls (pre-overlay values restored)\n",
+            target + 1, s_cfg.stages[target].name.c_str());
+        s_base = -1;
+    }
+    PushHistory(s_cur, target);
+    s_cur = target;
+    s_next = -1;
+    PersistCurrent();
+    s_phase = CYCLE_FADE_IN;                 // no warm-up: nothing was reset
+    s_phaseT = 0.0f;
 }
 
 void BlackPoint(FluidRenderer& r) {
@@ -618,6 +706,12 @@ void CycleLoad(const wchar_t* ini) {
     s_cfg.warmupStepHz = IniF(S, L"warmup_step_hz", 144.0f, I);
     if (s_cfg.warmupStepHz < 30.0f) s_cfg.warmupStepHz = 30.0f;
     s_cfg.lerpSec = fmaxf(IniF(S, L"lerp", 4.0f, I), 1.0f);
+    s_cfg.dwellSec = IniF(S, L"dwell", 180.0f, I);
+    if (s_cfg.dwellSec > kMaxDwellSec) {
+        Log("[cycle] [cycle] dwell=%.0f clamped to %.0f s (the 4-minute maximum)\n", s_cfg.dwellSec, kMaxDwellSec);
+        s_cfg.dwellSec = kMaxDwellSec;
+    }
+    s_cfg.jitter = fminf(fmaxf(IniF(S, L"jitter", 0.3f, I), 0.0f), 0.9f);
     s_cfg.earlyDarkPct = IniF(S, L"early_switch_darkpct", 92.0f, I);
     s_cfg.minDwellSec = IniF(S, L"min_dwell", 60.0f, I);
     const int count = (int)GetPrivateProfileIntW(S, L"stage_count", 0, I);
@@ -628,7 +722,13 @@ void CycleLoad(const wchar_t* ini) {
         st.file = IniStr(S, K(L"file"), I);
         if (st.file.empty()) continue;
         st.base = IniStr(S, K(L"base"), I);
-        st.dwellSec = IniF(S, K(L"dwell"), 600.0f, I);
+        st.dwellSec = IniF(S, K(L"dwell"), -1.0f, I);
+        if (st.dwellSec > kMaxDwellSec) {
+            Log("[cycle] stage %d dwell=%.0f clamped to %.0f s (the 4-minute maximum)\n",
+                k, st.dwellSec, kMaxDwellSec);
+            st.dwellSec = kMaxDwellSec;
+        }
+        st.overlay = GetPrivateProfileIntW(S, K(L"overlay"), 0, I) != 0;
         std::wstring tr = IniStr(S, K(L"transition"), I);
         if (_wcsicmp(tr.c_str(), L"cut") == 0)       st.transition = CYCLE_TR_CUT;
         else if (_wcsicmp(tr.c_str(), L"fade") == 0) st.transition = CYCLE_TR_FADE;
@@ -671,8 +771,11 @@ bool CycleBoot(FluidConfig& cfg) {
     int start = -1;
     if (Valid(s_startStage)) start = s_startStage;
     else if (Valid(s_saved)) start = s_saved;
-    else start = PickNext();                 // s_cur = -1: fixed -> first, random -> any
-    if (!Valid(start)) return false;
+    else start = PickNext();                 // s_cur = -1: fixed -> first, random -> a look
+    // an overlay needs a look under it: boot on the next look stage instead
+    for (int k = 0; k < (int)s_cfg.stages.size() && IsOverlay(start); k++)
+        start = (start + 1) % (int)s_cfg.stages.size();
+    if (!Valid(start) || IsOverlay(start)) return false;
     FluidConfig c;
     float peak;
     int gamut;
@@ -719,7 +822,7 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
         if (s_paused) break;                 // Settings open: the dwell timer holds
         s_dwellT += dt;
         bool early = false;
-        if (IsFluid(s_cur)) {
+        if (IsFluid(s_cur)) {                // fluid LOOK stages only (not overlays)
             // the conductor's dark-screen trigger: past min dwell, the field
             // has been >= early_switch_darkpct dark for 10 s -> go now
             if (r.CoverageDarkPct() >= s_cfg.earlyDarkPct) {
@@ -741,7 +844,10 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
     case CYCLE_FADE_OUT: {
         s_phaseT += dt;
         const float fo = FadeOutOf(Valid(s_next) ? s_next : s_cur);
-        if (fo <= 0.0f || s_phaseT >= fo) BlackPoint(r);
+        if (fo <= 0.0f || s_phaseT >= fo) {
+            if (s_soft) SoftPoint(r);
+            else        BlackPoint(r);
+        }
         break;
     }
     case CYCLE_FADE_IN: {
@@ -808,8 +914,13 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
 }
 
 bool CycleCoverageWanted() {
-    return s_phase != CYCLE_OFF && (IsFluid(s_cur) || s_phase == CYCLE_LERP);
+    return s_phase != CYCLE_OFF && (IsFluid(LookStage(s_cur)) || s_phase == CYCLE_LERP);
 }
+
+bool*  CycleUiEnabledPtr() { return &s_cfg.enabled; }
+float* CycleUiDwellPtr()   { return &s_cfg.dwellSec; }
+float* CycleUiLerpPtr()    { return &s_cfg.lerpSec; }
+float* CycleUiJitterPtr()  { return &s_cfg.jitter; }
 
 void CycleManualOverride(const char* why) {
     if (s_phase == CYCLE_OFF) return;
@@ -879,7 +990,8 @@ std::wstring CycleStageLabel(int i) {
     const CycleStage& st = s_cfg.stages[i];
     wchar_t buf[512];
     _snwprintf_s(buf, _TRUNCATE, L"%d. %s (%s)%s", i + 1, st.name.c_str(),
-               st.look == CYCLE_LOOK_ACID ? L"oil" : (st.look == CYCLE_LOOK_INK ? L"ink" : L"WE fluid"),
+               st.overlay ? L"overlay"
+                          : (st.look == CYCLE_LOOK_ACID ? L"oil" : (st.look == CYCLE_LOOK_INK ? L"ink" : L"WE fluid")),
                st.ok ? L"" : L" [missing]");
     return buf;
 }
@@ -896,6 +1008,8 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.warmupSteps = c.warmupSteps < 1 ? 1 : (c.warmupSteps > 32 ? 32 : c.warmupSteps);
     s_cfg.warmupStepHz = c.warmupStepHz < 30.0f ? 30.0f : c.warmupStepHz;
     s_cfg.lerpSec = fmaxf(c.lerpSec, 1.0f);
+    s_cfg.dwellSec = fminf(fmaxf(c.dwellSec, 1.0f), kMaxDwellSec);
+    s_cfg.jitter = fminf(fmaxf(c.jitter, 0.0f), 0.9f);
     s_cfg.earlyDarkPct = c.earlyDarkPct;
     s_cfg.minDwellSec = c.minDwellSec;
     s_cfg.stages = c.stages;
@@ -921,6 +1035,8 @@ void CycleSet(const CycleConfig& c) {
         putI(L"warmup_steps", s_cfg.warmupSteps);
         putF(L"warmup_step_hz", s_cfg.warmupStepHz);
         putF(L"lerp", s_cfg.lerpSec);
+        putF(L"dwell", s_cfg.dwellSec);
+        putF(L"jitter", s_cfg.jitter);
         putF(L"early_switch_darkpct", s_cfg.earlyDarkPct);
         putF(L"min_dwell", s_cfg.minDwellSec);
         putI(L"stage_count", (int)s_cfg.stages.size());
@@ -929,7 +1045,8 @@ void CycleSet(const CycleConfig& c) {
             auto K = [&](const wchar_t* suffix) { swprintf_s(key, L"stage_%d_%s", k + 1, suffix); return key; };
             putS(K(L"file"), st.file.c_str());
             if (!st.base.empty()) putS(K(L"base"), st.base.c_str());
-            putF(K(L"dwell"), st.dwellSec);
+            if (st.dwellSec > 0.0f) putF(K(L"dwell"), fminf(st.dwellSec, kMaxDwellSec));
+            if (st.overlay) putS(K(L"overlay"), L"1");
             if (st.transition != CYCLE_TR_DEFAULT)
                 putS(K(L"transition"), st.transition == CYCLE_TR_CUT ? L"cut"
                                      : (st.transition == CYCLE_TR_LERP ? L"lerp" : L"fade"));
@@ -1037,7 +1154,10 @@ void CycleSetStageIncluded(const std::wstring& file, bool included, float dwellS
         if (!CycleHasStage(file)) {
             CycleStage st;
             st.file = file;
-            st.dwellSec = dwellSec;
+            st.dwellSec = fminf(dwellSec, kMaxDwellSec);
+            // a preset without [look] (the Mirror overlays) is an overlay stage
+            wchar_t sec[64] = {};
+            st.overlay = GetPrivateProfileSectionW(L"look", sec, 64, abs.c_str()) == 0;
             c.stages.push_back(st);
             changed = true;
         }

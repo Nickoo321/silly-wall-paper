@@ -2100,10 +2100,19 @@ int FluidRenderer::AcidBlobCount() const {
 
 // animators.h live-value getters: the same formulas the constant upload uses,
 // read-only (they cannot change a frame).
+static void RgbToHsv(const float c[3], float& h, float& sv, float& v);   // below
 float FluidRenderer::PaletteHueDeg() const {
     const LiquidAcidConfig& a = m_cfg.acid;
     if (!(a.hueRotatePeriod > 0.01f)) return 0.0f;
-    return 360.0f * fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+    const float u = fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+    // brief BV: the warped clock (exact with the sweep off, which every Scheme
+    // preset sets; with the sweep on the upload warps from the swept hue).
+    if (a.hueAnchorWeight > 0.0005f) {
+        float h0, s0, v0;
+        RgbToHsv(&a.oilColors[0], h0, s0, v0);
+        return AnchorWarpDeg(u, h0 * 360.0f, a.hueAnchorWeight);
+    }
+    return 360.0f * u;
 }
 
 float FluidRenderer::PaletteSweepPos() const {
@@ -2681,10 +2690,11 @@ struct AcidParamsGPU {
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
-    float p36[4], p37[4];
+    // laP38: free (declared so BU-b's laP39 can follow).
+    float p36[4], p37[4], p38[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1712, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1728, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -5029,6 +5039,68 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_rig.movePhase = 0.0f;
 }
 
+// ---- hue_anchor_weight (brief BV rule 4, pre-flight item 4) -------------
+// The rotation lingers at the proven anchors. Density over the ABSOLUTE
+// palette hue H: d(H) = 1 + 4*w*sum a_i*g(H - anchor_i), g a wrapped gaussian
+// (sigma 20 deg); m_anchorCdf[j] = the integral of d over 0..j*360/256,
+// normalised to 0..1 (257 entries). The linear clock u (0..1) advances the
+// cumulative position from the palette's own hue h0: F(H) = F(h0) + u (mod
+// 1), and the returned rotation is H - h0 (mod 360). u = 0 gives exactly 0
+// (same table both ways), u -> 1 gives 360 (seamless wrap), monotone. At
+// w = 1 magenta dwells ~5x longer per degree than a plain hue, the
+// lime/mustard band ~2.4x shorter than linear. Table rebuilt only when w
+// changes; one binary search per frame.
+float FluidRenderer::AnchorWarpDeg(float u, float h0Deg, float w) const {
+    if (fabsf(w - m_anchorCdfW) > 1e-6f) {
+        static const float kAnc[4][2] = { {325.0f, 1.0f}, {215.0f, 0.6f},
+                                          {355.0f, 0.5f}, {275.0f, 0.4f} };
+        const float sig = 20.0f;
+        double acc = 0.0;
+        double dens[257];
+        for (int j = 0; j <= 256; j++) {
+            const float H = 360.0f * (float)j / 256.0f;
+            double d = 1.0;
+            for (int k = 0; k < 4; k++) {
+                float dh = fmodf(fabsf(H - kAnc[k][0]), 360.0f);
+                if (dh > 180.0f) dh = 360.0f - dh;
+                d += 4.0 * w * kAnc[k][1] * exp(-0.5 * (dh / sig) * (dh / sig));
+            }
+            dens[j] = d;
+        }
+        m_anchorCdf[0] = 0.0f;
+        double cum[257]; cum[0] = 0.0;
+        for (int j = 1; j <= 256; j++) {
+            acc += 0.5 * (dens[j - 1] + dens[j]);
+            cum[j] = acc;
+        }
+        for (int j = 0; j <= 256; j++) m_anchorCdf[j] = (float)(cum[j] / acc);
+        m_anchorCdf[256] = 1.0f;
+        m_anchorCdfW = w;
+    }
+    auto F = [&](float H) {          // H in [0,360) -> 0..1, piecewise linear
+        const float x = H * (256.0f / 360.0f);
+        int j = (int)floorf(x);
+        if (j < 0) j = 0; if (j > 255) j = 255;
+        const float t = x - (float)j;
+        return m_anchorCdf[j] + (m_anchorCdf[j + 1] - m_anchorCdf[j]) * t;
+    };
+    auto Finv = [&](float y) {       // 0..1 -> H in [0,360]
+        int lo = 0, hi = 256;
+        while (hi - lo > 1) { const int mid = (lo + hi) >> 1; if (m_anchorCdf[mid] <= y) lo = mid; else hi = mid; }
+        const float span = m_anchorCdf[lo + 1] - m_anchorCdf[lo];
+        const float t = span > 1e-9f ? (y - m_anchorCdf[lo]) / span : 0.0f;
+        return 360.0f * ((float)lo + t) / 256.0f;
+    };
+    float h0 = fmodf(h0Deg, 360.0f); if (h0 < 0.0f) h0 += 360.0f;
+    const float f0 = F(h0);
+    float y = f0 + u;
+    if (y >= 1.0f) y -= 1.0f;
+    float d = Finv(y) - h0;
+    if (d < 0.0f) d += 360.0f;
+    if (u > 0.5f && d < 1e-3f) d = 360.0f;   // the wrap end, never a snap back
+    return d;
+}
+
 void FluidRenderer::UploadAcidConstants() {
     const LiquidAcidConfig& a = m_cfg.acid;
     const UINT fi = m_frameIndex;
@@ -5082,7 +5154,15 @@ void FluidRenderer::UploadAcidConstants() {
     // turning, not as confetti. The ink is untouched -- on the mono-ink
     // tile9 family it stays grey and the holes stay black through every hue.
     if (a.hueRotatePeriod > 0.01f) {
-        const float deg = 360.0f * fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+        float deg = 360.0f * fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+        // brief BV rule 4, hue_anchor_weight: a WARPED clock. 0 keeps the
+        // line above exactly (identity by construction: this block is skipped).
+        if (a.hueAnchorWeight > 0.0005f) {
+            float h0, s0, v0;
+            RgbToHsv(&effOil[0], h0, s0, v0);   // the palette's own hue, 0..1
+            deg = AnchorWarpDeg(fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f),
+                                h0 * 360.0f, a.hueAnchorWeight);
+        }
         for (int ci = 0; ci < 4; ci++) HsvHueShiftCpu(&effOil[ci * 3], deg);
     }
     // ---- oil_saturation: one vividness knob, whatever fed the palette ----
@@ -5265,7 +5345,7 @@ void FluidRenderer::UploadAcidConstants() {
         p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
         p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
         p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
-        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35, p.p36, p.p37 };
+        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35, p.p36, p.p37, p.p38 };
     auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
 
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
@@ -5497,6 +5577,10 @@ void FluidRenderer::UploadAcidConstants() {
     slot(LA_HUE2_DEG,     hue2Eff);
     slot(LA_HUE3_AMT,     fminf(fmaxf(a.filmHue3Amt, 0.0f), 1.0f));
     slot(LA_HUE3_DEG,     a.filmHue3);
+    // brief BV: hue3 share (1 = today's thresholds), equal load (base film).
+    // 1 / 0 = today; the shader branches them out.
+    slot(LA_HUE3_SHARE,   fminf(fmaxf(a.filmHue3Share, 0.0f), 1.0f));
+    slot(LA_EQUAL_LOAD,   fminf(fmaxf(a.filmEqualLoad, 0.0f), 1.0f));
     // REFLECT_R / REFLECT_AMT: brief AJ, the boundary-reflection reach
     // (screen heights) and how much of the seam's hue a rim takes. 0 reach =
     // today, and the shader skips the whole probe.

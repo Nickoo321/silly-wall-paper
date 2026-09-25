@@ -199,6 +199,8 @@ KEY_SLIDER("Palettes in the sweep list", 1, 12, 1, 0, nullptr, &c.acid.sweepCoun
            G_COLOUR, "A", "liquid_acid.hue_sweep_period>0", 0, "", "")
 KEY_SLIDER("Hue rotation (s per turn, 0=off)", 0, 3600, 10, 0, &c.acid.hueRotatePeriod, nullptr, "liquid_acid", "hue_rotate_period", false, "Continuously rotates the whole oil palette's hue. The ink is untouched, so mono ink stays grey and the holes stay black. 0 = off",
            G_COLOUR, "A", "", 0, "zero:off", "A")
+KEY_SLIDER("  linger at anchor hues", 0, 1, 0.05f, 2, &c.acid.hueAnchorWeight, nullptr, "liquid_acid", "hue_anchor_weight", false, "Warps the hue rotation's clock so it lingers at the proven hues (magenta most, then blue, red, violet) and glides faster through lime/mustard/olive. 0 = even speed (brief BV)",
+           G_COLOUR, "A", "liquid_acid.hue_rotate_period>0", KF_MOTION, "zero:off", "")
 KEY_SLIDER("Oil saturation", 0, 2, 0.05f, 2, &c.acid.oilSaturation, nullptr, "liquid_acid", "oil_saturation", false, "Vividness of the oil palette, whichever source it came from. 1 = the authored colours",
            G_COLOUR, "A", "", 0, "", "")
 KEY_SLIDER("Film level", 0, 1, 0.02f, 2, &c.acid.filmLevel, nullptr, "liquid_acid", "film_level", false, "Brightness of the flat oil film (the background sheet). 1 = today; ~0.05 = the film pitch black so the dyed masses/droplets carry the colour. The edge light (mass rim, oil glow, halo, lens highlights) keeps the full palette and the mass/droplet dye is not touched",
@@ -357,6 +359,10 @@ KEY_SLIDER("Third film hue (deg)", -180, 180, 5.0f, 0, &c.acid.filmHue3, nullptr
            G_COLOUR, "A", "liquid_acid.film_hue3_amt>0", 0, "", "")
 KEY_SLIDER("  third hue amount", 0, 1, 0.05f, 2, &c.acid.filmHue3Amt, nullptr, "liquid_acid", "film_hue3_amt", false, "0 = off, which is the default",
            G_COLOUR, "A", "", 0, "", "")
+KEY_SLIDER("  third hue share", 0, 1, 0.05f, 2, &c.acid.filmHue3Share, nullptr, "liquid_acid", "film_hue3_share", false, "How much of the frame the third hue takes. 1 = as before (about 18%), 0.75 about 13%, 0.5 about 8%, 0 about 3%. Keep a bright yellow third small: a big yellow patch pushes the panel's ABL (brief BV)",
+           G_COLOUR, "A", "liquid_acid.film_hue3_amt>0", 0, "", "")
+KEY_SLIDER("Film equal load", 0, 1, 0.05f, 2, &c.acid.filmEqualLoad, nullptr, "liquid_acid", "film_equal_load", false, "Dims a yellow/green/cyan FILM to the brightness the same colour has at magenta, so every hue loads the panel alike (no blinding yellow). Patches are not touched. 0 = off (brief BV)",
+           G_COLOUR, "A", "", 0, "zero:off", "")
 KEY_SLIDER("  seam reflect reach", 0, 0.60f, 0.01f, 2, &c.acid.boundaryReflectR, nullptr, "liquid_acid", "boundary_reflect_r", false, "How far a hue2 SEAM reaches into the droplets around it, as a fraction of the screen HEIGHT. 0 = as before: a droplet carries the seam's colour only while it is standing in the seam, about one droplet across. Raised, the lit rims, lens highlights and glow of droplets this far away rotate toward the seam's own hue, fading smoothly so the nearest stay strongest. The film itself never changes and nothing is blurred",
            G_FILM, "A", "liquid_acid.boundary_reflect_amt>0", 0, "", "")
 KEY_SLIDER("  seam reflect amount", 0, 1, 0.05f, 2, &c.acid.boundaryReflectAmt, nullptr, "liquid_acid", "boundary_reflect_amt", false, "How much of the seam's own hue a rim right beside it takes. 1 = the full seam colour. Only does anything where the reach above is above 0",

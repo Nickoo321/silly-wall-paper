@@ -19,3 +19,4 @@ Format: date | item | files | creative verdict + reason | my position | outcome 
 2026-09-25 | request 4: swing | same | creative: ship 0.08 now; tonight's follow-up must keep photo-sized patches (no spotty islands, user rejected 'too bubbly'); else cap the peak ~55-60% | agree | KEPT (0.08)
 2026-09-25 | request 4: seam width | same | creative: NARROW to ~1/3 (thin yellow-orange line like proven-2); follow-up key approved | agree | KEPT (follow-up)
 2026-09-25 | note: black oil share | same | creative: photos have 20-30% black masses, renders <10% (corners) → structure pass later | agree | NOTED
+2026-09-25 | tamed burst (director) | build2/shots/live/final/burst-anchor-start.png | n/a (measured: -28..-38% dip / +41% landed; patches escape equal load) | ship cycle-final with burst_weight=0 until BW equal-loads the patches; keep the code | OUT for now (measured)

@@ -22,3 +22,14 @@ Read EXECUTOR-CARD.md (§7), AGENTS.md, BV-colour-schemes.md, FINAL-CYCLE.md §C
 NOTE for a later STRUCTURE pass (not this brief): the proven photos have big black oil masses at
 20-30% of the frame; the renders at 150 s have <10% in the corners. The black contrast is part of the
 look (creative chat, request 4).
+4. (from the director's report) EQUAL-LOAD THE PATCHES: film_equal_load today dims only the base film
+   (k2/k3 excluded); the tamed burst and the anchor drift both swing mean_lum by 30-40% because the
+   second-colour patches are never dimmed. Add a per-pixel option (key film_equal_load_patches 0..1,
+   default 0 = identical) that applies the equal-load target to the patch share too (mint/cyan at the
+   magenta target; yellow/gold/lime members keep the user's "stay bright" rule via a lower value on
+   those presets). Then re-measure the burst (<15% swing) and set burst_weight back to 1 if it passes.
+5. START PHASE: after an app start every Scheme shows an ORANGE film because the palette clock starts
+   at oil_color_1's hue (~22°): start the ANIM_PALETTE accumulator at the phase whose absolute hue is
+   the nearest anchor (325 for the shipped presets) — identical when hue_anchor_weight is 0 (say how).
+6. Rote: sync tools\bv-schemes.py with the presets (home pairs 0.08, Synthwave +70), manifest rows for
+   the 16 Scheme presets + acid-rise-12-tone-half.ini + cycle-final.ini.

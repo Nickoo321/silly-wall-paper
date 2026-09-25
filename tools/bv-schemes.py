@@ -21,7 +21,7 @@ EQ, SHARE3 = 0.75, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY v
 # (< 0.32: 10% mean at 0 -> 1% at 0.12), so the 3-/4-colour tiers take 0.04 with
 # film_hue3_share 1: bias 0.04 + share 1 is the same third-colour share as bias 0 + share
 # 0.75 had (0-180 s mean 5.7%, max 19%), with a larger second colour.
-COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.12, 0.04, 1.0
+COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.08, 0.04, 1.0
 PAIR_COVER_PATTERNS = ('Magenta Mint', 'Magenta Cyan', 'Blue Coral')
 
 # (file name, hue2, hue3, shadow hue or None, grade-only, [(named scheme, tier, anchor, note)])
@@ -53,7 +53,7 @@ PATTERNS = [
   [('Bright Split', 'T4b 3-COLOUR', 215, 'red + yellow; the yellow third stays BRIGHT (patches are not equal-loaded)')]),
  ('Lightroom Triad', None, None, 180, True,
   [('Lightroom Triad', 'T3b 3-COLOUR', 325, 'magenta film + teal shadows + gold highlights: a split-tone GRADE, not three patch colours')]),
- ('Synthwave', -145, 55, 275, False,
+ ('Synthwave', -145, 70, 275, False,
   [('Synthwave', 'Q2 4-COLOUR', 325, 'cyan + orange, violet darks (best)')]),
  ('Microscope', -105, 140, 275, False,
   [('Microscope', 'Q3 4-COLOUR', 230, 'green + red, violet darks')]),
@@ -70,6 +70,8 @@ def preset_text(fname, h2, h3, sh, grade, names):
     L.append('; rotation linger at the proven anchors (magenta 325 most, blue 215, red 355,')
     L.append('; violet 275). The named look is what the pattern shows at its ANCHOR hint.')
     pat = 'mono (film only)' if h2 is None else ('hue2 %+d' % h2) + ('' if h3 is None else ', hue3 %+d' % h3)
+    if fname == 'Synthwave':
+        pat += ' (creative decision 3: +55 -> +70)'
     L.append('; Pattern: %s%s.' % (pat, '' if sh is None else ', shadow tint %d (BU)' % sh))
     L.append('; Named schemes on this pattern (tier, anchor = film hue of the named look):')
     for n, tier, anc, note in names:
@@ -88,7 +90,7 @@ def preset_text(fname, h2, h3, sh, grade, names):
     if h2 is not None:
         cov = COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW
         L.append('; FINAL-CYCLE C: film_hue2_cover %g %s' % (cov,
-                 'raises the second colour toward the photos\' 30-45%% of the frame.' % () if cov == COVER_PAIR
+                 '(creative chat, 2026-09-25: 0.12 -> 0.08) raises the second colour toward the photos\' 30-45%% of the frame.' % () if cov == COVER_PAIR
                  else 'lifts the second colour a little (a warm or third colour stays small).'))
         if h3 is not None:
             L.append('; film_hue3_share %g keeps the third at today\'s ~6%% mean (<= ~15%%) under that bias.' % SHARE3_COVER)

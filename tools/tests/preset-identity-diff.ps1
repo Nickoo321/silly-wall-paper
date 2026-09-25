@@ -164,6 +164,9 @@ try {
     [System.IO.File]::WriteAllText($overIni, "[post]`r`nbloom=0`r`n", $utf8)
     $col2 = @(New-ComposedIni -BasePath $baseIni -OverlayPath $overIni -OutPath $outIni)
     Assert-Eq ($col2 -join ',') 'post' 'compose: [post] collision reported'
+    $text2 = [System.IO.File]::ReadAllText($outIni)
+    Assert-Eq ($text2 -match "\[post\]`r`nbloom=0`r`nbloom=0\.30") $true 'compose: colliding [post] merged, overlay key first'
+    Assert-Eq (([regex]::Matches($text2, '\[post\]')).Count) 1 'compose: merged section appears once'
 } finally {
     Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue
 }

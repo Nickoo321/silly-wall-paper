@@ -91,3 +91,22 @@ Slots: laP38+ (laP35.w free; BU took laP36/37). Post pass rg1.y spares are AP's:
 8. Start NOW from main; only "Lightroom" and the 4-colour tier need the split tone → render those
    after BU merges.
 Opinion (relayed verbatim to the user): 7:2:1 is right; build the 16 as ~9 offset patterns + anchors.
+
+## USER VERDICTS (via the creative chat, 2026-09-25 ~02:30; ticked on the phone) — FINAL for the tiers
+3-COLOUR (weight 2), all kept: T1 Neon Demon 325/-140/+30; T2 Warm Arc 10/+30/-40; T5 Euphoria
+275/+125/-45; T3a Bright Triad 325/-120 azure/+120 lime — the yellow-green member stays BRIGHT (not
+equal-loaded); T4b Bright Split 215/+150 red/-150 yellow — the yellow member stays BRIGHT; T3b
+Lightroom Triad = magenta film + teal + gold built with LIGHTROOM'S EFFECTS, not three patch colours
+(user: "copy Lightroom's effects, not just the resultant colors"): Lightroom split toning over the
+magenta film — Shadows hue ~175-185 teal (user's edit 171 / sat 100) + Highlights hue ~45 gold + a
+Balance control; the colour follows the frame's own light (lit film warms to gold, darks around the
+oil go teal), not flat zones. bu-lr-3/4 (graduated temp / desaturate) are the same idea: effects, not
+recolours.
+4-COLOUR (weight 1), all ticked: Q1 Square+, Q2 Synthwave, Q3 Microscope, offsets as listed.
+RULE CHANGE: yellow/gold/lime MEMBERS of a combo stay bright (dimming to equal load turns them olive);
+FILMS still follow equal load; keep the bright yellow member as the SMALLER colour (third, ≤ ~15%)
+because a large bright yellow patch pushes ABL. → in the scheme presets: film_equal_load applies to
+the film, film_hue2_lift/film_hue3_lift set > 0 on the yellow/gold/lime members.
+BU FOLLOW-UP (BU-b, after BU merges, own pre-flight): highlights tint + balance for the split tone
+(highlight_tone_hue, highlight_tone_amt, tone_balance; Lightroom semantics), so T3b and "Lightroom"
+can be built as a grade. Mock next: handoff\review\colour-mocks\combos-question-fix.png.

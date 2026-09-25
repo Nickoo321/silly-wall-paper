@@ -72,7 +72,7 @@ KEY_SLIDER("Interval (s)", 1, 30, 1, 0, &c.dartInterval, nullptr, "behavior", "d
 KEY_SLIDER("Speed (px/s)", 500, 6000, 50, 0, &c.dartSpeed, nullptr, "behavior", "dart_speed", false, "Dart travel speed",
            G_FLUID, "FAI", "behavior.dart_enabled>0", 0, "", "")
 KEY_SLIDER("Peak brightness (nits, 0 = off)", 0, 1500, 5, 0, &g_hdrPeakNits, nullptr, "hdr", "peak_nits", false, "HDR hot-spot target. 0 = match SDR",
-           G_OUTPUT, "FAI", "", KF_GLOBAL, "peak", "FAI")
+           G_OUTPUT, "FAI", "", KF_GLOBAL, "peak", "")
 KEY_SLIDER("Knee (boost starts at)", 0.1f, 1.3f, 0.02f, 2, &c.hdrKnee, nullptr, "hdr", "knee", false, "Dye level where HDR highlight boost begins",
            G_OUTPUT, "FAI", "hdr.compensation>0", KF_UNVERIFIED|KF_GLOBAL, "", "")
 KEY_SLIDER("Saturation boost", 1, 2, 0.01f, 2, &c.hdrSaturation, nullptr, "hdr", "saturation", false, "Extra punch while Windows HDR is on",
@@ -340,7 +340,7 @@ KEY_SLIDER("  weather period (s)", 30, 1200, 10.0f, 0, &c.acid.weatherPeriodS, n
 KEY_SLIDER("Second film hue (deg)", -180, 180, 5.0f, 0, &c.acid.filmHue2, nullptr, "liquid_acid", "film_hue2", false, "How far off the palette's own hue the second dye is. Roughly complementary reads like the reference: cyan patches in a magenta film",
            G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "", "")
 KEY_SLIDER("  second hue amount", 0, 1, 0.05f, 2, &c.acid.filmHue2Amt, nullptr, "liquid_acid", "film_hue2_amt", false, "How far the film goes toward that hue inside a patch. 0 = one colour, as before",
-           G_COLOUR, "A", "", 0, "", "")
+           G_COLOUR, "A", "", 0, "", "A")
 KEY_SLIDER("  patch size", 0.08f, 0.90f, 0.05f, 2, &c.acid.filmHue2Scale, nullptr, "liquid_acid", "film_hue2_scale", false, "Patch size as a fraction of the frame. A quarter to a half is the reference's scale",
            G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "", "")
 KEY_SLIDER("  patch drift", 0, 2, 0.05f, 2, &c.acid.filmHue2Drift, nullptr, "liquid_acid", "film_hue2_drift", false, "How fast the patches wander on their own, on top of being carried by the sim's flow",
@@ -430,11 +430,11 @@ KEY_SLIDER("Dye layer slope", 0, 1, 0.02f, 2, &c.acid.dyeDepthTilt, nullptr, "li
 KEY_SLIDER("Dye depth weight", 0.05f, 2, 0.05f, 2, &c.acid.dyeDepthW, nullptr, "liquid_acid", "dye_depth_w", false, "How much the dye layer counts against the droplets where they overlap. Higher pulls a droplet's focus toward the film it sits in; 0.25 is the original blend",
            G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye hue (deg)", 0, 360, 5, 0, &c.acid.dyeHue, nullptr, "liquid_acid", "dye_hue", false, "The colour the dark masses take. With Dye follows film on, this is an OFFSET from the film's own hue, so the two turn together; with it off it is an absolute hue. 0..360 covers the circle either way",
-           G_MASSES, "A", "", 0, "", "A")
+           G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye saturation", 0, 1, 0.05f, 2, &c.acid.dyeSat, nullptr, "liquid_acid", "dye_sat", false, "How coloured the dark masses are. The full 0..1 is useful here because the dye sits at a very low value: even fully saturated it reads as a deep wax, not as a bright fill. 0 turns the dye OFF (today's neutral black), it is not a grey dye",
-           G_MASSES, "A", "", 0, "", "A")
+           G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye brightness", 0, 0.50f, 0.02f, 2, &c.acid.dyeLum, nullptr, "liquid_acid", "dye_lum", false, "How much lamp the THIN edge of a mass passes; the thick core keeps about 40% of it, which is what reads as translucent wax. Range from the dye4 sheet: under ~0.10 the mass is still black, 0.28-0.34 is the deep wax, and past ~0.45 the mass stops reading as dark at all. 0 = today's black",
-           G_MASSES, "A", "", 0, "", "A")
+           G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye follows film hue", 0, 1, 1, 0, nullptr, &c.acid.dyeHueFollow, "liquid_acid", "dye_hue_follow", false, "1 = Dye hue is an offset from the film's current hue, so the dye rotates with it under hue_rotate_period and the sweep and the pair stays designed. 0 = a fixed absolute hue",
            G_MASSES, "A", "", 0, "enum:0=Fixed hue|1=Follows film hue", "")
 KEY_SLIDER("Dye on masses", 0, 1, 0.05f, 2, &c.acid.dyeMasses, nullptr, "liquid_acid", "dye_masses", false, "How much dye the big masses (the gaps between oil blobs) take. 1 = today; 0 = masses pitch black while the droplets can still carry a dye of their own",
@@ -442,11 +442,11 @@ KEY_SLIDER("Dye on masses", 0, 1, 0.05f, 2, &c.acid.dyeMasses, nullptr, "liquid_
 KEY_SLIDER("Dye on droplets", 0, 1, 0.05f, 2, &c.acid.dyeDroplets, nullptr, "liquid_acid", "dye_droplets", false, "How much dye the small droplet holes take. 1 = today (every droplet dyed like a mass, which reads 'bubbly'); 0 = droplets stay black and only the big masses carry colour. A droplet within a few px of a mass shares the mass colour (more with Dye smoke)",
            G_MASSES, "A", "", KF_SUPERSEDED, "", "")
 KEY_SLIDER("Droplet dye hue (deg)", -5, 360, 5, 0, &c.acid.dyeDropHue, nullptr, "liquid_acid", "dye_droplet_hue", false, "The droplets' own dye hue, so masses and droplets can be two colours (main + accent). Below 0 = same as Dye hue. Follows the film like Dye hue when Dye follows film is on",
-           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "A")
+           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "")
 KEY_SLIDER("Droplet dye saturation", -0.05f, 1, 0.05f, 2, &c.acid.dyeDropSat, nullptr, "liquid_acid", "dye_droplet_sat", false, "The droplets' own dye saturation. Below 0 = same as Dye saturation; 0 = droplets black",
-           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "A")
+           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "")
 KEY_SLIDER("Droplet dye brightness", -0.02f, 0.50f, 0.02f, 2, &c.acid.dyeDropLum, nullptr, "liquid_acid", "dye_droplet_lum", false, "The droplets' own dye level, same scale as Dye brightness. Below 0 = same as Dye brightness; 0 = droplets black",
-           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "A")
+           G_DROPLETS, "A", "liquid_acid.droplets>0", 0, "neg:inherit", "")
 KEY_SLIDER("Dye smoke", 0, 1, 0.05f, 2, &c.acid.dyeSmoke, nullptr, "liquid_acid", "dye_smoke", false, "0 = today's wax: the dye stops hard at the mass edge and is brightest at the thin rim. Up = the dye thickens gradually into the mass, leaks a little out under the thin film and breaks into slow wisps, so it reads as smoke in the body rather than a tinted disc. Masses only; droplets keep their own dye. Needs Dye brightness > 0",
            G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye follows the lamp", 0, 1, 0.05f, 2, &c.acid.dyeLampFollow, nullptr, "liquid_acid", "dye_lamp_follow", false, "1 = today: the mass dye is lit by the lamp ramp and brightest at its thin edge. 0 = the dye ignores the lamp and the edge profile and sits at its core level everywhere -- a flat, dim ambient colour the lamp never lifts (brief BL). Inert while Dye brightness is 0",
@@ -468,7 +468,7 @@ KEY_SLIDER("Lamp grey size (screen h)", 0.25f, 0.60f, 0.05f, 2, &c.acid.lampGrey
 KEY_SLIDER("Lamp grey cool", 0, 1, 0.05f, 2, &c.acid.lampGreyCool, nullptr, "liquid_acid", "lamp_grey_cool", false, "How much of the grey is also a cool white balance (luminance kept). 0 = neutral grey; 1 = a blue-grey at the corner. Subtle: +1..3 deg of hue at 0.5 (brief BU)",
            G_OPTICS, "A", "liquid_acid.lamp_grey>0", 0, "", "")
 KEY_SLIDER("Shadow tone (split tone)", 0, 1, 0.05f, 2, &c.acid.shadowTone, nullptr, "liquid_acid", "shadow_tone", false, "Tints the black masses and droplets with the complement of the main film hue (OKLab opposite, turns with Hue rotation), lifting black by up to Shadow tone lift. Film, lit dye and rims untouched. Switches itself on and off (half the time) on its own slow clock, out of step with the hue. Gives up true black on the masses. Multiplies with the lift (0.5 x lift 0.12 = 1 x lift 0.06). 0 = off (brief BU)",
-           G_POST, "A", "", KF_MOTION, "", "")
+           G_POST, "A", "", KF_MOTION, "", "A")
 KEY_SLIDER("Shadow tone lift", 0, 0.15f, 0.01f, 2, &c.acid.shadowToneLift, nullptr, "liquid_acid", "shadow_tone_lift", false, "How far black is lifted at full tone, fraction of SDR white (sRGB-encoded). 0.06 = a deep tint (masses +0.025 luma), 0.12 = clearly coloured bodies (+0.047). Inert while Shadow tone is 0 (brief BU)",
            G_POST, "A", "liquid_acid.shadow_tone>0", 0, "", "")
 KEY_SLIDER("Shadow tone saturation", 0, 1, 0.05f, 2, &c.acid.shadowToneSat, nullptr, "liquid_acid", "shadow_tone_sat", false, "Saturation of the shadow tint. 0 = a neutral grey lift; 0.8 = the complement, rich. Inert while Shadow tone is 0 (brief BU)",
@@ -558,7 +558,7 @@ KEY_SLIDER("Lobe asymmetry", 0, 1, 0.02f, 2, &c.drops.asymmetry, nullptr, "drops
 KEY_SLIDER("Entry band bottom (uv y)", 0.02f, 0.9f, 0.01f, 2, &c.drops.yMax, nullptr, "drops", "y_max", false, "How far down the screen a drop may enter",
            G_FLUID, "FAI", "drops.drops>0", 0, "", "")
 KEY_SLIDER("Mirror mode", 0, 4, 1, 0, nullptr, &c.mirror.mode, "mirror", "mode", false, "Folds the picture about a centre. 3 = the 4-fold quad; 4 = wedges around the centre",
-           G_OUTPUT, "FAI", "", KF_GLOBAL, "enum:0=Off|1=Horizontal|2=Vertical|3=Quad|4=Kaleidoscope", "FAI")
+           G_OUTPUT, "FAI", "", KF_GLOBAL, "enum:0=Off|1=Horizontal|2=Vertical|3=Quad|4=Kaleidoscope", "")
 KEY_SLIDER("Kaleidoscope segments", 2, 16, 1, 0, nullptr, &c.mirror.segments, "mirror", "segments", false, "Number of wedges in mode 4. Every other one is reflected, so there is no jump at a wedge edge",
            G_OUTPUT, "FAI", "mirror.mode==4", KF_GLOBAL, "", "")
 KEY_SLIDER("Shown quadrant (0-3)", 0, 3, 1, 0, nullptr, &c.mirror.source, "mirror", "source", false, "Which quarter of the sim is the one you see, and is copied around: +1 = right half, +2 = bottom half",
@@ -652,9 +652,9 @@ KEY_SLIDER("Film stock colour", 0, 1, 0.02f, 2, &c.post.filmStock, nullptr, "pos
 KEY_SLIDER("Camera glare, dark bias", 0, 1, 0.05f, 2, &c.post.postGlowDark, nullptr, "post", "post_glow_dark", false, "Leans the glare toward the dark side: shadows of dark features bleed into the bright film more than the film's light bleeds into the black",
            G_OPTICS, "FAI", "post.post_glow>0", 0, "", "")
 KEY_SLIDER("Depth of field (max CoC px at 1440p)", 0, 16, 0.5f, 1, &c.post.dofMaxPx, nullptr, "post", "dof_max_px", false, "Turns the one global defocus into a real depth of field: each element is blurred by how far its own depth is from the plane of focus, up to this radius. 0 = off, and the whole per-pixel path is skipped. liquid_acid only",
-           G_OPTICS, "A", "", 0, "", "")
+           G_OPTICS, "A", "", 0, "", "A")
 KEY_SLIDER("Focus depth", 0, 1, 0.02f, 2, &c.post.cameraFocus, nullptr, "post", "camera_focus", false, "Which depth is sharp. 0.5 is the plane the big masses sit on; lower favours the front droplets, higher the back ones",
-           G_OPTICS, "A", "", 0, "", "")
+           G_OPTICS, "A", "", 0, "", "A")
 KEY_SLIDER("Field curvature", 0, 2, 0.05f, 2, &c.post.cameraFieldCurve, nullptr, "post", "camera_field_curve", false, "Bends the surface of focus away from the dish with distance from the optical axis, so the centre and the corners of the frame cannot both be sharp -- what a real lens does",
            G_OPTICS, "A", "", 0, "", "")
 KEY_SLIDER("Corner warp", 0, 1, 0.05f, 2, &c.post.cornerWarp, nullptr, "post", "corner_warp", false, "Brief BN. The microscope's field edge: outside the start radius the corners are stretched along the arcs round the centre, so they look oddly distorted while the middle stays exactly as it was. 0 = off",
@@ -686,7 +686,7 @@ KEY_SLIDER("Halation", 0, 1, 0.02f, 2, &c.post.halation, nullptr, "post", "halat
 KEY_SLIDER("Halation radius (px at 1440p)", 4, 60, 1, 0, &c.post.halationPx, nullptr, "post", "halation_px", false, "How far the glow reaches. A dozen pixels is the film look; far more and it becomes a second bloom",
            G_OPTICS, "FAI", "post.halation>0", 0, "", "")
 KEY_SLIDER("Lid (cover glass)", 0, 1, 0.05f, 2, &c.post.lid, nullptr, "post", "lid", false, "Master for the transparent cover over the dish: its internal reflections, sheen, glint and iridescence. 0 = no cover at all",
-           G_LID, "FAI", "", 0, "", "A")
+           G_LID, "FAI", "", 0, "", "")
 KEY_SLIDER("  lid ghosts", 0, 1, 0.05f, 2, &c.post.lidGhost, nullptr, "post", "lid_ghost", false, "Dim, offset, slightly magnified copies of the bright film reflected inside the cover, tinted by the coating they bounced off",
            G_LID, "FAI", "post.lid>0", 0, "", "")
 KEY_SLIDER("  lid ghost spread", 0, 2, 0.05f, 2, &c.post.lidGhostSpread, nullptr, "post", "lid_ghost_spread", false, "How far the ghost chain runs along the line from the lamp reflection through the optical centre",

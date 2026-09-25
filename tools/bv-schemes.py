@@ -12,6 +12,17 @@ BASE = os.path.join(ROOT, 'reference', 'configs', 'monotone-post-0924.ini')
 PRESETS = os.path.join(ROOT, 'reference', 'presets')
 
 EQ, SHARE3 = 0.75, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY vs RtF on a yellow film; 0.75 interpolates to ~RtF
+# FINAL-CYCLE C: film_hue2_cover on every pattern with a second colour, tuned with the
+# CPU coverage logger (--cover-sweep, Magenta/Mint seed 1234; share of visible mix cells
+# > 0.62 at 150 s: 0 -> 10%, 0.04 -> 18%, 0.08 -> 30%, 0.12 -> 38%, 0.16 -> 45%).
+# COVER_PAIR on the photo pairs (proven-2/3/4: big flat second-colour fields).
+# COVER_LOW elsewhere: a warm second colour (Violet/Amber, Teal/Orange) must not become the
+# majority (bright amber/orange pushes ABL), and a bias shrinks the hue3 LOW end too
+# (< 0.32: 10% mean at 0 -> 1% at 0.12), so the 3-/4-colour tiers take 0.04 with
+# film_hue3_share 1: bias 0.04 + share 1 is the same third-colour share as bias 0 + share
+# 0.75 had (0-180 s mean 5.7%, max 19%), with a larger second colour.
+COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.12, 0.04, 1.0
+PAIR_COVER_PATTERNS = ('Magenta Mint', 'Magenta Cyan', 'Blue Coral')
 
 # (file name, hue2, hue3, shadow hue or None, grade-only, [(named scheme, tier, anchor, note)])
 PATTERNS = [
@@ -72,8 +83,17 @@ def preset_text(fname, h2, h3, sh, grade, names):
         L.append('; (shadow_tone_hue), always on (shadow_tone_period 0), rule 7: cool/violet only.')
     L.append('; Rules (brief BV): oil + droplets black (dye_lum 0, dye_droplet_lum -1); FILMS')
     L.append('; equal-loaded (film_equal_load, dims only); PATCHES are never dimmed, so a')
-    L.append('; yellow/gold/lime member stays bright; third colour <= ~15%% of the frame')
-    L.append('; (film_hue3_share %.2f ~ 13%%).' % SHARE3)
+    L.append('; yellow/gold/lime member stays bright; third colour <= ~15% of the frame')
+    L.append('; (film_hue3_share: 0.75 ~ 13% at cover 0; with cover 0.04 it is 1, see below).')
+    if h2 is not None:
+        cov = COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW
+        L.append('; FINAL-CYCLE C: film_hue2_cover %g %s' % (cov,
+                 'raises the second colour toward the photos\' 30-45%% of the frame.' % () if cov == COVER_PAIR
+                 else 'lifts the second colour a little (a warm or third colour stays small).'))
+        if h3 is not None:
+            L.append('; film_hue3_share %g keeps the third at today\'s ~6%% mean (<= ~15%%) under that bias.' % SHARE3_COVER)
+    L.append('[meta]')
+    L.append('look = liquid_acid')
     L.append('[liquid_acid]')
     kv = [('hue_sweep_period', '0'), ('hue_anchor_weight', '1'),
           ('dye_lum', '0'), ('dye_droplet_lum', '-1'),
@@ -81,12 +101,13 @@ def preset_text(fname, h2, h3, sh, grade, names):
     if h2 is None:
         kv += [('film_hue2_amt', '0'), ('film_hue3_amt', '0')]
     else:
-        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'), ('film_hue2_scale', '0.40')]
+        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'), ('film_hue2_scale', '0.40'),
+               ('film_hue2_cover', '%g' % (COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW))]
         if h3 is None:
             kv += [('film_hue3_amt', '0')]
         else:
             kv += [('film_hue3', '%d' % h3), ('film_hue3_amt', '1'),
-                   ('film_hue3_share', '%g' % SHARE3)]
+                   ('film_hue3_share', '%g' % SHARE3_COVER)]
     if sh is None:
         kv += [('shadow_tone', '0')]
     else:

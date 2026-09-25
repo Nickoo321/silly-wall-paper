@@ -11,6 +11,4 @@ MEASURED_INERT("acid-rise-12", "liquid_acid", "rim_dark",       "key-effect BJ @
 MEASURED_INERT("acid-rise-12", "liquid_acid", "meniscus",       "key-effect BJ @1d2786a forced 0: byte-identical (haloInk gate)")
 MEASURED_INERT("acid-rise-12", "liquid_acid", "oil_ink_blur",   "key-effect BJ @1d2786a: byte-identical (gate not traced)")
 MEASURED_INERT("acid-rise-12", "liquid_acid", "oil_dye_block",  "key-effect BJ @1d2786a: byte-identical (gate not traced)")
-MEASURED_INERT("acid-rise-12", "post",        "film_hairs",     "key-effect BJ @1d2786a: byte-identical (gate not traced)")
-MEASURED_INERT("acid-rise-12", "post",        "film_leak",      "key-effect BJ @1d2786a: byte-identical (gate not traced)")
 MEASURED_INERT("acid-rise-12", "post",        "lid_sheen_px",   "key-effect BJ @1d2786a: byte-identical (gate not traced)")

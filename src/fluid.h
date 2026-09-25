@@ -296,6 +296,16 @@ struct LiquidAcidConfig {
     // over the ABSOLUTE palette hue; W(0)=0, W(1)=360, monotone, so the wrap
     // is seamless. 0 = the old linear clock, exactly.     hue_anchor_weight
     float hueAnchorWeight = 0.0f;
+    // Start phase of that clock (brief BW item 4 + the user's random mode),
+    // CPU only, no slot: at app start and at each cycle stage entry through
+    // black, the palette clock (ANIM_PALETTE) is set so the palette's own hue
+    // (oil_color_1 turned by the rotation) lands on this ABSOLUTE hue, found
+    // by inverting the anchor warp. -1 = today (the clock starts at 0, i.e.
+    // at oil_color_1's own hue); -2 = a RANDOM start hue drawn from the
+    // anchor density (weight 1: magenta/blue/red/violet likelier than
+    // lime/olive), seeded from the wall clock, or from --seed headless.
+    // Only with hue_rotate_period on and the sweep off.   palette_start_hue
+    float paletteStartHue = -1.0f;
     // HSV saturation multiplier on the effective oil palette (CPU-side, after
     // the sweep and the rotation), so vividness is one panel knob whichever
     // colour source is in use. 1 = the authored colours, untouched.
@@ -694,6 +704,15 @@ struct LiquidAcidConfig {
     //       0 = today, bit-identical (StepHueField skips it). No slot.
     float filmHue2Cover = 0.0f;   // bias       film_hue2_cover
     float filmEqualLoad = 0.0f;   // 0..1       film_equal_load
+    //   film_equal_load_patches (brief BW) the same equal-load target on the
+    //       PATCH cores (weight smoothstep(0.8, 1, k2/k3), never the seam), so
+    //       a mint/cyan patch loads the panel like magenta too. A yellow/gold
+    //       member that must stay bright takes a low value. 0 = today.
+    float filmEqualLoadP = 0.0f;  // 0..1       film_equal_load_patches
+    //   film_hue2_seam (brief BW) width of the band between the film and the
+    //       second (and third) hue, as a factor of today's: 1 = today's
+    //       0.56..0.68 (and 0.18..0.46), 0.33 = one thin seam line.
+    float filmHue2Seam = 1.0f;    // 0.25..1    film_hue2_seam
     float crustHueMix   = 1.0f;   // 0..1        crust_hue_mix
     //   film_hue2_wobble        the contrast hue is not NAILED to an angle:
     //                           it wanders a few degrees either side of it,
@@ -1723,6 +1742,14 @@ public:
     // at which the palette's absolute hue equals hueDeg (linear when the
     // weight is 0). The burst lands on an anchor with it.
     float PalettePhaseForHue(float hueDeg) const;
+    // palette_start_hue (brief BW item 4 + random mode): set the ANIM_PALETTE
+    // clock so the palette's absolute hue is the preset's start hue (>= 0) or
+    // a random draw from the anchor density (-2). -1 (default) / no rotation /
+    // sweep on / not liquid_acid: returns without touching anything. Called at
+    // renderer init and by the cycle director at each stage entry at black.
+    // Returns the start hue applied, or -1.
+    float ApplyPaletteStart(const char* why);
+    float PaletteAbsHueAt(float clk) const;   // effOil[0]'s hue (deg) at palette-clock time clk
     float PaletteSweepPos() const;  // hue_sweep_period position in pairs, -1 = off
     float Hue2Deg() const;          // film_hue2 after the wobble
 
@@ -1820,6 +1847,7 @@ private:
     float  m_kickTotal[kAnimClocks] = {};
     float  m_kickDone[kAnimClocks] = {};
     float  m_kickT[kAnimClocks] = {};
+    bool   m_paletteStarted = false;   // palette_start_hue applied at first init (brief BW)
     float  m_kickDur[kAnimClocks] = {};
     void   StepKicks(float dt);
     int    m_entrySplats = 0;          // QueueSplatBurst; 0 = nothing pending
@@ -2166,6 +2194,8 @@ private:
     mutable float m_anchorCdf[257] = {};
     mutable float m_anchorCdfW = -1.0f;
     float    AnchorWarpDeg(float u, float h0Deg, float w) const;
+    // effOil/effInk/effMen at palette-clock time clk (the upload's own code, brief BW)
+    void     EffectivePalette(float clk, float effOil[12], float effInk[12], float effMen[3]) const;
     bool     m_mixSeeded = false;
     void StepHueField(float dt);
     // FINAL-CYCLE C coverage logger (CPU only, never drawn): shadow copies of
@@ -2173,19 +2203,37 @@ private:
     // film_hue2_cover bias (--cover-sweep a,b,..), so one headless run
     // measures several biases; the sim never reads the mix field, so the
     // flow they ride is the same flow the live field rides.
+    // brief BW: each shadow field may also carry its own film_hue2_scale
+    // (<= 0 = the live one) and its own NOISE SEED (the value-noise lattice
+    // offset; 0 = the live field's noise), so one run measures a scale x bias
+    // grid over many independent patch layouts (--cover-sweep b@s,..
+    // --cover-seeds N). All diagnostics: nothing drawn reads them.
     std::vector<float>              m_coverBias;
+    std::vector<float>              m_coverScale;
+    std::vector<int>                m_coverSeed;
     std::vector<std::vector<float>> m_coverFields;
     bool                            m_coverSeeded = false;
 public:
-    void SetCoverSweep(const std::vector<float>& biases) { m_coverBias = biases; m_coverFields.clear(); m_coverSeeded = false; }
+    void SetCoverSweep(const std::vector<float>& biases, const std::vector<float>& scales,
+                       const std::vector<int>& seeds) {
+        m_coverBias = biases; m_coverScale = scales; m_coverSeed = seeds;
+        m_coverScale.resize(m_coverBias.size(), -1.0f);
+        m_coverSeed.resize(m_coverBias.size(), 0);
+        m_coverFields.clear(); m_coverSeeded = false;
+    }
     int  CoverSweepCount() const { return (int)m_coverBias.size(); }
     float CoverSweepBias(int i) const { return m_coverBias[(size_t)i]; }
+    float CoverSweepScale(int i) const { return m_coverScale[(size_t)i]; }
+    int   CoverSweepSeed(int i) const { return m_coverSeed[(size_t)i]; }
     // Share of the VISIBLE mix cells (i = -1 the live field, else sweep i):
     // out[0] > 0.62 (the hue2 seam), out[1] > 0.68 (full hue2), out[2] in the
     // 0.56..0.68 seam band, out[3..6] < 0.32 / 0.28 / 0.24 / 0.20 (the hue3
-    // midpoint at film_hue3_share 1 / 0.75 / 0.5 / 0.25), out[7] field mean.
+    // midpoint at film_hue3_share 1 / 0.75 / 0.5 / 0.25), out[7] field mean,
+    // out[8] how many separate hue2 patches (4-connected groups of cells
+    // > 0.62), out[9] the largest one's share of the frame (brief BW: "big
+    // flat fields, not a spotty field of islands").
     // False when the field is not running.
-    bool MixCoverage(int i, float out[8]) const;
+    bool MixCoverage(int i, float out[10]) const;
 private:
     // Private stream for rise_respawn draws. Seeded from the same seed as the
     // population, stepped only by respawns, so a --shot replays exactly and

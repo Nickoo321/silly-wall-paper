@@ -135,6 +135,9 @@ void FluidRenderer::InitCommon(HWND hwnd, int width, int height, const FluidConf
 
     CreateDevice(hwnd, width, height);
     if (FAILED(m_initHr)) return;   // swap chain refused; TryInit() cleans up
+    // palette_start_hue (brief BW); -1 = no-op. Once per renderer: a resume
+    // (Shutdown + TryInit on the same object) keeps the running clock.
+    if (!m_paletteStarted) { m_paletteStarted = true; ApplyPaletteStart("app start"); }
     if (!m_cfg.gradientMode) CreateSimResources();
     printf("Renderer ready (%s), sim %dx%d, dye %dx%d\n",
            m_cfg.gradientMode ? "gradient mode" : "fluid",
@@ -2111,6 +2114,7 @@ int FluidRenderer::AcidBlobCount() const {
 // animators.h live-value getters: the same formulas the constant upload uses,
 // read-only (they cannot change a frame).
 static void RgbToHsv(const float c[3], float& h, float& sv, float& v);   // below
+static void BuildAnchorCdf(float w, float cdf[257]);                     // below
 float FluidRenderer::PaletteHueDeg() const {
     const LiquidAcidConfig& a = m_cfg.acid;
     if (!(a.hueRotatePeriod > 0.01f)) return 0.0f;
@@ -2211,6 +2215,121 @@ float FluidRenderer::PalettePhaseForHue(float hueDeg) const {
     if (u < 0.0f) u += 1.0f;
     if (u >= 1.0f) u -= 1.0f;
     return u;
+}
+
+// ---- palette_start_hue (brief BW item 4 + the user's random mode) ---------
+// Today the palette clock starts at 0, so every Scheme opens on oil_color_1's
+// own hue (~22 deg, orange on monotone-post-0924). This moves the ANIM_PALETTE
+// accumulator ONCE, before anything is on screen (renderer init, or a cycle
+// stage entry at black), so AnimatorTime(0) lands on the clock phase whose
+// palette hue (effOil[0], the upload's own palette) is the wanted one. Sweep
+// off (every Scheme): exact, u* = PalettePhaseForHue (the inverse of the
+// anchor warp; linear when hue_anchor_weight is 0) and clock = u* P. Sweep on
+// (monotone-post-0924: eight tile9 families cross-faded every 630 s under the
+// 3600 s rotation): the hue is not a monotone function of the clock, so the
+// clock is SEARCHED -- 8192 phases over 8 periods, then a local refine -- for
+// the nearest palette hue. The drift then runs on from there. -1 returns
+// before touching anything: the accumulator stays exactly 0.0f and every
+// constant is bit-identical to today.
+float FluidRenderer::PaletteAbsHueAt(float clk) const {
+    float eo[12], ei[12], em[3];
+    EffectivePalette(clk, eo, ei, em);
+    float h, s, v;
+    RgbToHsv(&eo[0], h, s, v);
+    return h * 360.0f;
+}
+
+float FluidRenderer::ApplyPaletteStart(const char* why) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const float want = a.paletteStartHue;
+    const bool random = want <= -1.5f;
+    if (!a.enabled || (!random && want < 0.0f)) return -1.0f;
+    const bool sweep = a.hueSweepPeriod > 0.01f;
+    if (!(a.hueRotatePeriod > 0.01f) && !sweep) {
+        printf("[palette] start hue %s skipped (%s): the palette clock drives nothing "
+               "(hue_rotate_period and hue_sweep_period both off)\n", random ? "random" : "fixed", why);
+        return -1.0f;
+    }
+    float H = fmodf(want, 360.0f);
+    unsigned y32 = 0;
+    if (random) {
+        // Its own generator, never rand(): drawing must not shift any other
+        // seeded behaviour. --seed (headless) makes it reproducible; the live
+        // app mixes the wall clock and the performance counter.
+        static unsigned s_draws = 0;
+        s_draws++;
+        uint64_t x;
+        if (g_randSeed) {
+            x = (uint64_t)g_randSeed * 0x9E3779B97F4A7C15ull + (uint64_t)s_draws * 0xD1B54A32D192ED03ull;
+        } else {
+            LARGE_INTEGER q;
+            QueryPerformanceCounter(&q);
+            x = (uint64_t)GetTickCount64() * 0x9E3779B97F4A7C15ull ^ (uint64_t)q.QuadPart
+              ^ (uint64_t)s_draws * 0xD1B54A32D192ED03ull;
+        }
+        x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ull;           // splitmix64 finaliser
+        x ^= x >> 27; x *= 0x94D049BB133111EBull;
+        x ^= x >> 31;
+        y32 = (unsigned)(x >> 40);                           // 24 bits
+        const float yv = (float)y32 * (1.0f / 16777216.0f);
+        // the anchor density at weight 1 (the Scheme presets' warp), whatever
+        // this preset's own hue_anchor_weight: magenta 325, blue 215, red 355,
+        // violet 275 hold ~58% of the draws, lime/olive the least per degree
+        static float s_cdf[257];
+        static bool s_cdfBuilt = false;
+        if (!s_cdfBuilt) { BuildAnchorCdf(1.0f, s_cdf); s_cdfBuilt = true; }
+        int lo = 0, hi = 256;
+        while (hi - lo > 1) { const int mid = (lo + hi) >> 1; if (s_cdf[mid] <= yv) lo = mid; else hi = mid; }
+        const float span = s_cdf[lo + 1] - s_cdf[lo];
+        const float t = span > 1e-9f ? (yv - s_cdf[lo]) / span : 0.0f;
+        H = 360.0f * ((float)lo + t) / 256.0f;
+    }
+    if (H < 0.0f) H += 360.0f;
+    if (H >= 360.0f) H -= 360.0f;
+    auto angd = [](float x, float y) {
+        float d = fabsf(fmodf(x - y, 360.0f));
+        return d > 180.0f ? 360.0f - d : d;
+    };
+    float clk = 0.0f;
+    if (!sweep) {
+        clk = PalettePhaseForHue(H) * a.hueRotatePeriod;
+    } else {
+        const float span = fminf(8.0f * fmaxf(a.hueRotatePeriod, a.hueSweepPeriod), 30000.0f);
+        const int   NS = 8192;
+        float bestD = 1e9f;
+        for (int k = 0; k < NS; k++) {
+            const float tk = span * (float)k / (float)NS;
+            const float d = angd(PaletteAbsHueAt(tk), H);
+            if (d < bestD) { bestD = d; clk = tk; }
+        }
+        const float step = span / (float)NS;
+        const float c0 = clk;
+        for (int k = -64; k <= 64; k++) {
+            const float tk = fmaxf(c0 + step * (float)k / 64.0f, 0.0f);
+            const float d = angd(PaletteAbsHueAt(tk), H);
+            if (d < bestD) { bestD = d; clk = tk; }
+        }
+    }
+    // cancel a running kick on this clock, then place it
+    m_kickDur[0] = 0.0f; m_kickTotal[0] = 0.0f; m_kickDone[0] = 0.0f; m_kickT[0] = 0.0f;
+    m_animFrozenAccum[0] = m_time - clk;
+    const float P = sweep ? a.hueSweepPeriod : a.hueRotatePeriod;
+    const float u = fmodf(clk / P, 1.0f);
+    float got = PaletteAbsHueAt(AnimatorTime(0));
+    static const float kAnchor[4] = { 325.0f, 215.0f, 355.0f, 275.0f };
+    int nearK = 0;
+    float nearD = 1e9f;
+    for (int k = 0; k < 4; k++) {
+        float d = fabsf(got - kAnchor[k]);
+        if (d > 180.0f) d = 360.0f - d;
+        if (d < nearD) { nearD = d; nearK = k; }
+    }
+    printf("[palette] start hue %s %.1f (%s): palette clock %.1f s (u=%.4f of the %.0f s %s), "
+           "palette hue now %.2f deg (err %+.2f), nearest anchor %.0f (%.1f deg away)%s\n",
+           random ? "RANDOM" : "fixed", H, why, clk, u, P, sweep ? "sweep" : "rotation", got,
+           (got - H) - 360.0f * floorf(((got - H) + 180.0f) / 360.0f), kAnchor[nearK], nearD,
+           random ? (g_randSeed ? " [seeded by --seed]" : " [seeded by the clock]") : "");
+    return H;
 }
 
 int FluidRenderer::AcidDropletCount() const {
@@ -2765,7 +2884,7 @@ struct AcidParamsGPU {
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
-    // laP38: free (declared so BU-b's laP39 can follow).
+    // laP38: .x film_equal_load_patches (brief BW); .yzw free.
     float p36[4], p37[4], p38[4];
     // brief BU-b: p39 = highlight tint + balance.
     float p39[4];
@@ -3396,7 +3515,11 @@ void FluidRenderer::StepHueField(float dt) {
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
     // One step of one field. The live field and the coverage logger's shadow
     // fields (--cover-sweep) run the SAME body; only the bias differs.
-    auto stepField = [&](std::vector<float>& field, bool seeding, float bias) {
+    // brief BW: fq (the noise frequency, i.e. the patch size) and zo (the
+    // noise lattice seed) are parameters so the logger's shadow fields can run
+    // other scales and independent layouts; the live field passes freq and 0,
+    // the same values as before.
+    auto stepField = [&](std::vector<float>& field, bool seeding, float bias, float fq, int zo) {
         std::vector<float> next((size_t)N, 0.0f);
         for (int y = 0; y < TH; y++) {
             for (int x = 0; x < kMixW; x++) {
@@ -3447,10 +3570,10 @@ void FluidRenderer::StepHueField(float dt) {
                 // is on screen, not something appearing in front of the user.
                 const bool makeHere = (SR == 0) || (y >= kMixH) || seeding;
                 if (makeHere) {
-                    const float nz  = vnoise(u * aspect * freq + t * 0.7f,
-                                             v * freq - t * 0.5f, 0);
-                    const float nz2 = vnoise(u * aspect * freq * 2.3f - t * 0.4f,
-                                             v * freq * 2.3f + t * 0.3f, 7);
+                    const float nz  = vnoise(u * aspect * fq + t * 0.7f,
+                                             v * fq - t * 0.5f, zo);
+                    const float nz2 = vnoise(u * aspect * fq * 2.3f - t * 0.4f,
+                                             v * fq * 2.3f + t * 0.3f, zo + 7);
                     float tgt = fminf(fmaxf(nz * 0.78f + nz2 * 0.22f, 0.0f), 1.0f);
                     // film_hue2_cover (FINAL-CYCLE C): the value noise has mean ~0.5
                     // and bilinear advection pulls the extremes toward it, so the
@@ -3474,7 +3597,7 @@ void FluidRenderer::StepHueField(float dt) {
         }
         field.swap(next);
     };
-    stepField(m_mixField, !m_mixSeeded, a.filmHue2Cover);
+    stepField(m_mixField, !m_mixSeeded, a.filmHue2Cover, freq, 0);
     m_mixSeeded = true;
     // Coverage logger shadow fields: diagnostics only, empty unless the shot
     // run asked for a sweep, and nothing drawn ever reads them.
@@ -3485,13 +3608,20 @@ void FluidRenderer::StepHueField(float dt) {
         }
         for (auto& f : m_coverFields)
             if ((int)f.size() != N) { f.assign((size_t)N, 0.5f); m_coverSeeded = false; }
-        for (size_t i = 0; i < m_coverFields.size(); i++)
-            stepField(m_coverFields[i], !m_coverSeeded, m_coverBias[i]);
+        for (size_t i = 0; i < m_coverFields.size(); i++) {
+            float fq = freq;
+            const float sc = (i < m_coverScale.size()) ? m_coverScale[i] : -1.0f;
+            if (sc > 0.0f)
+                fq = (1.0f / fmaxf(fminf(fmaxf(sc, 0.08f), 0.90f), 1e-3f))
+                   * (1.0f + 0.18f * sinf(m_mixPhase * 0.7f));
+            const int zo = (i < m_coverSeed.size()) ? m_coverSeed[i] * 1009 : 0;
+            stepField(m_coverFields[i], !m_coverSeeded, m_coverBias[i], fq, zo);
+        }
         m_coverSeeded = true;
     }
 }
 
-bool FluidRenderer::MixCoverage(int i, float out[8]) const {
+bool FluidRenderer::MixCoverage(int i, float out[10]) const {
     const std::vector<float>* f = &m_mixField;
     if (i >= 0) {
         if ((size_t)i >= m_coverFields.size()) return false;
@@ -3514,6 +3644,29 @@ bool FluidRenderer::MixCoverage(int i, float out[8]) const {
     }
     for (int k = 0; k < 7; k++) out[k] = (float)c[k] / (float)NV;
     out[7] = (float)(sum / NV);
+    // patches: 4-connected groups of visible cells above the hue2 seam
+    int lab[kMixW * kMixH];
+    for (int k = 0; k < NV; k++) lab[k] = ((*f)[(size_t)k] > 0.62f) ? -1 : 0;
+    int groups = 0, biggest = 0;
+    int stack[kMixW * kMixH];
+    for (int k = 0; k < NV; k++) {
+        if (lab[k] != -1) continue;
+        groups++;
+        int sp = 0, n = 0;
+        stack[sp++] = k; lab[k] = groups;
+        while (sp > 0) {
+            const int q = stack[--sp];
+            n++;
+            const int qx = q % kMixW, qy = q / kMixW;
+            const int nb[4] = { qx > 0 ? q - 1 : -1, qx < kMixW - 1 ? q + 1 : -1,
+                                qy > 0 ? q - kMixW : -1, qy < kMixH - 1 ? q + kMixW : -1 };
+            for (int e = 0; e < 4; e++)
+                if (nb[e] >= 0 && lab[nb[e]] == -1) { lab[nb[e]] = groups; stack[sp++] = nb[e]; }
+        }
+        if (n > biggest) biggest = n;
+    }
+    out[8] = (float)groups;
+    out[9] = (float)biggest / (float)NV;
     return true;
 }
 
@@ -5177,31 +5330,37 @@ void FluidRenderer::StepCameraRig(float dt) {
 // w = 1 magenta dwells ~5x longer per degree than a plain hue, the
 // lime/mustard band ~2.4x shorter than linear. Table rebuilt only when w
 // changes; one binary search per frame.
+// The anchor density's normalised cumulative table (257 entries) for weight
+// w; shared by the warp below and palette_start_hue's random draw (brief BW).
+static void BuildAnchorCdf(float w, float cdf[257]) {
+    static const float kAnc[4][2] = { {325.0f, 1.0f}, {215.0f, 0.6f},
+                                      {355.0f, 0.5f}, {275.0f, 0.4f} };
+    const float sig = 20.0f;
+    double acc = 0.0;
+    double dens[257];
+    for (int j = 0; j <= 256; j++) {
+        const float H = 360.0f * (float)j / 256.0f;
+        double d = 1.0;
+        for (int k = 0; k < 4; k++) {
+            float dh = fmodf(fabsf(H - kAnc[k][0]), 360.0f);
+            if (dh > 180.0f) dh = 360.0f - dh;
+            d += 4.0 * w * kAnc[k][1] * exp(-0.5 * (dh / sig) * (dh / sig));
+        }
+        dens[j] = d;
+    }
+    cdf[0] = 0.0f;
+    double cum[257]; cum[0] = 0.0;
+    for (int j = 1; j <= 256; j++) {
+        acc += 0.5 * (dens[j - 1] + dens[j]);
+        cum[j] = acc;
+    }
+    for (int j = 0; j <= 256; j++) cdf[j] = (float)(cum[j] / acc);
+    cdf[256] = 1.0f;
+}
+
 float FluidRenderer::AnchorWarpDeg(float u, float h0Deg, float w) const {
     if (fabsf(w - m_anchorCdfW) > 1e-6f) {
-        static const float kAnc[4][2] = { {325.0f, 1.0f}, {215.0f, 0.6f},
-                                          {355.0f, 0.5f}, {275.0f, 0.4f} };
-        const float sig = 20.0f;
-        double acc = 0.0;
-        double dens[257];
-        for (int j = 0; j <= 256; j++) {
-            const float H = 360.0f * (float)j / 256.0f;
-            double d = 1.0;
-            for (int k = 0; k < 4; k++) {
-                float dh = fmodf(fabsf(H - kAnc[k][0]), 360.0f);
-                if (dh > 180.0f) dh = 360.0f - dh;
-                d += 4.0 * w * kAnc[k][1] * exp(-0.5 * (dh / sig) * (dh / sig));
-            }
-            dens[j] = d;
-        }
-        m_anchorCdf[0] = 0.0f;
-        double cum[257]; cum[0] = 0.0;
-        for (int j = 1; j <= 256; j++) {
-            acc += 0.5 * (dens[j - 1] + dens[j]);
-            cum[j] = acc;
-        }
-        for (int j = 0; j <= 256; j++) m_anchorCdf[j] = (float)(cum[j] / acc);
-        m_anchorCdf[256] = 1.0f;
+        BuildAnchorCdf(w, m_anchorCdf);
         m_anchorCdfW = w;
     }
     auto F = [&](float H) {          // H in [0,360) -> 0..1, piecewise linear
@@ -5228,25 +5387,20 @@ float FluidRenderer::AnchorWarpDeg(float u, float h0Deg, float w) const {
     return d;
 }
 
-void FluidRenderer::UploadAcidConstants() {
+// The effective oil/ink/meniscus palette at palette-clock time clk (the
+// sweep cross-fade + the hue_rotate_period rotation), exactly the code the
+// constant upload runs with clk = AnimatorTime(0); factored out (brief BW)
+// so palette_start_hue can read the palette's hue at any clock phase.
+void FluidRenderer::EffectivePalette(float clk, float effOil[12], float effInk[12], float effMen[3]) const {
     const LiquidAcidConfig& a = m_cfg.acid;
-    const UINT fi = m_frameIndex;
-    if (!m_acidBlobData[fi] || !m_acidParamData[fi]) return;
-
-    // ---- effective palette for this frame -------------------------------
-    // With the sweep off this is just the authored palette. With it on, the
-    // oil anchor and the ink mid tone cross-fade between curated vivid pairs
-    // and the rest of the palette is rebuilt around them using the authored
-    // palette's own S/V ratios.
-    float effOil[12], effInk[12], effMen[3];
-    memcpy(effOil, a.oilColors, sizeof(effOil));
-    memcpy(effInk, a.inkRamp, sizeof(effInk));
-    memcpy(effMen, a.meniscusCol, sizeof(effMen));
+    memcpy(effOil, a.oilColors, 12 * sizeof(float));
+    memcpy(effInk, a.inkRamp, 12 * sizeof(float));
+    memcpy(effMen, a.meniscusCol, 3 * sizeof(float));
     if (a.hueSweepPeriod > 0.01f) {
         int np = a.sweepCount;
         if (np < 1) np = 1;
         if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
-        const float u = fmodf(AnimatorTime(0) / a.hueSweepPeriod, 1.0f) * np;
+        const float u = fmodf(clk / a.hueSweepPeriod, 1.0f) * np;
         const int k0 = (int)u % np, k1 = (k0 + 1) % np;
         // smoothstep the cross-fade so each pair gets a long settled stretch
         float f = u - floorf(u);
@@ -5281,17 +5435,31 @@ void FluidRenderer::UploadAcidConstants() {
     // turning, not as confetti. The ink is untouched -- on the mono-ink
     // tile9 family it stays grey and the holes stay black through every hue.
     if (a.hueRotatePeriod > 0.01f) {
-        float deg = 360.0f * fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+        float deg = 360.0f * fmodf(clk / a.hueRotatePeriod, 1.0f);
         // brief BV rule 4, hue_anchor_weight: a WARPED clock. 0 keeps the
         // line above exactly (identity by construction: this block is skipped).
         if (a.hueAnchorWeight > 0.0005f) {
             float h0, s0, v0;
             RgbToHsv(&effOil[0], h0, s0, v0);   // the palette's own hue, 0..1
-            deg = AnchorWarpDeg(fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f),
+            deg = AnchorWarpDeg(fmodf(clk / a.hueRotatePeriod, 1.0f),
                                 h0 * 360.0f, a.hueAnchorWeight);
         }
         for (int ci = 0; ci < 4; ci++) HsvHueShiftCpu(&effOil[ci * 3], deg);
     }
+}
+
+void FluidRenderer::UploadAcidConstants() {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    const UINT fi = m_frameIndex;
+    if (!m_acidBlobData[fi] || !m_acidParamData[fi]) return;
+
+    // ---- effective palette for this frame -------------------------------
+    // With the sweep off this is just the authored palette. With it on, the
+    // oil anchor and the ink mid tone cross-fade between curated vivid pairs
+    // and the rest of the palette is rebuilt around them using the authored
+    // palette's own S/V ratios.
+    float effOil[12], effInk[12], effMen[3];
+    EffectivePalette(AnimatorTime(0), effOil, effInk, effMen);
     // ---- oil_saturation: one vividness knob, whatever fed the palette ----
     if (fabsf(a.oilSaturation - 1.0f) > 0.001f) {
         for (int ci = 0; ci < 4; ci++) {
@@ -5708,6 +5876,11 @@ void FluidRenderer::UploadAcidConstants() {
     // 1 / 0 = today; the shader branches them out.
     slot(LA_HUE3_SHARE,   fminf(fmaxf(a.filmHue3Share, 0.0f), 1.0f));
     slot(LA_EQUAL_LOAD,   fminf(fmaxf(a.filmEqualLoad, 0.0f), 1.0f));
+    // brief BW: patch-core equal load (0 = today) and the seam band width
+    // factor (exactly 1.0 = today: the shader compares against 1.0 and takes
+    // the literal band, so the clamp must leave 1 at 1).
+    slot(LA_EQUAL_LOAD_P, fminf(fmaxf(a.filmEqualLoadP, 0.0f), 1.0f));
+    slot(LA_HUE2_SEAM,    fminf(fmaxf(a.filmHue2Seam, 0.1f), 1.0f));
     // REFLECT_R / REFLECT_AMT: brief AJ, the boundary-reflection reach
     // (screen heights) and how much of the seam's hue a rim takes. 0 reach =
     // today, and the shader skips the whole probe.

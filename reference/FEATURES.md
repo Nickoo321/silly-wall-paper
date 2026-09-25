@@ -434,9 +434,9 @@ The final composite trim applied to every look: film grain and its frame rate, h
 | `[post] bloom_px` | Bloom radius (px at 1440p) | 40..400, step 5 | 140.0 | 140 | How far that wash spreads |
 | `[post] bloom_warmth` |   bloom warmth (lamp colour) | 0..1, step 0.05 | 0.0 | 0 | Brief BN. The keyed bloom takes the lamp colour instead of the film colour: hot yellow-white on the lamp side, red away from it (the LAPD tile veil). Luminance-normalised tint, so mean_lum/ABL do not move. rg1.x field 4. |
 | `[post] film_dust` | Film dust | 0..1, step 0.02 | 0.0 | 0.10 | Specks of dust on the film: sparse bright points, a new scattering every film frame. Additive and weighted into the dark, so they are stars on the black and nothing on the bright film |
-| `[post] film_hairs` | Film hairs | 0..1, step 0.02 | 0.0 | 0.12 | How often a curly hair is caught in the gate. Each one sticks for a few seconds, flutters, and is gone -- INERT on acid-rise-12 (why: gate not traced). |
+| `[post] film_hairs` | Film hairs | 0..1, step 0.02 | 0.0 | 0.12 | How often a curly hair is caught in the gate. Each one sticks for a few seconds, flutters, and is gone -- TIME-GATED, not inert (brief BW): each of the three hair slots is drawn per period of `film_artefact_rate` from a hash of floor(t / period) and only shows when that hash is below the amount, so at 0.12 most periods carry no hair and BJ's single 10 s still of acid-rise-12 happened to land in an empty one (byte-identical there). A series over a few minutes shows them. |
 | `[post] film_scratches` | Film scratches | 0..1, step 0.02 | 0.0 | 0 | Faint near-vertical scratches that persist for a stretch, drift sideways and disappear |
-| `[post] film_leak` | Film light leak | 0..1, step 0.02 | 0.0 | 0.06 | A coloured leak at one edge -- warm core, cool fringe, soft bands -- that swells and dies, and does not come back every time -- INERT on acid-rise-12 (why: gate not traced). |
+| `[post] film_leak` | Film light leak | 0..1, step 0.02 | 0.0 | 0.06 | A coloured leak at one edge -- warm core, cool fringe, soft bands -- that swells and dies, and does not come back every time -- TIME-GATED, not inert (brief BW): a leak is drawn per 5 x `film_artefact_rate` from a hash of floor(t / (5 x period)), fires only when the hash is below 0.2 + 0.8 x amount (at 0.06: about one period in four) and swells as sin^2 over its period, so a single still is usually between leaks (BJ's 10 s still was byte-identical). |
 | `[post] film_artefact_rate` | Film artefact rate (s) | 1..30, step 0.5 | 5.0 | 5 | How long one population of hairs lasts. Scratches change three times slower, the leak five times slower, the dust every film frame |
 | `[post] film_noise` | Film noise | 0..1, step 0.01 | 0.0 | 0 | A second, finer and faster noise layer under the coarse grain: the emulsion's own fizz as against the stock's grain structure |
 | `[post] film_noise_size` | Film noise size (px at 1440p) | 0.5..4, step 0.25 | 1.0 | 1 | Cell size of that finer layer, in px at 1440p |
@@ -587,7 +587,9 @@ and `rig_readjust`/`focus_tilt_period` (time/motion-named keys — a 10 s still 
 periodic effect). Each of these has its own inline "INERT on acid-rise-12 (why: ...)" note next to
 its entry above. Five more from the same sweep — `oil_ink_blur`, `oil_dye_block`, `film_hairs`,
 `film_leak`, `lid_sheen_px` — were also byte-identical but the report gives no reason and none was
-traced for this pass; their inline notes say "gate not traced".
+traced for this pass; their inline notes say "gate not traced". Brief BW traced two of them:
+`film_hairs` and `film_leak` are TIME-GATED (hashed per artefact period, a still usually lands between
+events), not inert; their rows say so and they left `src/ui/measured_inert.inc`.
 
 ## Totals
 

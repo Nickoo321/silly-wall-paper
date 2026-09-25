@@ -14,7 +14,7 @@ set(IMGUI_SOURCES ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR
 set_source_files_properties(${IMGUI_SOURCES} PROPERTIES COMPILE_OPTIONS "/W0")   # third party: no warnings
 
 add_executable(FluidWallpaper WIN32 src/main.cpp src/fluid.cpp src/ui/ui_model.cpp src/ui/ui_window.cpp src/ui/ui_cycle.cpp
-    src/analyzer.cpp src/scenes.cpp src/moods.cpp src/journey.cpp src/app.rc ${IMGUI_SOURCES})
+    src/analyzer.cpp src/cycle.cpp src/journey.cpp src/app.rc ${IMGUI_SOURCES})
 target_compile_definitions(FluidWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(FluidWallpaper PRIVATE /utf-8)   # source files are UTF-8 (em dashes in UI strings)
 target_include_directories(FluidWallpaper PRIVATE ${IMGUI_DIR})

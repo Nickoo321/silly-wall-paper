@@ -36,11 +36,11 @@
 // rise_speed for the identity fallback's drift}: full; the next key needs laP35.
 // Brief BR added laP35 = {dye_core, -, -, -}; .y / .z were reserved for BB / BH
 // (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
+// Brief BU added laP36 = {grey_k, lamp_grey_size, lamp_grey_cool, grey_cx} and
+// laP37 = {split-tone add rgb, grey_cy}: full; the next key needs laP38.
 // Brief BV took laP35.yzw (film_hue3_share, film_equal_load, film_hue2_lift) and
-// laP38.x (film_hue3_lift) on the coordinator's instruction, so BB / BH / BQ
-// need new components (laP38.yzw are free). laP36 / laP37 are BU's (lamp grey
-// + split tone, branch bu); on branch bv they are declared EMPTY so laP38 can
-// exist -- BU's merge fills them, and the declarations conflict trivially.
+// laP38.x (film_hue3_lift), so BB / BH / BQ need new components (laP38.yzw free;
+// BU-b plans laP39).
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -189,6 +189,14 @@
     X(DYE_THICK_HUE,       34, z, "dye_thick_hue, degrees, -90..90 (brief AG-b)") \
     X(DYE_ID_RISE,         34, w, "rise_speed, uv/s: drift of the dye identity fallback (brief AG-b)") \
     X(DYE_CORE,            35, x, "dye_core, core/rim brightness ratio 0.42..1, 0.42 = today (brief BR)") \
+    X(GREY_K,              36, x, "0.6 * lamp_grey, 0 = off (brief BU)") \
+    X(GREY_SIZE,           36, y, "lamp_grey_size, screen heights 0.25..0.6 (brief BU)") \
+    X(GREY_COOL,           36, z, "lamp_grey_cool, 0..1 (brief BU)") \
+    X(GREY_CX,             36, w, "grey region centre x, p-units (computed: far corner + 90 s slide, brief BU)") \
+    X(TONE_R,              37, x, "split tone add r = HSV(h, shadow_tone_sat, 1) * lift * gate * shadow_tone, h solved to the film OKLab hue + 180 (computed, brief BU)") \
+    X(TONE_G,              37, y, "split tone add g (computed, brief BU)") \
+    X(TONE_B,              37, z, "split tone add b (computed, brief BU)") \
+    X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)") \
     X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
     X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
     X(HUE2_LIFT,           35, w, "film_hue2_lift, 0..1, yellow-band V/S lift on the hue2 patch share (brief BV)") \

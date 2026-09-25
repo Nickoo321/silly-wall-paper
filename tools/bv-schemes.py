@@ -65,12 +65,11 @@ def preset_text(fname, h2, h3, sh, grade, names):
         L.append(';   %-16s %-12s anchor %3d -- %s' % (n, tier, anc, note))
     if grade:
         L.append('; NOTE: needs BU-b highlights/balance (highlight_tone_*, tone_balance): this is a')
-        L.append('; Lightroom-style split-tone GRADE, not patch colours. Until BU (shadow_tone*)')
-        L.append('; and BU-b merge it renders as Return to Form; skipped in the BV scheme sheet.')
+        L.append('; Lightroom-style split-tone GRADE, not patch colours. BU (shadow_tone*, merged)')
+        L.append('; gives the teal shadows now; the gold highlights + balance arrive with BU-b.')
     elif sh is not None:
-        L.append('; NOTE: the shadow tint (shadow_tone*, shadow_tone_hue) is BU (branch bu, not')
-        L.append('; merged yet): until it merges those keys are ignored and this renders as the')
-        L.append('; 3-colour pattern only.')
+        L.append('; The 4th colour is the BU split tone on the dark tones at a FIXED hue')
+        L.append('; (shadow_tone_hue), always on (shadow_tone_period 0), rule 7: cool/violet only.')
     L.append('; Rules (brief BV): oil + droplets black (dye_lum 0, dye_droplet_lum -1); FILMS')
     L.append('; equal-loaded (film_equal_load); yellow/gold/lime PATCHES kept bright (lifts, which')
     L.append('; act only on patch pixels in the 35..95 deg band, whichever member is there as the')
@@ -162,7 +161,7 @@ if __name__ == '__main__':
         txt = preset_text(fname, h2, h3, sh, grade, names)
         p = os.path.join(PRESETS, 'Scheme - %s.ini' % fname)
         open(p, 'w', encoding='utf-8', newline='').write(txt)
-        if rdir and not grade:
+        if rdir and (not grade or fname == 'Lightroom'):
             os.makedirs(rdir, exist_ok=True)
             ov = parse_overlay(txt)
             for n, tier, anc, note in names:

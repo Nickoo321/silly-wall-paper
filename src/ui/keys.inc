@@ -13,7 +13,7 @@
 //   special enum:v=Name|.. | peak | neg:<name> (value<0 shown as name) | zero:<word> | look | autostart
 //   front   looks whose front page carries this knob (brief 3B proposal, used by phase 1b)
 // Pointers: expressions over `c` (the FluidConfig being edited) or a listed global (ui_model.cpp asserts);
-// the cycle keys go through the ui_cycle.h adapter, never g_moodSettings directly.
+// the cycle keys go through the ui_cycle.h adapter, never the director internals directly.
 
 KEY_SLIDER("Vorticity (swirl strength)", 0, 50, 0.5f, 1, &c.curl, nullptr, "sim", "vorticity", false, "Small-scale swirl. High = cauliflower billows, low = smooth streams",
            G_FLUID, "FAI", "", 0, "", "")
@@ -89,12 +89,12 @@ KEY_SLIDER("Brightness", 0.5f, 1.5f, 0.01f, 2, &c.postBrightness, nullptr, "colo
            G_COLOUR, "FAI", "", 0, "", "")
 KEY_SLIDER("Hue rotate (deg)", 0, 360, 1, 0, &c.postHue, nullptr, "color", "post_hue", false, "Rotates all colors. Warning: rotates outside the hue band",
            G_COLOUR, "FAI", "", 0, "", "")
-KEY_SLIDER("Dwell (min per preset)", 1, 30, 1, 0, UiCycleDwellPtr(), nullptr, "moods", "dwell_minutes", false, "Minutes on a preset before switching",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
-KEY_SLIDER("Transition length (s)", 2, 60, 1, 0, UiCycleTransitionPtr(), nullptr, "moods", "transition_seconds", false, "Seconds a preset change takes",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
-KEY_SLIDER("Timing jitter (± fraction)", 0, 0.5f, 0.05f, 2, UiCycleJitterPtr(), nullptr, "moods", "jitter", false, "Random +/- on dwell time so switches feel organic",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Stage dwell (s)", 30, 240, 10, 0, UiCycleDwellPtr(), nullptr, "cycle", "dwell", false, "Seconds on a cycle stage before the next (stages may set their own; 240 = the 4-minute maximum)",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Fluid transition (s)", 1, 20, 1, 0, UiCycleTransitionPtr(), nullptr, "cycle", "lerp", false, "Seconds a fluid-to-fluid stage change glides (hue bridge + lerp); look changes fade through black",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Timing jitter (± fraction)", 0, 0.5f, 0.05f, 2, UiCycleJitterPtr(), nullptr, "cycle", "jitter", false, "Random +/- on dwell time so switches feel organic",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
 KEY_SLIDER("Cycle time (s per lap)", 2, 120, 1, 0, &c.colorCyclePeriod, nullptr, "behavior", "color_cycle_period", false, "Seconds for emitted hue to sweep its band",
            G_COLOUR, "FAI", "color.colorful>0", 0, "", "F")
 KEY_SLIDER("Hue band center (deg)", 0, 360, 1, 0, &c.hueCenter, nullptr, "color", "hue_center", false, "Where on the color wheel emission lives (0=red 120=green 240=blue)",
@@ -465,6 +465,24 @@ KEY_SLIDER("Dye hue with thickness (deg)", -90, 90, 1, 0, &c.acid.dyeThickHue, n
            G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Dye core density", 0.42f, 1, 0.02f, 2, &c.acid.dyeCore, nullptr, "liquid_acid", "dye_core", false, "How bright the thick core of a mass is next to its thin rim. 0.42 = today (the rim is the brightest part, the core ~42% of it: a lit wash); 1 = an even, opaque fill that reads as dense pigment. Pulls the mean level up with it, so lower Dye brightness to hold it. Less effect with Dye smoke up; with Dye follows the lamp at 1 the lamp ramp stays. Inert while Dye brightness is 0 (brief BR)",
            G_MASSES, "A", "", 0, "", "")
+KEY_SLIDER("Lamp grey (far corner)", 0, 1, 0.05f, 2, &c.acid.lampGrey, nullptr, "liquid_acid", "lamp_grey", false, "As if the dye far from the lamp gets less light: the corner diagonally opposite the lamp is desaturated (1 = 60% at the corner, fading to none over Lamp grey size), luminance kept, so it greys without darkening. One corner at a time; when the lamp crosses to the other side the region slides along the frame edge to the new far corner over ~90 s. Never the centre. Shows only where film or lit dye sits in that corner. 0 = off (brief BU)",
+           G_OPTICS, "A", "", KF_MOTION, "", "")
+KEY_SLIDER("Lamp grey size (screen h)", 0.25f, 0.60f, 0.05f, 2, &c.acid.lampGreySize, nullptr, "liquid_acid", "lamp_grey_size", false, "Radius of the grey corner region in screen heights: full strength over the inner third, gone at this radius. 0.4 = about a rule-of-thirds corner cell; 0.6 reaches the frame middle band while it slides along the long edge (brief BU)",
+           G_OPTICS, "A", "liquid_acid.lamp_grey>0", 0, "", "")
+KEY_SLIDER("Lamp grey cool", 0, 1, 0.05f, 2, &c.acid.lampGreyCool, nullptr, "liquid_acid", "lamp_grey_cool", false, "How much of the grey is also a cool white balance (luminance kept). 0 = neutral grey; 1 = a blue-grey at the corner. Subtle: +1..3 deg of hue at 0.5 (brief BU)",
+           G_OPTICS, "A", "liquid_acid.lamp_grey>0", 0, "", "")
+KEY_SLIDER("Shadow tone (split tone)", 0, 1, 0.05f, 2, &c.acid.shadowTone, nullptr, "liquid_acid", "shadow_tone", false, "Tints the black masses and droplets with the complement of the main film hue (OKLab opposite, turns with Hue rotation), lifting black by up to Shadow tone lift. Film, lit dye and rims untouched. Switches itself on and off (half the time) on its own slow clock, out of step with the hue. Gives up true black on the masses. Multiplies with the lift (0.5 x lift 0.12 = 1 x lift 0.06). 0 = off (brief BU)",
+           G_POST, "A", "", KF_MOTION, "", "")
+KEY_SLIDER("Shadow tone lift", 0, 0.15f, 0.01f, 2, &c.acid.shadowToneLift, nullptr, "liquid_acid", "shadow_tone_lift", false, "How far black is lifted at full tone, fraction of SDR white (sRGB-encoded). 0.06 = a deep tint (masses +0.025 luma), 0.12 = clearly coloured bodies (+0.047). Inert while Shadow tone is 0 (brief BU)",
+           G_POST, "A", "liquid_acid.shadow_tone>0", 0, "", "")
+KEY_SLIDER("Shadow tone saturation", 0, 1, 0.05f, 2, &c.acid.shadowToneSat, nullptr, "liquid_acid", "shadow_tone_sat", false, "Saturation of the shadow tint. 0 = a neutral grey lift; 0.8 = the complement, rich. Inert while Shadow tone is 0 (brief BU)",
+           G_POST, "A", "liquid_acid.shadow_tone>0", 0, "", "")
+KEY_SLIDER("Shadow tone period (s)", 0, 3600, 25, 0, &c.acid.shadowTonePeriod, nullptr, "liquid_acid", "shadow_tone_period", false, "One on+off cycle of the shadow tone, seconds (on for half, starting ON). 2225 = the hue period / golden ratio, so the tint never meets the same hue twice (a 3:5 gear, 2160, repeats every 3.25 h). 0 = always on. Inert while Shadow tone is 0 (brief BU)",
+           G_POST, "A", "liquid_acid.shadow_tone>0", KF_MOTION, "zero:always on", "")
+KEY_SLIDER("Shadow tone fade (s)", 0, 600, 10, 0, &c.acid.shadowToneFade, nullptr, "liquid_acid", "shadow_tone_fade", false, "Length of each on/off crossfade, seconds (smoothstep). Minutes, so the switch is never seen. Inert while Shadow tone is 0 (brief BU)",
+           G_POST, "A", "liquid_acid.shadow_tone>0", KF_MOTION, "", "")
+KEY_SLIDER("Shadow tone hue (deg)", -5, 360, 5, 0, &c.acid.shadowToneHue, nullptr, "liquid_acid", "shadow_tone_hue", false, "Leftmost = complement: the tint is the OKLab opposite of the main film hue and turns with it (default). 0..360 = a FIXED hue in degrees that does not rotate: 275 violet, 235 blue, 185 teal. Inert while Shadow tone is 0 (brief BU/BV)",
+           G_POST, "A", "liquid_acid.shadow_tone>0", 0, "neg:complement", "")
 KEY_SLIDER("Interface speckle", 0, 1, 0.02f, 2, &c.acid.speckle, nullptr, "liquid_acid", "speckle", false, "Sparse dark dots hugging the oil/ink boundary",
            G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Oil HDR level (0 = follow ink)", 0, 1.4f, 0.02f, 2, &c.acid.oilHdr, nullptr, "liquid_acid", "oil_hdr", false, "Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's",
@@ -745,7 +763,7 @@ KEY_CHECK("Pause on fullscreen app", &g_pauseOnFullscreen, "general", "pause_on_
           G_SYSTEM, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")
 KEY_CHECK("Pause on maximized app", &g_pauseOnMaximized, "general", "pause_on_maximized", "Pause the wallpaper while a maximized window has focus",
           G_SYSTEM, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")
-KEY_CHECK("Cycle presets (auto-switch)", UiCycleEnabledPtr(), "moods", "enabled", "Auto-switch between the presets in the cycle (fluid presets only today)",
+KEY_CHECK("Cycle looks (auto-switch)", UiCycleEnabledPtr(), "cycle", "enabled", "Walk the [cycle] stage list: WE fluid, oil, ink, mirror overlays",
           G_SYSTEM, "FAI", "", KF_MACHINE, "", "")
 KEY_CHECK("Mirror on second monitor", &c.mirrorSecond, "general", "mirror_second", "Also render the wallpaper on the second monitor",
           G_OUTPUT, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")

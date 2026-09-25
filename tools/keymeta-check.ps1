@@ -6,7 +6,7 @@
 #     unknown flag, unknown 'special' form, front not a subset of looks)
 #   - a duplicate section.key
 #   - a gate that does not parse or names an unknown key (look==F|A|I is the only pseudo-key)
-#   - a row whose key string is never read by src\main.cpp / src\moods.cpp (typo guard)
+#   - a row whose key string is never read by src\main.cpp / src\cycle.cpp (typo guard)
 #   - a measured_inert.inc entry naming an unknown key
 # Usage: powershell -File tools\keymeta-check.ps1 [-Root <repo or worktree>]
 
@@ -16,7 +16,7 @@ if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 $inc = Join-Path $Root 'src\ui\keys.inc'
 $inert = Join-Path $Root 'src\ui\measured_inert.inc'
 $text = [System.IO.File]::ReadAllText($inc)
-$mainSrc = [System.IO.File]::ReadAllText((Join-Path $Root 'src\main.cpp')) + [System.IO.File]::ReadAllText((Join-Path $Root 'src\moods.cpp'))
+$mainSrc = [System.IO.File]::ReadAllText((Join-Path $Root 'src\main.cpp')) + [System.IO.File]::ReadAllText((Join-Path $Root 'src\cycle.cpp'))
 
 function Split-Args([string]$s) {
     $out = New-Object System.Collections.Generic.List[string]
@@ -80,7 +80,7 @@ foreach ($r in $rows) {
     foreach ($ch in $front.ToCharArray()) { if ($looks.IndexOf($ch) -lt 0) { $errors.Add("$id : front look $ch is not in looks $looks") } }
     if ($flags -ne '0') { foreach ($f in ($flags -split '\|')) { if ($flagNames -notcontains $f.Trim()) { $errors.Add("$id : unknown flag '$f'") } } }
     if ($spec -and $spec -notmatch '^(enum:(-?\d+=[^|]+)(\|-?\d+=[^|]+)*|peak|neg:.+|zero:.+|look|autostart)$') { $errors.Add("$id : bad special '$spec'") }
-    if ($sec -ne 'system' -and $mainSrc.IndexOf("L`"$key`"") -lt 0) { $errors.Add("$id : key string L`"$key`" is never read in main.cpp / moods.cpp") }
+    if ($sec -ne 'system' -and $mainSrc.IndexOf("L`"$key`"") -lt 0) { $errors.Add("$id : key string L`"$key`" is never read in main.cpp / cycle.cpp") }
     $meta += [PSCustomObject]@{ Id = $id; Gate = $gate; Flags = $flags; Looks = $looks }
 }
 

@@ -487,7 +487,11 @@ void FluidRenderer::EnsureLookResources() {
     if (!m_device) return;
     const bool needAcid = m_cfg.acid.enabled && !m_psoLiquidAcid;
     const bool needInk  = m_cfg.ink.enabled  && !m_psoInk;
+    m_lastLookCompileMs = 0.0;
     if (!needAcid && !needInk) return;
+    LARGE_INTEGER qf, q0, q1;
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&q0);
     WaitForGpuIdle();
     if (needAcid) {
         MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
@@ -499,6 +503,9 @@ void FluidRenderer::EnsureLookResources() {
         MakeGraphicsPso(kDisplaySrc, m_psoInk, defs);
         printf("look: ink PSO compiled on demand\n");
     }
+    QueryPerformanceCounter(&q1);
+    m_lastLookCompileMs = 1000.0 * (double)(q1.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
+    printf("look: PSO compile took %.0f ms\n", m_lastLookCompileMs);
 }
 
 // Headless render target: one FP16 texture the size of the requested shot,
@@ -721,6 +728,20 @@ void FluidRenderer::EndFrameAndPresent() {
     m_fenceValues[m_frameIndex] = m_nextFence;
     HR(m_queue->Signal(m_fence.Get(), m_nextFence++));
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+}
+
+// SimOnlyStep on a swap chain: execute and fence exactly like a frame, but no
+// Present -- so the back-buffer index does not advance and m_frameIndex stays
+// put (the next BeginFrame waits on this very fence before reusing the
+// allocator, which serialises the warm-up steps; that is intended). The fence
+// value comes from the same m_nextFence counter, so the coverage/velocity
+// readbacks that stamped m_nextFence this frame see it signalled as usual.
+void FluidRenderer::EndFrameNoPresent() {
+    HR(m_cmd->Close());
+    ID3D12CommandList* lists[] = { m_cmd.Get() };
+    m_queue->ExecuteCommandLists(1, lists);
+    m_fenceValues[m_frameIndex] = m_nextFence;
+    HR(m_queue->Signal(m_fence.Get(), m_nextFence++));
 }
 
 // Dispatch one compute pass. srv0/srv1 read, one of the u-slots written
@@ -1033,7 +1054,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     c[7]  = fmaxf(po.filmGrainSpeed, 0.0f);
     c[8]  = fminf(fmaxf(po.filmGrainColor, 0.0f), 1.0f);
     c[9]  = m_time;
-    c[10] = m_sdrScale;
+    c[10] = m_sdrScale * m_fade;   // cycle fade (1.0 = today, bit-identical)
     c[11] = fminf(fmaxf(po.postGlowDark, 0.0f), 1.0f);
     // the film overlay: population masters, the clock they change on, the
     // second noise layer, and this frame's 1440p scale (the shader divides
@@ -1364,8 +1385,11 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
+    // Cycle fade: sdrScale above is the UNFADED scale (so peakGain does not
+    // grow as the frame dims); the constant the shader multiplies by carries
+    // the fade. m_fade == 1.0f -> sdrScale * 1.0f == sdrScale exactly.
     float consts[32] = { 1.0f / w, 1.0f / h,
-                         m_cfg.shading ? 1.0f : 0.0f, sdrScale,
+                         m_cfg.shading ? 1.0f : 0.0f, sdrScale * m_fade,
                          (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          m_cfg.hdrSaturation, m_cfg.hdrBrightness, m_cfg.hdrContrast, hdrOn,
@@ -1785,6 +1809,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     m_hdrActive = hdrActive;
     m_sdrScale = sdrScale;
     m_time += dt;
+    AccumFrozen(dt);   // animators.h freezes; no-op unless something is frozen
 
     BeginFrame();
 
@@ -1794,6 +1819,29 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         return;
     }
 
+    FrameSim(dt, input);
+
+    if (m_blackOut) {
+        ClearTargetBlack();
+    } else {
+        if (m_headless) RenderDisplayOffscreen();
+        else            RenderDisplay();
+        if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
+        if (m_anaEnabled) MaybeRenderAnalyzer();
+    }
+    EndFrameAndPresent();
+
+    if (m_readbackPending) {
+        WaitForGpuIdle();
+        ReportStats();
+        m_readbackPending = false;
+    }
+}
+
+// The sim half of Frame(), recorded into the open command list. Split out
+// verbatim (same calls, same order) so the director's warm-up can run it
+// without a display pass; Frame() itself records exactly what it did before.
+void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
     if (m_firstFrame) {
         // zero all sim textures, then the reference's startup burst
         SimCB cb = {};
@@ -1840,7 +1888,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     if (m_cfg.wanderers && (m_time - m_lastInteraction > m_cfg.wandererResumeDelay))
         UpdateWanderers(dt);
     UpdateDart(dt);
-    UpdateHueShift(dt);
+    if (!m_animFrozen[3]) UpdateHueShift(dt);   // ANIM_HUE_SHIFT freeze holds the angle
     HandleInput(input);
 
     // ink drops (style-agnostic emitter; inert unless [drops] drops=1 and no
@@ -1889,7 +1937,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     // The camera rig -- lamp, optical axis, focus plane -- moves whether or
     // not the acid look is on: [post] fog and bloom hang off the lamp and any
     // style can name them.
-    StepCameraRig(dt);
+    StepCameraRig(m_animFrozen[2] ? 0.0f : dt);   // ANIM_RIG freeze: no motion at all
 
     // Liquid Acid oil layer: advect the blobs with the fluid we just stepped
     // (one frame of readback latency), then hand them to the display pass.
@@ -1935,18 +1983,165 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         if (!m_cfg.acid.enabled && m_cfg.ink.motionHi > m_cfg.ink.motionLo)
             UpdateVelocityReadback();
     }
+}
 
-    if (m_headless) RenderDisplayOffscreen();
-    else            RenderDisplay();
-    if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
-    if (m_anaEnabled) MaybeRenderAnalyzer();
-    EndFrameAndPresent();
-
+void FluidRenderer::SimOnlyStep(float dt) {
+    if (!m_device || m_cfg.gradientMode || m_cfg.calibratePage > 0) return;
+    m_time += dt;
+    AccumFrozen(dt);
+    BeginFrame();
+    FrameSim(dt, FrameInput{});
+    if (m_headless) EndFrameAndPresent();   // headless: fence + ring, no Present
+    else            EndFrameNoPresent();
     if (m_readbackPending) {
         WaitForGpuIdle();
         ReportStats();
         m_readbackPending = false;
     }
+}
+
+// SetBlackOut(true): the frame's target is cleared to black instead of drawn.
+// Same barriers as PresentBlack() (swap chain + second-monitor mirror); the
+// headless shot texture is cleared in place so a capture reads true zero.
+void FluidRenderer::ClearTargetBlack() {
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    if (m_headless) {
+        if (!m_shotTex) return;
+        if (m_shotState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+            D3D12_RESOURCE_BARRIER b = {};
+            b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            b.Transition.pResource = m_shotTex.Get();
+            b.Transition.StateBefore = m_shotState;
+            b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+            b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            m_cmd->ResourceBarrier(1, &b);
+            m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        }
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        m_cmd->ClearRenderTargetView(rtv, black, 0, nullptr);
+        return;
+    }
+    const UINT i = m_frameIndex;
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = m_backBuffers[i].Get();
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_cmd->ResourceBarrier(1, &b);
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    rtv.ptr += (SIZE_T)i * m_rtvStride;
+    m_cmd->ClearRenderTargetView(rtv, black, 0, nullptr);
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    m_cmd->ResourceBarrier(1, &b);
+    if (m_mirrorChain && !m_mirrorBroken) {
+        const UINT mi = m_mirrorChain->GetCurrentBackBufferIndex();
+        D3D12_RESOURCE_BARRIER mb = b;
+        mb.Transition.pResource = m_mirrorBuffers[mi].Get();
+        mb.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+        mb.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        m_cmd->ResourceBarrier(1, &mb);
+        D3D12_CPU_DESCRIPTOR_HANDLE mrtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        mrtv.ptr += (SIZE_T)(kFrames + 1 + mi) * m_rtvStride;
+        m_cmd->ClearRenderTargetView(mrtv, black, 0, nullptr);
+        mb.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+        mb.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+        m_cmd->ResourceBarrier(1, &mb);
+    }
+}
+
+void FluidRenderer::ResetLookState() {
+    m_firstFrame = true;            // clear every sim texture + startup burst
+    m_idleTimer = 0.0f;
+    m_dart.active = false;
+    m_lastDartTime = m_time;        // no dart the instant the new look opens
+    m_lastInteraction = -1000.0f;
+    // liquid_acid: population, droplets, hue2 mix field -- all reseed lazily
+    // on the next frame under the NEW stage's keys (the same flags Shutdown()
+    // resets for a resume)
+    m_acidBlobs.clear();
+    m_acidSeeded = false;
+    m_acidWantBlobs = -1;
+    m_acidDrops.clear();
+    m_dropletOrder.clear();
+    m_dropletSeededFor = -1;
+    m_dropletSpawnAcc = 0.0f;
+    m_mixSeeded = false;
+    // the 64x36 velocity copy the blobs advect with is of the OLD field
+    for (float& v : m_velCpu) v = 0.0f;
+    // [drops] emitter: re-prime its first interval, drop any pending tail
+    m_dropTimer = 0.0f;
+    m_dropPrimed = false;
+    m_dropTailLeft = 0.0f;
+    m_dropQueued = false;
+    InitWanderers();
+    printf("[cycle] look state reset (sim cleared, acid/droplets/mix reseed next frame)\n");
+}
+
+double FluidRenderer::PrecompilePostPsos() {
+    if (!m_device || m_psoPostBN || !PostActive()) return 0.0;
+    LARGE_INTEGER qf, q0, q1;
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&q0);
+    const D3D_SHADER_MACRO defs[] = { { "BN_OPTICS", "1" }, { nullptr, nullptr } };
+    MakeGraphicsPso(kPostSrc, m_psoPostBN, defs);
+    QueryPerformanceCounter(&q1);
+    const double ms = 1000.0 * (double)(q1.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
+    printf("post: BN_OPTICS PSO precompiled at the cycle black point (%.0f ms)\n", ms);
+    return ms;
+}
+
+int FluidRenderer::AcidBlobCount() const {
+    int live = 0;
+    for (const AcidBlob& b : m_acidBlobs) if (b.rTarget > 0.0f) live++;
+    return live;
+}
+
+// animators.h live-value getters: the same formulas the constant upload uses,
+// read-only (they cannot change a frame).
+static void RgbToHsv(const float c[3], float& h, float& sv, float& v);   // below
+float FluidRenderer::PaletteHueDeg() const {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    if (!(a.hueRotatePeriod > 0.01f)) return 0.0f;
+    const float u = fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
+    // brief BV: the warped clock (exact with the sweep off, which every Scheme
+    // preset sets; with the sweep on the upload warps from the swept hue).
+    if (a.hueAnchorWeight > 0.0005f) {
+        float h0, s0, v0;
+        RgbToHsv(&a.oilColors[0], h0, s0, v0);
+        return AnchorWarpDeg(u, h0 * 360.0f, a.hueAnchorWeight);
+    }
+    return 360.0f * u;
+}
+
+float FluidRenderer::PaletteSweepPos() const {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    if (!(a.hueSweepPeriod > 0.01f)) return -1.0f;
+    int np = a.sweepCount;
+    if (np < 1) np = 1;
+    if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
+    return fmodf(AnimatorTime(0) / a.hueSweepPeriod, 1.0f) * np;
+}
+
+float FluidRenderer::Hue2Deg() const {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    float h = a.filmHue2;
+    if (fabsf(a.filmHue2Wobble) > 0.001f) {
+        const float P = fmaxf(a.filmHue2WobbleP, 5.0f);
+        const float TAU = 6.2831853f;
+        const float th = AnimatorTime(1);
+        h += a.filmHue2Wobble * (0.62f * sinf(TAU * th / P + m_mixPhase)
+                               + 0.38f * sinf(TAU * th / (P * 0.61803399f)
+                                              + 1.7f + m_mixPhase * 0.7f));
+    }
+    return h;
+}
+
+int FluidRenderer::AcidDropletCount() const {
+    int live = 0;
+    for (const AcidDrop& d : m_acidDrops) if (d.rt > 0.0f) live++;
+    return live;
 }
 
 static float HalfToFloat(uint16_t h) {
@@ -2494,8 +2689,8 @@ struct AcidParamsGPU {
     float p34[4];
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
-    // laP36 / laP37: BU's (lamp grey + split tone, branch bu); empty on bv.
-    // laP38: brief BV (.x film_hue3_lift; .yzw free).
+    // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
+    // brief BV: p38.x film_hue3_lift (.yzw free).
     float p36[4], p37[4], p38[4];
     float mix[60][4];
 };
@@ -2552,6 +2747,47 @@ static_assert(sizeof(InkParamsGPU) == 160, "InkCB layout");
 // orange into olive on the way to yellow.) The oil colours and the ink stops
 // are rotated here rather than in the pixel shader because the shader picks a
 // flat fill per pixel out of the blob buffer.
+// brief BU: the split tone's on/off gate, 0..1, on its own clock. 50% duty:
+// fully on for the first half-period minus the fades, a smoothstep fade of
+// `fade` seconds at each edge, off for the other half. Shifted by one fade so
+// it starts fully ON at t = 0 (a freshly launched wallpaper shows the tint
+// for its first ~14.5 min at the default 2225 s; the edges are then at
+// t = 872..992 s, off, and 2105..2225 s back on). period <= 0 = always on.
+// tools-side replica: the BU proof's gear log (report) uses this formula.
+static float ShadowToneGate(double t, float period, float fade) {
+    if (period <= 0.5f) return 1.0f;
+    const double P = period;
+    const double half = 0.5 * P;
+    const double f = fmin(fmax((double)fade, 0.0), 0.5 * half);
+    double v = fmod(t + f, P);
+    if (v < 0.0) v += P;
+    auto ss = [](double e0, double e1, double x) {
+        if (e1 - e0 < 1e-6) return x >= e1 ? 1.0 : 0.0;
+        double u = (x - e0) / (e1 - e0);
+        u = u < 0.0 ? 0.0 : (u > 1.0 ? 1.0 : u);
+        return u * u * (3.0 - 2.0 * u);
+    };
+    return (float)(ss(0.0, f, v) * (1.0 - ss(half - f, half, v)));
+}
+
+// brief BU: OKLab hue (radians) of an sRGB-ENCODED colour, for the split
+// tone's complement. The HSV complement (h + 0.5) misses the perceptual
+// opposite by up to ~23 deg (worst on the blues and the pinks this look runs),
+// so the tint's hue is solved in OKLab instead.
+static float BuOkHueEnc(float r, float g, float b) {
+    auto lin = [](float c) {
+        c = fmaxf(c, 0.0f);
+        return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+    };
+    const float lr = lin(r), lg = lin(g), lb = lin(b);
+    const float l = cbrtf(0.4122214708f * lr + 0.5363325363f * lg + 0.0514459929f * lb);
+    const float m = cbrtf(0.2119034982f * lr + 0.6806995451f * lg + 0.1073969566f * lb);
+    const float s = cbrtf(0.0883024619f * lr + 0.2817188376f * lg + 0.6299787005f * lb);
+    const float A = 1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s;
+    const float B = 0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s;
+    return atan2f(B, A);
+}
+
 static void RgbToHsv(const float c[3], float& h, float& sv, float& v) {
     const float mx = fmaxf(c[0], fmaxf(c[1], c[2]));
     const float mn = fminf(c[0], fminf(c[1], c[2]));
@@ -3076,7 +3312,7 @@ void FluidRenderer::StepHueField(float dt) {
     // spell of patches is a different size as well as a different layout.
     const float freq  = (1.0f / fmaxf(scale, 1e-3f))
                       * (1.0f + 0.18f * sinf(m_mixPhase * 0.7f));
-    const float t     = m_time * 0.03f * drift + m_mixPhase;
+    const float t     = AnimatorTime(1) * 0.03f * drift + m_mixPhase;
     // extra rise, authored in screen heights per minute
     const float riseX = fmaxf(a.filmHue2Rise, 0.0f) / 60.0f;
 
@@ -4645,7 +4881,7 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_rig.lampY = po.lightY + m_camLampOY;
     if (po.lightDrift > 0.0005f) {
         const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
-        const float t  = m_time;
+        const float t  = AnimatorTime(2);
         m_rig.lampX += (0.055f * sinf(t * 0.0171f) + 0.030f * sinf(t * 0.0413f + 1.7f)) * kd;
         m_rig.lampY += (0.040f * sinf(t * 0.0233f + 0.6f) + 0.022f * sinf(t * 0.0561f + 2.3f)) * kd;
     }
@@ -4661,7 +4897,7 @@ void FluidRenderer::StepCameraRig(float dt) {
     m_rig.axisY = fminf(fmaxf(po.cameraAxisY + m_camAxOY, -2.0f), 3.0f);
     if (po.lightDrift > 0.0005f) {
         const float kd = fminf(fmaxf(po.lightDrift, 0.0f), 1.0f);
-        const float t  = m_time;
+        const float t  = AnimatorTime(2);
         m_rig.axisX += (0.026f * sinf(t * 0.0127f + 2.2f)
                       + 0.014f * sinf(t * 0.0331f + 5.1f)) * kd;
         m_rig.axisY += (0.022f * sinf(t * 0.0193f + 0.4f)
@@ -4675,7 +4911,7 @@ void FluidRenderer::StepCameraRig(float dt) {
     // few thousandths of a pixel -- far below anything the eye can follow,
     // which is the entire trick: invisible motion that still moves.
     {
-        const float t = m_time;
+        const float t = AnimatorTime(2);
         m_rig.shiftX = po.pixelShiftPx * (0.72f * sinf(t * 0.0150f)
                                         + 0.28f * sinf(t * 0.0095f + 1.9f));
         m_rig.shiftY = po.pixelShiftPx * (0.72f * cosf(t * 0.0131f + 0.7f)
@@ -4694,7 +4930,7 @@ void FluidRenderer::StepCameraRig(float dt) {
     // This runs BEFORE the focus ring's early return: the lens may be bolted
     // down (focus_tilt_period 0) and the lid still has to wander.
     {
-        const float tl = m_time;
+        const float tl = AnimatorTime(2);
         const float ix = 0.085f * sinf(tl * 0.0131f + 0.9f)
                        + 0.045f * sinf(tl * 0.0307f + 2.4f);
         const float iy = 0.070f * sinf(tl * 0.0163f + 1.9f)
@@ -4814,7 +5050,7 @@ void FluidRenderer::StepCameraRig(float dt) {
 // w = 1 magenta dwells ~5x longer per degree than a plain hue, the
 // lime/mustard band ~2.4x shorter than linear. Table rebuilt only when w
 // changes; one binary search per frame.
-float FluidRenderer::AnchorWarpDeg(float u, float h0Deg, float w) {
+float FluidRenderer::AnchorWarpDeg(float u, float h0Deg, float w) const {
     if (fabsf(w - m_anchorCdfW) > 1e-6f) {
         static const float kAnc[4][2] = { {325.0f, 1.0f}, {215.0f, 0.6f},
                                           {355.0f, 0.5f}, {275.0f, 0.4f} };
@@ -4883,7 +5119,7 @@ void FluidRenderer::UploadAcidConstants() {
         int np = a.sweepCount;
         if (np < 1) np = 1;
         if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
-        const float u = fmodf(m_time / a.hueSweepPeriod, 1.0f) * np;
+        const float u = fmodf(AnimatorTime(0) / a.hueSweepPeriod, 1.0f) * np;
         const int k0 = (int)u % np, k1 = (k0 + 1) % np;
         // smoothstep the cross-fade so each pair gets a long settled stretch
         float f = u - floorf(u);
@@ -4918,13 +5154,13 @@ void FluidRenderer::UploadAcidConstants() {
     // turning, not as confetti. The ink is untouched -- on the mono-ink
     // tile9 family it stays grey and the holes stay black through every hue.
     if (a.hueRotatePeriod > 0.01f) {
-        float deg = 360.0f * fmodf(m_time / a.hueRotatePeriod, 1.0f);
+        float deg = 360.0f * fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f);
         // brief BV rule 4, hue_anchor_weight: a WARPED clock. 0 keeps the
         // line above exactly (identity by construction: this block is skipped).
         if (a.hueAnchorWeight > 0.0005f) {
             float h0, s0, v0;
             RgbToHsv(&effOil[0], h0, s0, v0);   // the palette's own hue, 0..1
-            deg = AnchorWarpDeg(fmodf(m_time / a.hueRotatePeriod, 1.0f),
+            deg = AnchorWarpDeg(fmodf(AnimatorTime(0) / a.hueRotatePeriod, 1.0f),
                                 h0 * 360.0f, a.hueAnchorWeight);
         }
         for (int ci = 0; ci < 4; ci++) HsvHueShiftCpu(&effOil[ci * 3], deg);
@@ -5331,8 +5567,9 @@ void FluidRenderer::UploadAcidConstants() {
     if (fabsf(a.filmHue2Wobble) > 0.001f) {
         const float P = fmaxf(a.filmHue2WobbleP, 5.0f);
         const float TAU = 6.2831853f;
-        const float w = 0.62f * sinf(TAU * m_time / P + m_mixPhase)
-                      + 0.38f * sinf(TAU * m_time / (P * 0.61803399f)
+        const float th = AnimatorTime(1);   // ANIM_HUE2 freeze holds the swing
+        const float w = 0.62f * sinf(TAU * th / P + m_mixPhase)
+                      + 0.38f * sinf(TAU * th / (P * 0.61803399f)
                                      + 1.7f + m_mixPhase * 0.7f);
         hue2Eff += a.filmHue2Wobble * w;
     }
@@ -5395,6 +5632,138 @@ void FluidRenderer::UploadAcidConstants() {
     // a clamp leaves the default's float32 bits untouched, so every preset
     // that does not set the key renders byte-identical. 1 = even fill.
     slot(LA_DYE_CORE,      fminf(fmaxf(a.dyeCore, 0.0f), 1.0f));
+    // ---- brief BU: LAMP GREY -------------------------------------------
+    // The user: "graying out from the lamp ... as if the dye is getting less
+    // light ... rule of thirds, one corner at a time". The shader greys a
+    // soft disc around (GREY_CX, GREY_CY); this picks WHERE: the corner
+    // diagonally opposite the lamp, by the sign of lamp - 0.5 on each axis
+    // with +-0.04 hysteresis (a lamp drifting across the middle must not
+    // flicker the region). A continuous far-from-lamp weight would light two
+    // corners at once, hence the CPU pick. When the far corner changes, the
+    // centre SLIDES to it along the frame edge (never through the middle)
+    // over kGreySlideS, eased, so there is always exactly one region. The
+    // state runs whatever lamp_grey is, so turning the key on shows the
+    // right corner at once; GREY_K 0 skips the shader branch (identity).
+    {
+        const float A = aspect;
+        const float P = 2.0f * A + 2.0f;                // perimeter, p-units
+        const float cornerS[4] = { 0.0f, A, A + 1.0f, 2.0f * A + 1.0f };   // TL TR BR BL
+        const float dtG = (m_greyLastT < 0.0f) ? 0.0f
+                        : fminf(fmaxf(m_time - m_greyLastT, 0.0f), 1.0f);
+        m_greyLastT = m_time;
+        const float lx = m_rig.lampX - 0.5f, ly = m_rig.lampY - 0.5f;
+        const float Hy = 0.04f;
+        if (m_greySX == 0) {
+            m_greySX = (lx >= 0.0f) ? 1 : -1;
+            m_greySY = (ly >= 0.0f) ? 1 : -1;
+        } else {
+            if (lx >  Hy) m_greySX =  1; else if (lx < -Hy) m_greySX = -1;
+            if (ly >  Hy) m_greySY =  1; else if (ly < -Hy) m_greySY = -1;
+        }
+        // lamp right (+1) -> the LEFT edge is far; lamp below (+1) -> the TOP.
+        const bool right = (m_greySX < 0), bottom = (m_greySY < 0);
+        const int  want  = bottom ? (right ? 2 : 3) : (right ? 1 : 0);
+        if (m_greyCorner < 0) {
+            m_greyCorner = want;
+            m_greyS = cornerS[want];
+            m_greySlideT = -1.0f;
+        } else if (want != m_greyCorner) {
+            // the shorter way round the frame from wherever the centre is now
+            // (a readjust mid-slide simply re-aims it)
+            float d = fmodf(cornerS[want] - m_greyS, P);
+            if (d >  0.5f * P + 1e-4f) d -= P;
+            if (d < -0.5f * P - 1e-4f) d += P;
+            m_greyCorner = want;
+            m_greySFrom  = m_greyS;
+            m_greySDelta = d;
+            m_greySlideT = 0.0f;
+        }
+        if (m_greySlideT >= 0.0f) {
+            m_greySlideT += dtG;
+            const float u = fminf(m_greySlideT / kGreySlideS, 1.0f);
+            m_greyS = m_greySFrom + m_greySDelta * (u * u * (3.0f - 2.0f * u));
+            if (u >= 1.0f) { m_greyS = cornerS[m_greyCorner]; m_greySlideT = -1.0f; }
+        } else {
+            m_greyS = cornerS[m_greyCorner];   // at rest: absorbs a resize
+        }
+        float s = fmodf(m_greyS, P);
+        if (s < 0.0f) s += P;
+        float gx, gy;
+        if (s < A)                 { gx = s;                    gy = 0.0f; }
+        else if (s < A + 1.0f)     { gx = A;                    gy = s - A; }
+        else if (s < 2.0f * A + 1.0f) { gx = A - (s - (A + 1.0f)); gy = 1.0f; }
+        else                       { gx = 0.0f;                 gy = 1.0f - (s - (2.0f * A + 1.0f)); }
+        m_greyCx = gx; m_greyCy = gy;
+        slot(LA_GREY_K,    0.6f * fminf(fmaxf(a.lampGrey, 0.0f), 1.0f));
+        slot(LA_GREY_SIZE, fminf(fmaxf(a.lampGreySize, 0.05f), 1.0f));
+        slot(LA_GREY_COOL, fminf(fmaxf(a.lampGreyCool, 0.0f), 1.0f));
+        slot(LA_GREY_CX,   gx);
+        slot(LA_GREY_CY,   gy);
+    }
+    // ---- brief BU: SPLIT TONE --------------------------------------------
+    // The user: "make it the opposite of the main hue, and obviously rotate
+    // with the main hue. Make it turn on/off, out of sync with the hue, the
+    // same way gears are like 3 and 5 so they always switch teeth." The main
+    // hue is effOil[0] AFTER the sweep and hue_rotate_period (above), so the
+    // tint turns with the film; its complement is taken in OKLab (see below).
+    // Folded here into one
+    // pre-multiplied add (level lift x gate x amount) so the shader does one
+    // test and one multiply-add. The gate (ShadowToneGate) is a 50% duty
+    // on/off on its OWN clock; 2225 s against the 3600 s hue period is the
+    // golden ratio, which never repeats a (hue, on/off) pairing. Gate 0 (the
+    // off half) uploads 0 and the shader branch is skipped, exactly as at
+    // shadow_tone 0. Dark tones of the MASSES only (the shader's mask); this
+    // is the one BU piece that lifts true black, by at most the lift key.
+    {
+        float tr = 0.0f, tg = 0.0f, tb = 0.0f;
+        const float amt  = fminf(fmaxf(a.shadowTone, 0.0f), 1.0f);
+        const float lift = fminf(fmaxf(a.shadowToneLift, 0.0f), 0.25f);
+        if (amt > 1e-4f && lift > 1e-6f) {
+            const float g = ShadowToneGate((double)m_time, a.shadowTonePeriod, a.shadowToneFade);
+            if (g > 1e-5f) {
+                // The tint is an HSV colour (value 1, shadow_tone_sat) whose
+                // HSV hue is SOLVED so that what lands on the black -- the
+                // encoded add at this frame's amplitude k -- sits at the film's
+                // OKLab hue + 180 deg: 96 coarse steps, then a 1/4608 refine.
+                // ~220 cbrt per frame on the CPU, nothing on the GPU.
+                const float k   = lift * g * amt;
+                const float sat = fminf(fmaxf(a.shadowToneSat, 0.0f), 1.0f);
+                const float tgt = BuOkHueEnc(effOil[0], effOil[1], effOil[2]) + 3.14159265f;
+                auto err = [&](float hh) {
+                    const RGB c = HSVtoRGB(hh - floorf(hh), sat, 1.0f);
+                    float d = BuOkHueEnc(c.r * k, c.g * k, c.b * k) - tgt;
+                    d = fmodf(d, 6.2831853f);
+                    if (d >  3.14159265f) d -= 6.2831853f;
+                    if (d < -3.14159265f) d += 6.2831853f;
+                    return fabsf(d);
+                };
+                float fh, fs, fv;
+                RgbToHsv(&effOil[0], fh, fs, fv);
+                float best = fh + 0.5f, be = 1e9f;
+                if (a.shadowToneHue >= 0.0f) {
+                    // shadow_tone_hue: a FIXED absolute hue (brief BV), no
+                    // rotation with the film, no solve.
+                    best = fmodf(a.shadowToneHue, 360.0f) / 360.0f;
+                } else if (sat > 1e-3f) {
+                    for (int i = 0; i < 96; i++) {
+                        const float hh = i / 96.0f, e = err(hh);
+                        if (e < be) { be = e; best = hh; }
+                    }
+                    const float c0 = best;
+                    for (int i = -24; i <= 24; i++) {
+                        const float hh = c0 + i / 4608.0f, e = err(hh);
+                        if (e < be) { be = e; best = hh; }
+                    }
+                }
+                const RGB c = HSVtoRGB(best - floorf(best), sat, 1.0f);
+                tr = c.r * k; tg = c.g * k; tb = c.b * k;
+            }
+        }
+        m_toneAdd[0] = tr; m_toneAdd[1] = tg; m_toneAdd[2] = tb;
+        slot(LA_TONE_R, tr);
+        slot(LA_TONE_G, tg);
+        slot(LA_TONE_B, tb);
+    }
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the
         // bottom edge exist on the CPU alone, so the cbuffer layout and the
@@ -5542,11 +5911,14 @@ void FluidRenderer::UploadInkConstants() {
     whiteSc = fminf(whiteSc, peakSc);
     float blackSc = fmaxf(k.blackNits, 0.0f) / 80.0f;
     blackSc = fminf(blackSc, whiteSc);
-    const float p5[4] = { whiteSc, blackSc,
+    // The ink tonemap writes absolute scRGB (it never multiplies by the b0
+    // sdrScale), so the cycle fade scales its three targets directly. x1.0
+    // (the default) leaves every value bit-identical.
+    const float p5[4] = { whiteSc * m_fade, blackSc * m_fade,
                           fminf(fmaxf(k.toneKnee, 0.0f), 1.0f),
                           fmaxf(k.toneChroma, 0.0f) };
     const float p6[4] = { fminf(fmaxf(k.tintHueBlend, 0.0f), 1.0f),
-                          peakSc, 0.0f, 0.0f };
+                          peakSc * m_fade, 0.0f, 0.0f };
     memcpy(p.p5, p5, 16); memcpy(p.p6, p6, 16);
 
     // ---- duotone PAIR ROTATION ([ink] pair_sweep_period) -----------------
@@ -5566,7 +5938,7 @@ void FluidRenderer::UploadInkConstants() {
         int np = a.sweepCount;                    // sweep_count, default 5
         if (np < 1) np = 1;
         if (np > LiquidAcidConfig::kSweepMax) np = LiquidAcidConfig::kSweepMax;
-        const float u = fmodf(m_time / k.pairSweepPeriod, 1.0f) * np;
+        const float u = fmodf(AnimatorTime(0) / k.pairSweepPeriod, 1.0f) * np;
         const int k0 = (int)u % np, k1 = (k0 + 1) % np;
         float f = u - floorf(u);
         f = f * f * (3.0f - 2.0f * f);

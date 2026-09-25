@@ -172,3 +172,53 @@ in the middle". Decision log: handoff\review\DECISIONS.md, row "request 5a".
 Opinion: the spec reads well: a B&W print framed by the stage's own colour is a stronger idea than
 the tint version, and Y-flat is the honest start. I expect the lift to matter most on blue schemes
 (dark grey); a film-only lift ~0.15 is my guess, above ~0.3 it will cost ABL and read as a hotspot.
+
+## SPEC UPDATE (2026-09-25 ~19:05, from the user via the creative chat) — binding, supersedes the mask in §1, the defaults in §2 and the "core" in pre-flight item 1
+
+The user made the look in Lightroom on our own monotone frame (a radial filter):
+handoff\review\colour-mocks\user-lr-radial-heart.webp = THE TARGET (the one case where the
+reference is the user's own edit of our render). Then "but even bigger oval": they picked size 1.3
+on heart-oval-mock.png (whole profile scaled 1.3x). Measured against
+look-monotone-post-0924.png, film pixels only, r = elliptical radius (1.0 = edge midpoints,
+corners ~1.41), at the user's edit (size 1.0):
+
+| r | chroma kept | brightness |
+|---|---|---|
+| 0.05..0.35 | 0.25 | x1.40..1.47 (plateau) |
+| 0.45 | 0.29 | x1.43 |
+| 0.55 | 0.34 | x1.39 |
+| 0.65 | 0.41 | x1.33 |
+| 0.75 | 0.50 | x1.26 |
+| 0.85 | 0.59 | x1.17 |
+| 0.95 | 0.68 | x1.11 |
+| 1.05 | 0.75 | x1.06 |
+| 1.15 | 0.83 | x1.04 |
+| 1.25 | 0.90 | x1.00 |
+| 1.35 | 0.94 | x1.00 |
+
+What changes:
+1. NOT fully grey: the centre keeps ~25% chroma, hue kept (magenta film reads dusty rose-grey
+   ~#B58A95). So the amount key stays 0..1 (1 = full grey) but the PRESET ships
+   lamp_grey_heart = 0.75, and the amount sheet is 0.5 / 0.75 / 1.
+2. LIFT ON: the centre is ~x1.45 brighter. lamp_grey_heart_lift default/preset 0.45, range 0..0.8
+   (step 0.05); the lift sheet is 0.3 / 0.45 / 0.6 (Magenta/Mint + Blue Coral + monotone). The
+   lift follows the SAME mask weight as the grey (table: both plateau to ~0.4, both gone ~1.3).
+   Film only (pre-flight item 4, alpha-weighted) — the table was measured on film pixels.
+3. NO visible core edge: one long soft ramp. Mask = `1 - smoothstep(0.3*S, S, r)` (core ratio
+   0.3, not 0.4) with r = length(i.uv*2-1) as in pre-flight item 1. Check the fit against the table
+   at S = 1.3: r 0.65 → ~0.62 desat of 0.75 → kept ~0.53 (table 0.41); r 0.85 → kept ~0.66
+   (table 0.59); r 1.05 → kept ~0.86 (table 0.75). If a plain smoothstep undershoots the middle of
+   the ramp by more than ~0.1, use `1 - t*t*(3-2t)` on `t = saturate((r - 0.3S)/(0.7S))` raised to
+   0.8 (or a comparable one-parameter reshaping) — pick the closest cheap fit and print the fitted
+   column next to the table in the report.
+4. SIZE x1.3: the user's pick = the table scaled by 1.3 → S = 1.3 x 1.3 = 1.7: the plateau runs to
+   ~r 0.55 and full colour only arrives past the corners (corners keep ~85% chroma). So
+   lamp_grey_heart_size default/preset = 1.7, range 0.8..2.2 (step 0.1); size sheet 1.3 / 1.7 / 2.1.
+5. Unchanged: edge colour is the stage's own, no tint, oil stays black, two-colour stages work
+   (Magenta/Mint: dusty rose middle, pale mint edge, soft seam — heart-oval-mock.png bottom row).
+6. Proof additions: (a) heart-vs-user.png: our render of monotone-post-0924 with the preset values
+   (0.75 / 1.7 / 0.45) next to user-lr-radial-heart.webp AND next to the same render at size 1.3
+   (= the user's edit); (b) a measured column: chroma kept and brightness per r bin from OUR
+   render at size 1.3, printed next to the user's table; (c) ABL/mean_lum: the lift adds
+   full-frame load — report mean_lum at lift 0 / 0.45 for the preset, HDR on and off (--hdr off
+   render too); the parent trims the lift before the size if the panel pumps.

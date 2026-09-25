@@ -16,7 +16,7 @@ void RequestExit();                 // main.cpp — clean shutdown from any UI
 void TogglePause();
 bool IsManualPaused();
 
-// preset API (main.cpp) for the scenes window
+// preset API (main.cpp) for the settings window
 void ApplyPresetPath(const std::wstring& path);
 void LoadConfigFromFile(const wchar_t* ini, FluidConfig& cfg);  // partial overlay load
 void SaveCurrentAsPresetFile();     // auto-named snapshot
@@ -27,7 +27,6 @@ void PersistFullConfigNow();        // full live config -> settings.ini
 // shell keys moods must not carry: sim_res, dye_res, fps_limit, mirror_second.
 void WriteConfigToIni(const wchar_t* path, const FluidConfig& cfg, bool includeShell);
 
-void ShowScenesWindow();            // scenes.cpp — RGB-suite style manager
 extern wchar_t  g_iniPath[MAX_PATH];
 // Where config VALUES are read from. Identical to g_iniPath in normal mode;
 // --shot --ini <path> points it at a throwaway copy so a capture run can be

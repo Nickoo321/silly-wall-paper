@@ -16,8 +16,10 @@
 //    the hueCenter equivalent nearest the accumulated held angle.
 //  - r.Config() is touched ONLY at leg boundaries (this file's StartLeg) —
 //    never per frame.
-//  - the conductor calls ReleaseHueShift(false) when a journey mood is left;
-//    this file never calls it (JourneyDetach has no renderer access).
+//  - the cycle director (cycle.cpp; it absorbed the old mood conductor)
+//    calls ReleaseHueShift(false) when a journey stage is left AND when a
+//    journey ends in place; this file never calls it (JourneyDetach has no
+//    renderer access).
 
 #include "journey.h"
 #include "app_state.h"
@@ -254,6 +256,12 @@ void JourneyAttach(const wchar_t* moodPath) {
     wchar_t name[128];
     GetPrivateProfileStringW(L"journey", L"file", L"", name, 128, moodPath);
     if (!name[0]) return;   // mood doesn't opt in
+    JourneyAttachNamed(name, moodPath);
+}
+
+void JourneyAttachNamed(const wchar_t* name, const wchar_t* moodPath) {
+    JourneyDetach();
+    if (!name || !name[0] || !moodPath) return;
     EnsureBuiltinJourneys();
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     JourneysDir(dir);

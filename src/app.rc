@@ -1,2 +1,10 @@
 // Application icon (tray + taskbar + exe file icon)
 1 ICON "../assets/fluid.ico"
+
+// Settings window tile thumbnails (UI-REHAUL 1b): 400x225 PNGs cut from the handoff\images
+// renders (fluid = we-parity, acid = liquid-acid-black-oil, ink = ink-inverted, cycle = a 2x2 of
+// acid/fluid/ink/mirror-quad). Embedded so the single exe needs no resources folder.
+201 RCDATA "ui/thumbs/fluid.png"
+202 RCDATA "ui/thumbs/acid.png"
+203 RCDATA "ui/thumbs/ink.png"
+204 RCDATA "ui/thumbs/cycle.png"

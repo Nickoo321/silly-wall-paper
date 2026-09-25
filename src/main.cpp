@@ -44,6 +44,9 @@
 //   --cycle-pause-at T1,T2   CyclePause at T1, CycleResume at T2 (animators.h)
 //   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition)
 //   --shot-fade F      hold the display fade at F (fade-scaling proof)
+//   --cover-sweep a,b,.. also step a CPU-only shadow hue2 mix field per listed
+//                      film_hue2_cover bias and log its [cover] line (every 5 s
+//                      and at each capture) beside the live field's; never drawn
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -628,6 +631,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.filmHue3           = getF(S, L"film_hue3",        a.filmHue3);
         a.filmHue3Amt        = getF(S, L"film_hue3_amt",    a.filmHue3Amt);
         a.filmHue3Share      = getF(S, L"film_hue3_share",  a.filmHue3Share);
+        a.filmHue2Cover      = getF(S, L"film_hue2_cover",  a.filmHue2Cover);
         a.filmEqualLoad      = getF(S, L"film_equal_load",  a.filmEqualLoad);
         a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.filmHue2Wobble     = getF(S, L"film_hue2_wobble",        a.filmHue2Wobble);
@@ -1927,6 +1931,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_hue3", a.filmHue3, 1);
         putF(S, L"film_hue3_amt", a.filmHue3Amt, 3);
         putF(S, L"film_hue3_share", a.filmHue3Share, 3);
+        putF(S, L"film_hue2_cover", a.filmHue2Cover, 3);
         putF(S, L"film_equal_load", a.filmEqualLoad, 3);
         putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"film_hue2_wobble", a.filmHue2Wobble, 2);
@@ -2240,6 +2245,10 @@ struct ShotOpts {
     // = the same sim state, so mean_lum(F) / mean_lum(1) measures exactly how
     // the fade scales the finished frame. Test hook; -1 = not set.
     float    fixedFade = -1.0f;
+    // --cover-sweep a,b,..: the FINAL-CYCLE C coverage logger also steps one
+    // shadow hue2 mix field per listed film_hue2_cover bias (CPU only, never
+    // drawn) and logs each one's [cover] line beside the live field's.
+    std::vector<float> coverSweep;
 };
 static bool g_shotPngOnly = false;
 
@@ -2752,6 +2761,16 @@ static int RunShotMode() {
                 o.pngOnly = true;
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
                 o.fixedFade = (float)_wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cover-sweep") == 0 && i + 1 < argc) {
+                const wchar_t* p = argv[++i];
+                while (*p) {
+                    wchar_t* end = nullptr;
+                    const float v = (float)wcstod(p, &end);
+                    if (end == p) break;
+                    o.coverSweep.push_back(v);
+                    p = end;
+                    while (*p == L',' || *p == L' ') p++;
+                }
             }
         }
         LocalFree(argv);
@@ -2811,6 +2830,22 @@ static int RunShotMode() {
     renderer.InitOffscreen(o.width, o.height, cfg);
     g_renderer = &renderer;
     renderer.SetCoverageWanted(CycleCoverageWanted());
+    if (!o.coverSweep.empty()) renderer.SetCoverSweep(o.coverSweep);
+    // FINAL-CYCLE C coverage logger: the hue2 mix field's visible-cell shares,
+    // CPU only (no render needed to read them). live = the field the frame
+    // draws; sweep rows = shadow fields at other film_hue2_cover biases.
+    auto coverLog = [&](double t) {
+        const LiquidAcidConfig& la = renderer.Config().acid;
+        if (!la.enabled || (la.filmHue2Amt <= 0.0005f && la.filmHue3Amt <= 0.0005f)) return;
+        float c[8];
+        for (int i = -1; i < renderer.CoverSweepCount(); i++) {
+            if (!renderer.MixCoverage(i, c)) continue;
+            const float b = (i < 0) ? la.filmHue2Cover : renderer.CoverSweepBias(i);
+            ShotLog("[cover] t=%.1f %s bias=%+.3f hi62=%.3f full68=%.3f band=%.3f "
+                    "lo32=%.3f lo28=%.3f lo24=%.3f lo20=%.3f mean=%.3f\n",
+                    t, i < 0 ? "live " : "sweep", b, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
+        }
+    };
     {   // settings-window model on the renderer's config; hooks = the calls the old window made
         UiModelInit(renderer.Config());
         UiLoadActivePreset();
@@ -2955,6 +2990,7 @@ static int RunShotMode() {
             if (frames >= nextLog) {
                 ShotLog("[shot] simulated %.1f s (%lld frames, %.1f s wall)\n",
                         frames / 144.0, frames, (GetTickCount() - wallStart) / 1000.0);
+                coverLog(frames / 144.0);
                 nextLog = frames + 144 * 5;
             }
         }
@@ -2989,6 +3025,7 @@ static int RunShotMode() {
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));
+        coverLog(frames / 144.0);
         if (cycling || renderer.Config().acid.enabled) {
             char cyc[256] = "cycle=off";
             if (cycling) CycleDescribe(cyc, sizeof(cyc));

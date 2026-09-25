@@ -221,6 +221,7 @@ Where every colour in the oil, the ink and the dark masses comes from: the curat
 | `[liquid_acid] film_hue2_wobble_period` |   wobble period (s) | 10..1800, step 10.0 | 300.0 | 300 | Seconds of the slower of the two wobble sines. It also re-aims on the rig's readjustment, with the lamp and the focus |
 | `[liquid_acid] film_hue2_seed_rows` |   seed rows below screen | 0..8, step 1.0 | 2.0 | 2 | New patch colour is generated only in this many hidden rows BELOW the bottom edge and rises into view. 0 = the old behaviour, which laid new patches anywhere in the frame |
 | `[liquid_acid] film_hue2_rise` |   patch rise (screens/min) | 0..2, step 0.05 | 0.25 | 0.3 | Extra upward drift of the patches on top of the oil's own rise. Patches can never travel down the screen |
+| `[liquid_acid] film_hue2_cover` |   second hue coverage | 0..0.25, step 0.01 | 0.0 |  | CPU bias on the hue2 mix field's target, tgt' = saturate(tgt + cover), applied only where patch material is made (below the edge); no slot, no shader change. Share of visible mix cells > 0.62 at 150 s (Magenta/Mint, seed 1234): 0 -> 10%, 0.04 -> 18%, 0.08 -> 30%, 0.12 -> 38%, 0.16 -> 45%, 0.25 -> 70%; it also shrinks the hue3 low end (< 0.32: 12% -> 1%). Logged per run by the [cover] shot-log line (--cover-sweep a,b,.. adds CPU-only shadow fields). Schemes: 0.12 on the Magenta/Mint, Magenta/Cyan, Blue/Coral pairs; 0.04 (+ film_hue3_share 1) elsewhere. FINAL-CYCLE C |
 | `[liquid_acid] film_hue3` | Third film hue (deg) | -180..180, step 5.0 | 0.0 | 0 | An optional third hue, taken off the other end of the SAME patch field so it costs nothing extra per pixel |
 | `[liquid_acid] film_hue3_amt` |   third hue amount | 0..1, step 0.05 | 0.0 | 0 | 0 = off, which is the default |
 | `[liquid_acid] film_hue3_share` |   third hue share | 0..1, step 0.05 | 1.0 |  | How much of the frame the third hue takes: moves the hue3 thresholds (0.18/0.46 of the mix field) down by (1-share)*0.16. 1 = as before (~18%), 0.75 ~13%, 0.5 ~8%, 0 ~3%. Keep a bright yellow third small (ABL). Brief BV |
@@ -590,5 +591,5 @@ traced for this pass; their inline notes say "gate not traced".
 
 ## Totals
 
-**430 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **358 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
+**431 keys total** (ini-backed; excludes the registry-only "Start with Windows" row), **359 with sliders**, **72 read-only** (no control in the settings window, main.cpp-only), **39 inert or unverified** in the current live preset (the original 10 above plus 29 new from brief BJ's 30-key sweep, one of which — `swarm_lens` — was already counted).
 

@@ -355,6 +355,8 @@ KEY_SLIDER("  seed rows below screen", 0, 8, 1.0f, 0, &c.acid.filmHue2SeedRows, 
            G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "", "")
 KEY_SLIDER("  patch rise (screens/min)", 0, 2, 0.05f, 2, &c.acid.filmHue2Rise, nullptr, "liquid_acid", "film_hue2_rise", false, "Extra upward drift of the patches on top of the oil's own rise. Patches can never travel down the screen",
            G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "", "")
+KEY_SLIDER("  second hue coverage", 0, 0.25f, 0.01f, 2, &c.acid.filmHue2Cover, nullptr, "liquid_acid", "film_hue2_cover", false, "How much of the frame the second hue takes, as flat fields rather than seam. 0 = as before (about 10% at 150 s, 32% averaged over a stage); 0.04 a little more; 0.12 about 38% at 150 s (the proven photos' 30-45%); 0.25 the second hue becomes the film. It also shrinks the third hue, so 3-colour schemes stay low (0.04). New colour is still made below the edge and rises in (FINAL-CYCLE C)",
+           G_COLOUR, "A", "liquid_acid.film_hue2_amt>0", 0, "", "")
 KEY_SLIDER("Third film hue (deg)", -180, 180, 5.0f, 0, &c.acid.filmHue3, nullptr, "liquid_acid", "film_hue3", false, "An optional third hue, taken off the other end of the SAME patch field so it costs nothing extra per pixel",
            G_COLOUR, "A", "liquid_acid.film_hue3_amt>0", 0, "", "")
 KEY_SLIDER("  third hue amount", 0, 1, 0.05f, 2, &c.acid.filmHue3Amt, nullptr, "liquid_acid", "film_hue3_amt", false, "0 = off, which is the default",

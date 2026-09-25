@@ -19,9 +19,17 @@ namespace {
 
 // Measured warm-up, in SIM seconds, from a black reset (ResetLookState: clear
 // dye + velocity, reseed the acid population) to a formed frame. Measured
-// 2026-09-25 on branch cycle (see the branch report's proof block). Ink has
-// no measurement (not in the first cycle): it borrows the oil value.
-const float kWarmupDefault[3] = { 6.0f, 14.0f, 14.0f };   // fluid, liquid_acid, ink
+// 2026-09-25 on branch cycle: 1280x720 series from a cold start, 0.5 s steps,
+// plus a 180 s monotone run for the long-run band. "Formed" = mean_lum AND
+// (oil) the droplet count inside the look's own long-run band:
+//   fluid (we-look-live)  10 s: the startup burst (mean_lum 0.26..0.44) has
+//                         settled into the idle-splat band (0.002..0.32)
+//   liquid_acid           32 s: the droplet bulk fill dips 1130 -> 780 at 10 s
+//                         and is back in the long-run band (1124..1536) by
+//                         ~30 s; lapd-look-candidate's dye masses reach 95% of
+//                         their level at 34 s (0.04 -> 0.16 mean_lum)
+//   ink (ink-inverted)     8 s: clear water until the first drop lands at ~7.5 s
+const float kWarmupDefault[3] = { 10.0f, 32.0f, 8.0f };   // fluid, liquid_acid, ink
 const float kWarmupExtraCap = 30.0f;   // max extra sim s waiting for the hue glide
 // User 2026-09-25: "it should really keep moving, but like up to 4 mins per
 // definite stage" -> every dwell (per stage, [cycle] dwell, CLI, and the

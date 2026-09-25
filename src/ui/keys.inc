@@ -225,7 +225,7 @@ KEY_SLIDER("Oil blocks the ink", 0, 1, 0.05f, 2, &c.acid.oilDyeBlock, nullptr, "
            G_OIL, "A", "", KF_UNVERIFIED, "", "")
 KEY_SLIDER("Oil viscosity", 0, 1, 0.05f, 2, &c.acid.oilViscosity, nullptr, "liquid_acid", "oil_viscosity", false, "Thick liquid: blobs lag the water, accelerate and coast slowly, breathe and sway slowly, neck together over seconds, and the droplets stop jittering",
            G_OIL, "A", "", 0, "", "")
-KEY_SLIDER("Mouse oil mode (0 none 1 push 2 comb)", 0, 2, 1, 0, nullptr, &c.acid.mouseOilMode, "liquid_acid", "mouse_oil_mode", false, "What the cursor does to the OIL (never to the ink). 0 = nothing at all, 1 = drags and parts it, 2 = a marbling comb that leaves streaks which round back up over about 3 s",
+KEY_SLIDER("Mouse oil mode", 0, 2, 1, 0, nullptr, &c.acid.mouseOilMode, "liquid_acid", "mouse_oil_mode", false, "What the cursor does to the OIL (never to the ink). 0 = nothing at all, 1 = drags and parts it, 2 = a marbling comb that leaves streaks which round back up over about 3 s",
            G_OIL, "A", "", 0, "enum:0=None|1=Push|2=Comb", "")
 KEY_SLIDER("Mouse oil radius (uv)", 0.02f, 0.5f, 0.01f, 2, &c.acid.mouseOilRadius, nullptr, "liquid_acid", "mouse_oil_radius", false, "Reach of the push, or the length of the comb's band along the pointer path",
            G_OIL, "A", "liquid_acid.mouse_oil_mode>0", 0, "", "")
@@ -249,9 +249,9 @@ KEY_SLIDER("Grain into shadows", 0, 1, 0.02f, 2, &c.acid.grainShadowW, nullptr, 
            G_POST, "A", "post.film_grain==0 && liquid_acid.grain>0", 0, "", "")
 KEY_SLIDER("Ink-tinted black toe", 0, 1, 0.02f, 2, &c.acid.toeTint, nullptr, "liquid_acid", "toe_tint", false, "Lifts the darkest pixels toward a dark version of the ink hue instead of neutral black",
            G_MASSES, "A", "", 0, "", "")
-KEY_SLIDER("Edge: 0 soft film / 1 crisp", 0, 1, 1, 0, nullptr, &c.acid.oilEdgeMode, "liquid_acid", "oil_edge_mode", false, "0 = the film thins out over a wide band that scales with the blob size. 1 = every surface ends on the same hard isoline the droplets do, with only a thin meniscus",
+KEY_SLIDER("Oil edge", 0, 1, 1, 0, nullptr, &c.acid.oilEdgeMode, "liquid_acid", "oil_edge_mode", false, "0 = the film thins out over a wide band that scales with the blob size. 1 = every surface ends on the same hard isoline the droplets do, with only a thin meniscus",
            G_FILM, "A", "", 0, "enum:0=Soft film|1=Crisp", "")
-KEY_SLIDER("Accent: 0 any size / 1 small only", 0, 1, 1, 0, nullptr, &c.acid.accentMode, "liquid_acid", "accent_mode", false, "Who may take the palette's 4th shade (the complement in the 80-20 palettes). 0 = whoever drew it, big masses included. 1 = only elements under the accent size, so the frame is one colour with small scattered accents",
+KEY_SLIDER("Accent colour on", 0, 1, 1, 0, nullptr, &c.acid.accentMode, "liquid_acid", "accent_mode", false, "Who may take the palette's 4th shade (the complement in the 80-20 palettes). 0 = whoever drew it, big masses included. 1 = only elements under the accent size, so the frame is one colour with small scattered accents",
            G_OIL, "A", "", 0, "enum:0=Any size|1=Small only", "")
 KEY_SLIDER("Accent max size (of disc max)", 0.05f, 1, 0.01f, 2, &c.acid.accentMaxR, nullptr, "liquid_acid", "accent_max_r", false, "How small a blob has to be to carry the accent colour, as a fraction of the biggest disc. Anything larger uses the base shades",
            G_OIL, "A", "", 0, "", "")
@@ -459,7 +459,7 @@ KEY_SLIDER("Interface speckle", 0, 1, 0.02f, 2, &c.acid.speckle, nullptr, "liqui
            G_MASSES, "A", "", 0, "", "")
 KEY_SLIDER("Oil HDR level (0 = follow ink)", 0, 1.4f, 0.02f, 2, &c.acid.oilHdr, nullptr, "liquid_acid", "oil_hdr", false, "Drives the HDR highlight gain for oil pixels. 0 = inherit the ink's",
            G_FILM, "A", "", 0, "", "")
-KEY_SLIDER("Ink under the oil (0 bands 1 water)", 0, 1, 1, 0, nullptr, &c.acid.inkMode, "liquid_acid", "ink_water", false, "1 = the shared ink-in-water render (translucent veils) instead of flat bands",
+KEY_SLIDER("Ink under the oil", 0, 1, 1, 0, nullptr, &c.acid.inkMode, "liquid_acid", "ink_water", false, "1 = the shared ink-in-water render (translucent veils) instead of flat bands",
            G_MASSES, "A", "", 0, "enum:0=Bands|1=Water", "")
 KEY_SLIDER("Ink density k", 0.5f, 8, 0.1f, 1, &c.ink.density, nullptr, "ink", "density", false, "Beer-Lambert absorption. High = thin veils already opaque",
            G_INK, "AI", "look==I || liquid_acid.ink_water>0", KF_UNVERIFIED, "", "I")
@@ -523,7 +523,7 @@ KEY_SLIDER("Lobe asymmetry", 0, 1, 0.02f, 2, &c.drops.asymmetry, nullptr, "drops
            G_FLUID, "FAI", "drops.drops>0", 0, "", "")
 KEY_SLIDER("Entry band bottom (uv y)", 0.02f, 0.9f, 0.01f, 2, &c.drops.yMax, nullptr, "drops", "y_max", false, "How far down the screen a drop may enter",
            G_FLUID, "FAI", "drops.drops>0", 0, "", "")
-KEY_SLIDER("Mode (0 off 1 horiz 2 vert 3 quad 4 kaleido)", 0, 4, 1, 0, nullptr, &c.mirror.mode, "mirror", "mode", false, "Folds the picture about a centre. 3 = the 4-fold quad; 4 = wedges around the centre",
+KEY_SLIDER("Mirror mode", 0, 4, 1, 0, nullptr, &c.mirror.mode, "mirror", "mode", false, "Folds the picture about a centre. 3 = the 4-fold quad; 4 = wedges around the centre",
            G_OUTPUT, "FAI", "", KF_GLOBAL, "enum:0=Off|1=Horizontal|2=Vertical|3=Quad|4=Kaleidoscope", "FAI")
 KEY_SLIDER("Kaleidoscope segments", 2, 16, 1, 0, nullptr, &c.mirror.segments, "mirror", "segments", false, "Number of wedges in mode 4. Every other one is reflected, so there is no jump at a wedge edge",
            G_OUTPUT, "FAI", "mirror.mode==4", KF_GLOBAL, "", "")

@@ -27,7 +27,7 @@ FluidConfig   s_target{};            // reset target = defaults + active preset 
 float         s_peakTarget = -1.0f;
 int           s_gamutTarget = 2;
 std::wstring  s_activePreset;        // full path ([ui] active_preset), empty = none
-std::vector<std::wstring> s_overlays;// applied files with no [look] section (names)
+std::vector<std::wstring> s_overlays;// applied files with no [look] section (full paths)
 bool          s_autostart = false;
 
 struct MeasuredInert { const char* preset; const char* sec; const char* key; const char* why; };
@@ -272,7 +272,7 @@ bool EvalGate(int n) {
 std::string ShortLabel(const KeyRow& r) {
     std::string l = r.label;
     size_t par = l.find(" (");
-    if (par != std::string::npos && par > 3) l.resize(par);
+    if (par != std::string::npos && par >= 2) l.resize(par);
     if (!l.empty() && l[0] >= 'a' && l[0] <= 'z') l[0] = (char)(l[0] - 'a' + 'A');
     return l;
 }
@@ -294,6 +294,8 @@ std::string GateReason(int n, int* jump) {
         const KeyRow& r = s_rows[g.row];
         if (jump && *jump < 0) *jump = g.row;
         std::string t = "needs " + ShortLabel(r);
+        for (const KeyRow& o : s_rows)   // e.g. two "Film grain" keys: name the section
+            if (&o != &r && ShortLabel(o) == ShortLabel(r)) { t += " [" + r.sec + "]"; break; }
         if (r.isCheck) {
             bool wantOn = (g.op == 2 && g.num < 1) || (g.op == 1 && g.num == 0) || (g.op == 0 && g.num >= 1);
             return t + (wantOn ? " on" : " off");
@@ -301,8 +303,11 @@ std::string GateReason(int n, int* jump) {
         if (!r.enums.empty() && g.op == 0) {
             for (auto& e : r.enums) if (e.first == (int)g.num) return t + " = " + e.second;
         }
+        if (g.num == 0 && g.op == 0) return t + " at 0 (off)";
         static const char* ops[] = { " = ", " != ", " > ", " < ", " >= ", " <= " };
-        return t + ops[g.op] + UiNumText(g.row, g.num);
+        char nb[32];
+        snprintf(nb, sizeof(nb), "%g", g.num);
+        return t + ops[g.op] + nb;
     }
     }
     return "";
@@ -321,6 +326,9 @@ void RecomputeTarget() {
     s_gamutTarget = 2;
     if (!s_activePreset.empty() && GetFileAttributesW(s_activePreset.c_str()) != INVALID_FILE_ATTRIBUTES) {
         LoadConfigFromFile(s_activePreset.c_str(), s_target);
+        // composed base: the applied overlays (Mirror - *) are part of what "unchanged" means
+        for (const std::wstring& ov : s_overlays)
+            if (GetFileAttributesW(ov.c_str()) != INVALID_FILE_ATTRIBUTES) LoadConfigFromFile(ov.c_str(), s_target);
         wchar_t buf[64] = {};
         GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, s_activePreset.c_str());
         if (buf[0]) s_peakTarget = (float)_wtof(buf);
@@ -567,7 +575,10 @@ RowState UiRowState(int i, std::string* reason, int* jumpRow) {
         std::string stem = UiNarrow(Stem(s_activePreset));
         for (const MeasuredInert& m : kMeasuredInert) {
             if (_stricmp(m.preset, stem.c_str()) == 0 && r.sec == m.sec && r.key == m.key) {
-                why = std::string("no effect on ") + m.preset + " (" + m.why + ")";
+                std::string ev = m.why;
+                size_t colon = ev.find(':');
+                if (colon != std::string::npos) ev.resize(colon);
+                why = std::string("no effect on ") + m.preset + " (measured byte-identical, " + ev + ")";
                 st = RS_DISABLED;
                 break;
             }
@@ -675,14 +686,15 @@ void UiNotifyPresetApplied(const std::wstring& path) {
         s_activePreset = path;
         s_overlays.clear();
     } else {
-        // overlay: one per family ("Mirror - quad" replaces "Mirror - off")
+        // overlay (full path): one per family ("Mirror - quad" replaces "Mirror - off")
         std::wstring name = Stem(path);
         std::wstring fam = name.substr(0, name.find(L" - "));
         for (size_t k = 0; k < s_overlays.size();) {
-            if (s_overlays[k].substr(0, s_overlays[k].find(L" - ")) == fam) s_overlays.erase(s_overlays.begin() + k);
+            std::wstring on = Stem(s_overlays[k]);
+            if (on.substr(0, on.find(L" - ")) == fam) s_overlays.erase(s_overlays.begin() + k);
             else k++;
         }
-        s_overlays.push_back(name);
+        s_overlays.push_back(path);
     }
     PersistUiSection();
     RecomputeTarget();
@@ -712,8 +724,8 @@ void UiLoadActivePreset() {
             if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) s_activePreset = p;
         }
     }
-    wchar_t ov[1024] = {};
-    GetPrivateProfileStringW(L"ui", L"overlays", L"", ov, 1024, g_configIniPath);
+    wchar_t ov[4096] = {};
+    GetPrivateProfileStringW(L"ui", L"overlays", L"", ov, 4096, g_configIniPath);
     s_overlays.clear();
     std::wstring o = ov;
     size_t p = 0;
@@ -796,7 +808,7 @@ UiHeader UiComputeHeader() {
         h.preset = UiNarrow(Stem(s_activePreset));
         if (GetFileAttributesW(s_activePreset.c_str()) == INVALID_FILE_ATTRIBUTES) h.preset += " (file missing)";
     }
-    for (auto& o : s_overlays) { if (!h.overlays.empty()) h.overlays += ", "; h.overlays += UiNarrow(o); }
+    for (auto& o : s_overlays) { if (!h.overlays.empty()) h.overlays += ", "; h.overlays += UiNarrow(Stem(o)); }
     // No mood / stage NAME in 1a: the conductor's name was the "Neon" lie (it named a mood
     // even with cycling off) and the conductor is being replaced; the stage name comes from
     // animators.h CycleState() in 1b.

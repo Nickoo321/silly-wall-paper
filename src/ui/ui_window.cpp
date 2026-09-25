@@ -20,6 +20,7 @@
 #include <wincodec.h>
 #include <wrl/client.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -149,10 +150,30 @@ bool IContains(const std::string& hay, const char* needle) {
     return false;
 }
 
+// every query word must START a word of the label or a _-token of the key (so "lid" finds
+// lid_* and "Lid (cover glass)", not "glide"); help text is searched only for words >= 4 chars
+bool WordPrefix(const std::string& hay, const std::string& w) {
+    size_t n = w.size();
+    for (size_t i = 0; i + n <= hay.size(); i++) {
+        bool start = i == 0 || !isalnum((unsigned char)hay[i - 1]);
+        if (start && _strnicmp(hay.c_str() + i, w.c_str(), n) == 0) return true;
+    }
+    return false;
+}
+
 bool RowMatchesSearch(const KeyRow& r, const char* q) {
     if (!q[0]) return true;
-    return IContains(r.label, q) || IContains(r.key, q) || IContains(r.sec + "." + r.key, q) ||
-           IContains(r.tip, q);
+    std::string all = q, w;
+    std::vector<std::string> words;
+    for (char ch : all) { if (ch == ' ') { if (!w.empty()) words.push_back(w); w.clear(); } else w += ch; }
+    if (!w.empty()) words.push_back(w);
+    std::string key = r.sec + "." + r.key;
+    for (const std::string& word : words) {
+        bool hit = WordPrefix(r.label, word) || WordPrefix(key, word) || IContains(key, word.c_str()) && word.find('_') != std::string::npos;
+        if (!hit && word.size() >= 4) hit = IContains(r.tip, word.c_str());
+        if (!hit) return false;
+    }
+    return true;
 }
 
 bool Chip(const char* label, bool* v) {
@@ -258,6 +279,16 @@ void DrawRow(int i, RowState st, const std::string& reason, int jump, bool compa
     if (r.isCheck) {
         bool b = v > 0.5f;
         if (ImGui::Checkbox("##v", &b)) SetWithUndo(i, b ? 1.0f : 0.0f);
+        Tooltip(i, reason);
+    } else if (!r.enums.empty() && (compact || r.enums.size() > 3)) {
+        int cur = (int)lroundf(v);
+        std::string curName = UiValueText(i);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::BeginCombo("##v", curName.c_str())) {
+            for (auto& e : r.enums)
+                if (ImGui::Selectable(e.second.c_str(), e.first == cur) && e.first != cur) SetWithUndo(i, (float)e.first);
+            ImGui::EndCombo();
+        }
         Tooltip(i, reason);
     } else if (!r.enums.empty()) {
         int cur = (int)lroundf(v);

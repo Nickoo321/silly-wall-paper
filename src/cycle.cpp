@@ -394,7 +394,7 @@ void ApplyStage(FluidRenderer& r, int i) {
     g_hdrPeakNits = peak;
     g_gamutMode = gamut;
     r.EnsureLookResources();        // PSO compile on first use (the screen is black)
-    const double compileMs = r.LastLookCompileMs();
+    const double compileMs = r.LastLookCompileMs() + r.PrecompilePostPsos();
     r.ResetLookState();
     PushHistory(s_cur, i);
     s_cur = i;
@@ -783,6 +783,7 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
         const float need = WarmupOf(s_cur);
         const bool hueHome = !r.HueReturning();
         if (s_warmSim >= need && (hueHome || s_warmSim >= need + kWarmupExtraCap)) {
+            r.PrecompilePostPsos();          // boot path: never compile on a visible frame
             Log("[cycle] warm-up done: %.2f sim s (need %.1f)%s -> fade in %.2f s\n",
                 s_warmSim, need, hueHome ? "" : " [hue glide cap hit]", FadeInOf(s_cur));
             s_phase = CYCLE_FADE_IN;         // this frame is still black

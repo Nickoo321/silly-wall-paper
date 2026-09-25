@@ -2079,6 +2079,19 @@ void FluidRenderer::ResetLookState() {
     printf("[cycle] look state reset (sim cleared, acid/droplets/mix reseed next frame)\n");
 }
 
+double FluidRenderer::PrecompilePostPsos() {
+    if (!m_device || m_psoPostBN || !PostActive()) return 0.0;
+    LARGE_INTEGER qf, q0, q1;
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&q0);
+    const D3D_SHADER_MACRO defs[] = { { "BN_OPTICS", "1" }, { nullptr, nullptr } };
+    MakeGraphicsPso(kPostSrc, m_psoPostBN, defs);
+    QueryPerformanceCounter(&q1);
+    const double ms = 1000.0 * (double)(q1.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
+    printf("post: BN_OPTICS PSO precompiled at the cycle black point (%.0f ms)\n", ms);
+    return ms;
+}
+
 int FluidRenderer::AcidBlobCount() const {
     int live = 0;
     for (const AcidBlob& b : m_acidBlobs) if (b.rTarget > 0.0f) live++;

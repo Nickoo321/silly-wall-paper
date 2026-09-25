@@ -36,6 +36,19 @@
 //   --sdr-white <nits> SDR-content brightness for HDR mode (default 240)
 //   --panel-max <nits> stands in for the DXGI-reported max (peak_nits=-1 only)
 //   --mouse-none       no mouse splats (the default in shot mode)
+//   --shot-png-only    write only <out>.png (the md5 file; stats still logged)
+//   --cycle            force the [cycle] director on (it reads [cycle] from --ini)
+//   --cycle-dwell S / --cycle-jitter J / --cycle-order fixed|alternate_random /
+//   --cycle-seed N (default --seed) / --cycle-stage N (1-based start)
+//   --cycle-next-at T[,T..]  Next stage at wallpaper time T (the tray's call)
+//   --cycle-pause-at T1,T2   CyclePause at T1, CycleResume at T2 (animators.h)
+//   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition)
+//   --shot-fade F      hold the display fade at F (fade-scaling proof)
+//
+// Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
+// starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
+// [--cycle-target shot] (shot = a cycling headless run instead of the tray).
+// Normal launch: --cycle-stage N starts the cycle on stage N.
 
 #include <windows.h>
 #include <cstdarg>
@@ -1988,12 +2001,29 @@ static void SaveFullConfig(const FluidConfig& c) {
 static void ApplyPreset(const std::wstring& path) {
     if (!g_renderer) return;
     CloseSettingsWindow();
-    // A preset picked by hand while cycling: the user took the wheel. The
-    // director lets go for this session ([cycle] enabled is untouched, so the
-    // cycle resumes on the next start, or from the tray).
-    CycleManualOverride("preset applied by hand");
-    g_renderer->SetFade(1.0f);
-    g_renderer->SetBlackOut(false);
+    // A LOOK preset ([look] keys) picked by hand while cycling: the user took
+    // the wheel, the director lets go for this session ([cycle] enabled is
+    // untouched: the cycle resumes on the next start, or from the tray). A
+    // partial overlay without [look] (the mirror overlays) folds the current
+    // stage instead and lasts until the next stage switch; nothing is written
+    // to settings.ini for it while the director owns the look.
+    bool lookPreset = false;
+    {
+        wchar_t lk[32] = {};
+        GetPrivateProfileStringW(L"look", L"style", L"", lk, 32, path.c_str());
+        lookPreset = lk[0] != 0;
+        lk[0] = 0;
+        GetPrivateProfileStringW(L"look", L"liquid_acid", L"", lk, 32, path.c_str());
+        lookPreset = lookPreset || lk[0] != 0;
+        lk[0] = 0;
+        GetPrivateProfileStringW(L"look", L"ink", L"", lk, 32, path.c_str());
+        lookPreset = lookPreset || lk[0] != 0;
+    }
+    if (lookPreset || !g_cycleActive) {
+        CycleManualOverride("look preset applied by hand");
+        g_renderer->SetFade(1.0f);
+        g_renderer->SetBlackOut(false);
+    }
 
     // merge the (possibly partial) preset over the current state
     FluidConfig fresh = g_renderer->Config();
@@ -2018,7 +2048,7 @@ static void ApplyPreset(const std::wstring& path) {
     // then, so build it now or the look would silently render as fluid.
     g_renderer->EnsureLookResources();
 
-    SaveFullConfig(fresh);
+    if (!g_cycleActive) SaveFullConfig(fresh);   // cycling: in memory only
     UpdateTrayTip();
 
     const wchar_t* name = wcsrchr(path.c_str(), L'\\');
@@ -2124,6 +2154,11 @@ struct ShotOpts {
     // --shot-png-only: write <out>.png only (stats still logged). Saves ~35 MB
     // per capture on a long series; the md5 file is the same .png as always.
     bool     pngOnly = false;
+    // --shot-fade F: hold the display fade at F on every frame (the cycle
+    // director's fade scalar, forced). Same seed + same time with different F
+    // = the same sim state, so mean_lum(F) / mean_lum(1) measures exactly how
+    // the fade scales the finished frame. Test hook; -1 = not set.
+    float    fixedFade = -1.0f;
 };
 static bool g_shotPngOnly = false;
 
@@ -2634,6 +2669,8 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
+            } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
+                o.fixedFade = (float)_wtof(argv[++i]);
             }
         }
         LocalFree(argv);
@@ -2816,7 +2853,7 @@ static int RunShotMode() {
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
             renderer.SetHdrOptions(peak, g_gamutMode);
             for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);
-            renderer.SetFade(cf.fade);
+            renderer.SetFade(o.fixedFade >= 0.0f ? o.fixedFade : cf.fade);
             renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
             frames++;

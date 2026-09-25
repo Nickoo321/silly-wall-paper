@@ -1590,6 +1590,11 @@ public:
     int AcidDropletCount() const;
     // ms spent in the last EnsureLookResources() PSO compile (0 = none ran).
     double LastLookCompileMs() const { return m_lastLookCompileMs; }
+    // Cycle director, at the black point: compile the BN_OPTICS post PSO now
+    // if this stage's post pass is on and it does not exist yet, so the lazy
+    // compile in RunPostPass never lands on a visible fade-in frame. Selection
+    // is unchanged (RunPostPass still decides per frame). Returns the ms spent.
+    double PrecompilePostPsos();
 
     // ---- animators.h: freezes of the DERIVED clocks + live-value getters ----
     // Indices = the first four Animator values (ANIM_PALETTE, ANIM_HUE2,

@@ -64,3 +64,43 @@ Also: add `[meta] look=liquid_acid` to every Scheme preset (rote).
   Form) at 150 s after the coverage change.
 - Contact sheet of the final stage list (one steady frame per stage) → handoff\review\cycle-final\.
 Commit on branch `final-cycle`; do not merge; do not push. Report ≤30 lines + §7.
+
+## AUDITOR PRE-FLIGHT (2026-09-25, main ad54bce) — binding
+1. The tamed burst must NOT use CommandHueShift / fm1.x (shaders.h:1674: a colour-matrix rotation of the
+   FINISHED image after equal load; would turn magenta film full-brightness yellow). Do it on the acid
+   PALETTE CLOCK, CPU only: palette hue = W(fmod(AnimatorTime(0)/P)) (fluid.cpp ~5153); a burst = a
+   smoothstepped temporary advance of the ANIM_PALETTE accumulator; landing phase chosen by inverting
+   the anchor-warp table so the absolute hue lands on the nearest anchor; keep the offset so the drift
+   resumes from the landing. Equal load holds automatically (per pixel). API: AnimatorKick(ANIM_PALETTE,
+   phaseDelta, sec) in animators.h/fluid.cpp; never called with the cycle off ⇒ identical, no DXBC
+   change. Never use the director's lerp hue bridge (cycle.cpp:569, CommandHueShift) between two oil
+   stages. Draw the burst moment only when the current stage is oil; otherwise redraw.
+2. Oil→oil scheme change: only shadow_tone_period is phase-sensitive (gate frac(m_time/P), differs in 5
+   presets); hue_sweep_period is 0 in all 16; film_hue2/3/share are harmless once swapped at amount 0;
+   film_hue2_scale only affects new material. No cut needed IF the ramp covers shadow_tone and
+   highlight_tone_amt as well as the hue2/hue3 amounts. Swap at 0 as a PLAIN SET, not the generic lerp
+   (else film_hue2 lerps round the wheel while its amount is non-zero).
+3. Entry content: ResetLookState sets m_firstFrame (fluid.cpp:2054) so the startup burst
+   (MultipleSplats :1875, when idle_splats is on) fires after the clear but may fade during the
+   sub-stepped warm-up → add a public wrapper around MultipleSplats and call it a few frames before
+   fade-in ends (never before the clear frame). Ink: InjectDrop (:6052) is public; ink inis have
+   idle_splats 0 → call it at the START of the warm-up (after the clear frame) so the drop has spread.
+4. Coverage: existing keys cannot reach ~35%. The hue2 target is value noise 0.78·nz + 0.22·nz2 with
+   mean ≈ 0.5; visible rows are pure advection and bilinear semi-Lagrangian advection pulls extremes
+   toward the mean, so the share above the 0.62 seam shrinks over time (the observed 10-15% at 150 s).
+   film_hue2_scale = patch SIZE not share; decay only hidden rows; thresholds 0.56-0.68 hard-coded.
+   ONE KEY: film_hue2_cover = CPU bias tgt' = saturate(tgt + bias) in StepHueField; no slot; default 0
+   = identical; also shrinks hue3's low end (suits the ≤15% third). Tuning: coverage = share of visible
+   mix cells > 0.62, loggable on the CPU with no render → tune fast, render only the final sheet.
+5. Settings tier column conflict: ui_window.cpp:1031-1122 INFERS the tier from the stage weight (7/2/1)
+   and writes 7/2/1 when a tier is picked; with weight as a within-tier multiplier every default stage
+   would show "wild". The pane must read/write stage_N_tier, weight = multiplier column (JSON dump
+   :1603 too).
+6. Proof: draw log with a fixed seed over 2,000 draws, tier shares within ±2 points (200 draws is
+   noise). cycle-install.ps1 writes %APPDATA% → the maintainer runs it OUTSIDE the Claude desktop
+   (MSIX shadow). Scheme presets use film_equal_load 0.75: measure the burst's <15% mean_lum limit when
+   the palette passes yellow.
+7. TWO executors: COVERAGE first (blocking, independent): film_hue2_cover + the coverage sheet vs
+   proven-2 + [meta] look= on the 16 presets (rote part). DIRECTOR second: B.1-B.6, the palette kick,
+   the tier column. Both touch fluid.cpp in different functions; merge separately.
+Opinion (relayed verbatim to the user): structure right; do not ship before the coverage fix.

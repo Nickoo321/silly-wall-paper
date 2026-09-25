@@ -493,6 +493,9 @@ void ApplyStage(FluidRenderer& r, int i) {
     r.EnsureLookResources();        // PSO compile on first use (the screen is black)
     const double compileMs = r.LastLookCompileMs() + r.PrecompilePostPsos();
     r.ResetLookState();
+    // palette_start_hue (brief BW): the stage opens on its own start hue (or a
+    // random one, -2) -- here, at black, never on the no-black scheme change.
+    r.ApplyPaletteStart("cycle stage entry");
     s_base = -1;                    // a fresh composition drops any overlay
     // FINAL-CYCLE B.1: an ink stage never opens on clear water -- one drop at
     // the START of the warm-up (queued in CycleTick's WARMUP, after the clear)

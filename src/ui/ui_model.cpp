@@ -570,7 +570,12 @@ std::string UiValueText(int i) {
     if (!r.enums.empty()) {
         for (auto& e : r.enums) if (e.first == (int)lroundf(v)) return e.second;
     }
-    if (!r.negName.empty() && v < 0) return r.negName;
+    if (!r.negName.empty() && v < 0) {
+        // "neg:a|b": -1 shows a, -2 (and below) shows b (palette_start_hue)
+        const size_t bar = r.negName.find('|');
+        if (bar == std::string::npos) return r.negName;
+        return v <= -1.5f ? r.negName.substr(bar + 1) : r.negName.substr(0, bar);
+    }
     if (!r.zeroName.empty() && v == 0) return r.zeroName;
     return UiNumText(i, v);
 }

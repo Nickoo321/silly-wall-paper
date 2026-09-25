@@ -103,8 +103,8 @@ function Read-IdentityManifest {
             throw "manifest row '$($r.Path)': tier must be fast|full|skip, got '$($r.Tier)'"
         }
         $look = ([string]$r.Look).ToLowerInvariant()
-        if (@('fluid', 'acid', 'ink', 'overlay', 'test') -notcontains $look) {
-            throw "manifest row '$($r.Path)': look must be fluid|acid|ink|overlay|test, got '$($r.Look)'"
+        if (@('fluid', 'acid', 'ink', 'overlay', 'test', 'cycle') -notcontains $look) {
+            throw "manifest row '$($r.Path)': look must be fluid|acid|ink|overlay|test|cycle, got '$($r.Look)'"
         }
         $rows += [PSCustomObject]@{
             Path  = (Get-IdentityKey -Path ([string]$r.Path))
@@ -137,21 +137,65 @@ function Get-IniSections {
 
 function New-ComposedIni {
     # base + overlay -> $OutPath, UTF-8 WITHOUT a byte-order mark. Returns the
-    # overlay section names that also appear in the base (the profile API reads
-    # the first section of a name, so those overlay keys would be shadowed).
+    # overlay section names that also appear in the base. The profile API reads
+    # the FIRST section of a name and the FIRST key of a name inside it, so a
+    # colliding overlay section is MERGED (brief BW, for the Scheme partials on
+    # monotone-post-0924): its key lines are inserted right after the base's
+    # first header of that section, where they win over the base's own lines.
+    # No collision: plain base + overlay concatenation, exactly as before.
     param([string]$BasePath, [string]$OverlayPath, [string]$OutPath)
     $baseText = [System.IO.File]::ReadAllText($BasePath)       # BOM-aware; a BOM is dropped
     $overText = [System.IO.File]::ReadAllText($OverlayPath)
     if (-not ($baseText.EndsWith("`n"))) { $baseText += "`r`n" }
-    $text = "; preset-identity composed ini: base + overlay`r`n" + $baseText + $overText
-    $dir = Split-Path -Parent $OutPath
-    if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    [System.IO.File]::WriteAllText($OutPath, $text, (New-Object System.Text.UTF8Encoding($false)))
     $baseSecs = Get-IniSections -Text $baseText
     $collide = @()
     foreach ($s in (Get-IniSections -Text $overText)) {
         if (($baseSecs -contains $s) -and ($collide -notcontains $s)) { $collide += $s }
     }
+    if ($collide.Count -eq 0) {
+        $text = "; preset-identity composed ini: base + overlay`r`n" + $baseText + $overText
+    } else {
+        # overlay -> prelude + ordered sections (name, body lines)
+        $prelude = New-Object System.Collections.Generic.List[string]
+        $secNames = New-Object System.Collections.Generic.List[string]
+        $secBody = @{}
+        $cur = $null
+        foreach ($line in ($overText -split "`r?`n")) {
+            if ($line -match '^\s*\[([^\]]+)\]') {
+                $cur = $Matches[1].Trim().ToLowerInvariant()
+                if (-not $secBody.ContainsKey($cur)) {
+                    $secNames.Add($cur)
+                    $secBody[$cur] = New-Object System.Collections.Generic.List[string]
+                    $secBody[$cur].Add($line)       # the header, for the appended form
+                }
+                continue
+            }
+            if ($null -eq $cur) { $prelude.Add($line) } else { $secBody[$cur].Add($line) }
+        }
+        $out = New-Object System.Collections.Generic.List[string]
+        $out.Add('; preset-identity composed ini: base + overlay (colliding sections merged: overlay keys first)')
+        $done = @{}
+        foreach ($line in ($baseText -split "`r?`n")) {
+            $out.Add($line)
+            if ($line -match '^\s*\[([^\]]+)\]') {
+                $n = $Matches[1].Trim().ToLowerInvariant()
+                if (($collide -contains $n) -and -not $done.ContainsKey($n)) {
+                    $done[$n] = $true
+                    $body = $secBody[$n]
+                    for ($k = 1; $k -lt $body.Count; $k++) { if ($body[$k].Trim()) { $out.Add($body[$k]) } }
+                }
+            }
+        }
+        foreach ($l in $prelude) { $out.Add($l) }
+        foreach ($n in $secNames) {
+            if ($collide -contains $n) { continue }
+            foreach ($l in $secBody[$n]) { $out.Add($l) }
+        }
+        $text = ($out -join "`r`n") + "`r`n"
+    }
+    $dir = Split-Path -Parent $OutPath
+    if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    [System.IO.File]::WriteAllText($OutPath, $text, (New-Object System.Text.UTF8Encoding($false)))
     return $collide
 }
 
@@ -335,8 +379,7 @@ if ($DryRun) {
                 $tmp = Join-Path $composedDir ((Get-SafeName $r.Path))
                 $collide = @(New-ComposedIni -BasePath $basePath -OverlayPath $iniPath -OutPath $tmp)
                 if ($collide.Count -gt 0) {
-                    $line += "   !! COLLISION [$($collide -join '],[')] (base section shadows overlay)"
-                    $problems++
+                    $line += "   merged [$($collide -join '],[')] (overlay keys first)"
                 }
             }
         }
@@ -478,7 +521,7 @@ try {
             $renderIni = Join-Path $composedDir ((Get-SafeName $r.Path))
             $collide = @(New-ComposedIni -BasePath $basePath -OverlayPath $iniPath -OutPath $renderIni)
             if ($collide.Count -gt 0) {
-                Write-Output "$($r.Path) WARNING: base also has [$($collide -join '],[')] -- those overlay keys are shadowed"
+                Write-Output "$($r.Path): base also has [$($collide -join '],[')] -- merged, overlay keys first"
             }
         }
         $outPng = Join-Path $ScratchDir ((Get-SafeName $r.Path) -replace '\.ini$', '.png')

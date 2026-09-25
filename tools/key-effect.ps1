@@ -31,7 +31,8 @@ param(
     [string]$Size = '1280x720',
     [double]$Delay = 10,
     [string]$Out = '',
-    [string]$ScratchDir = ''
+    [string]$ScratchDir = '',
+    [int]$Yield = 8         # --shot-yield ms per frame (30 while the user is at the PC); the image does not depend on it
 )
 
 $ErrorActionPreference = 'Stop'
@@ -331,8 +332,8 @@ function Wait-StablePng {
 function Invoke-Shot {
     param([string]$RenderIniPath, [string]$OutPng)
     if (Test-Path $OutPng) { Remove-Item $OutPng -Force -ErrorAction SilentlyContinue }
-    $argStr = '--shot "{0}" --ini "{1}" --hdr on --shot-delay {2} --shot-size {3} --shot-yield 8 --seed 1234' -f `
-        $OutPng, $RenderIniPath, $Delay, $Size
+    $argStr = '--shot "{0}" --ini "{1}" --hdr on --shot-delay {2} --shot-size {3} --shot-yield {4} --seed 1234' -f `
+        $OutPng, $RenderIniPath, $Delay, $Size, $Yield
     $p = Start-Process -FilePath $exePath -ArgumentList $argStr -PassThru
     $p.WaitForExit()
     if (-not (Wait-StablePng -Path $OutPng)) { return $false }
@@ -423,7 +424,7 @@ $md.Add("")
 $md.Add("Exe: ``$exePath``")
 $md.Add("Ini: ``$iniPath``")
 $md.Add("Sections tested: $($Sections -join ', ')")
-$md.Add("Size: $Size, delay: ${Delay}s, seed 1234, --hdr on, --shot-yield 8")
+$md.Add("Size: $Size, delay: ${Delay}s, seed 1234, --hdr on, --shot-yield $Yield")
 $md.Add("Baseline: ``$baselinePng`` md5 ``$baselineMd5``")
 $md.Add("")
 $md.Add("## Results (sorted by MAD ascending)")

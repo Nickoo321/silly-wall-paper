@@ -41,9 +41,10 @@
 // Brief BV took laP35.yz (film_hue3_share, film_equal_load); laP35.w and laP38
 // are free (laP38 is declared empty so BU-b's planned laP39 can follow).
 // Brief BU-b added laP39 = {highlight tint rgb (folded: hue, sat, amount,
-// desat, gate), tone_balance}: full; laP35.w and laP38 are still free.
-// Brief BX took laP38.yzw (lamp_grey_heart, _size, _lift); laP38.x stays
-// BW's (film_equal_load_patches).
+// desat, gate), tone_balance}: full; laP35.w and laP38 were still free.
+// Brief BW took laP35.w (film_hue2_seam) and laP38.x (film_equal_load_patches).
+// Brief BX took laP38.yzw (lamp_grey_heart, _size, _lift): laP38 full; the
+// next key needs laP40.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -202,13 +203,15 @@
     X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)") \
     X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
     X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
+    X(HUE2_SEAM,           35, w, "film_hue2_seam, 0.25..1, hue2/hue3 seam band width factor, 1 = today's literal bands (brief BW)") \
+    X(EQUAL_LOAD_P,        38, x, "film_equal_load_patches, 0..1, equal load on the patch cores smoothstep(0.8,1,k) (brief BW)") \
+    X(HEART_K,             38, y, "lamp_grey_heart, 0..1, 0 = off (brief BX)") \
+    X(HEART_SIZE,          38, z, "lamp_grey_heart_size, half-frame units 0.8..2.2 (brief BX)") \
+    X(HEART_LIFT,          38, w, "lamp_grey_heart_lift, 0..0.8 (brief BX)") \
     X(HTONE_R,             39, x, "highlight tint r: Y-held WB multiplier M = lerp(1, lin HSV(h, highlight_tone_sat, 1), amt * gate), dot(M, Y709) = 1, times (1 + highlight_tone_desat * gate); 0 = off (computed, brief BU-b)") \
     X(HTONE_G,             39, y, "highlight tint g (computed, brief BU-b)") \
     X(HTONE_B,             39, z, "highlight tint b (computed, brief BU-b)") \
-    X(TONE_BAL,            39, w, "tone_balance, -1..1: split = 0.5 - 0.25 * balance, encoded luma (brief BU-b)") \
-    X(HEART_K,             38, y, "lamp_grey_heart, 0..1, 0 = off (brief BX)") \
-    X(HEART_SIZE,          38, z, "lamp_grey_heart_size, half-frame units 0.8..2.2 (brief BX)") \
-    X(HEART_LIFT,          38, w, "lamp_grey_heart_lift, 0..0.8 (brief BX)")
+    X(TONE_BAL,            39, w, "tone_balance, -1..1: split = 0.5 - 0.25 * balance, encoded luma (brief BU-b)")
 
 // Component letter -> index, for the enum below.
 #define ACID_COMP_x 0
@@ -223,5 +226,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP39; laP38.x free for BW, .yzw BX).
+// Number of laP<n> float4s (laP0 .. laP39; laP38 full: BW .x, BX .yzw).
 static const int kAcidSlotVecs = 40;

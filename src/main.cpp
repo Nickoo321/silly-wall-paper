@@ -54,7 +54,8 @@
 #include <string>
 #include "fluid.h"
 #include "app_state.h"
-#include "moods.h"
+#include "cycle.h"
+#include "animators.h"
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
@@ -1013,8 +1014,13 @@ enum TrayCmd : UINT {
     // stays the toggle, because that is what the tray menu item wants.
     CMD_PAUSE_ON = 8, CMD_PAUSE_OFF = 9,
     CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
-    CMD_MOODS_TOGGLE = 33, CMD_MOODS_NEXT = 34, CMD_MOOD_BASE = 800,
     CMD_PRESET_BASE = 600,
+    // Cycle director. All non-toggling except the tray's On/Off item (a
+    // checkbox, like CMD_PAUSE): scripts and --cycle-next use ON/OFF/NEXT/PREV
+    // so they never have to track state. (33/34/800 were the retired mood
+    // conductor's ids; left unused.)
+    CMD_CYCLE_TOGGLE = 40, CMD_CYCLE_ON = 41, CMD_CYCLE_OFF = 42,
+    CMD_CYCLE_NEXT = 43, CMD_CYCLE_PREV = 44, CMD_CYCLE_STAGE_BASE = 900,
     CMD_PEAK_OFF = 10, CMD_PEAK_AUTO = 11, CMD_PEAK_300 = 12, CMD_PEAK_600 = 13,
     CMD_PEAK_800 = 15, CMD_PEAK_1000 = 14,
     CMD_GAMUT_SRGB = 20, CMD_GAMUT_P3 = 21, CMD_GAMUT_2020 = 22,
@@ -1024,21 +1030,20 @@ static NOTIFYICONDATAW g_nid = {};
 
 // presets (implementations further down; the menu needs them declared)
 static std::vector<std::wstring> g_presetPaths;
-// backing store for owner-drawn (skipped) mood menu item text — the pointers
-// handed to AppendMenuW must stay valid for the menu's lifetime
-static std::vector<std::wstring> g_moodMenuLabels;
 static void GetPresetsDir(wchar_t out[MAX_PATH]);
 static void ApplyPreset(const std::wstring& path);
 static void SaveCurrentAsPreset();
 static void ShowTrayMenuBody(HWND hwnd, HMENU presets);
 
 static void ShowTrayMenu(HWND hwnd) {
-    // enumerate mood files fresh each time the menu opens (one recipe folder)
+    // enumerate preset files fresh each time the menu opens (the recipe
+    // folder; the moods folder is retired with the conductor -- its files stay
+    // on disk untouched, nothing scans them any more)
     g_presetPaths.clear();
     HMENU presets = CreatePopupMenu();
     {
         wchar_t dir[MAX_PATH], pattern[MAX_PATH];
-        MoodsGetDirectory(dir);
+        GetPresetsDir(dir);
         swprintf_s(pattern, L"%s\\*.ini", dir);
         WIN32_FIND_DATAW fd;
         HANDLE find = FindFirstFileW(pattern, &fd);
@@ -1055,10 +1060,10 @@ static void ShowTrayMenu(HWND hwnd) {
             FindClose(find);
         }
         if (g_presetPaths.empty())
-            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no moods yet)");
+            AppendMenuW(presets, MF_STRING | MF_GRAYED, 0, L"(no presets yet)");
         AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(presets, MF_STRING, CMD_PRESET_SAVE, L"Save current as new preset");
-        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open moods folder");
+        AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open presets folder");
     }
     ShowTrayMenuBody(hwnd, presets);
 }
@@ -1093,35 +1098,29 @@ static void ShowTrayMenuBody(HWND hwnd, HMENU presets) {
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)gamut, L"Color gamut");
 
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_SCENES, L"Scenes…");
 
-    // Mood conductor: choreographed cycling between moods\*.ini look recipes
-    HMENU moods = CreatePopupMenu();
-    AppendMenuW(moods, MF_STRING | (g_moodSettings.enabled ? MF_CHECKED : 0),
-                CMD_MOODS_TOGGLE, L"Cycle moods");
-    AppendMenuW(moods, MF_STRING, CMD_MOODS_NEXT, L"Next mood now");
-    AppendMenuW(moods, MF_SEPARATOR, 0, nullptr);
+    // Cycle director: On/Off, Next, Previous, the stage list (current checked)
+    HMENU cycle = CreatePopupMenu();
     {
-        const auto& names = MoodsNames();
-        int cur = MoodsCurrentIndex();
-        // skipped moods are owner-drawn with gray text: looks like MF_GRAYED
-        // but stays clickable, so forcing a skipped mood keeps working
-        g_moodMenuLabels.clear();
-        g_moodMenuLabels.reserve(names.size() < 100 ? names.size() : 100);
-        for (int i = 0; i < (int)names.size() && i < 100; i++) {
-            if (MoodsIsSkipped(i)) {
-                g_moodMenuLabels.push_back(names[i]);
-                AppendMenuW(moods, MF_OWNERDRAW | (i == cur ? MF_CHECKED : 0),
-                            CMD_MOOD_BASE + i, g_moodMenuLabels.back().c_str());
-            } else {
-                AppendMenuW(moods, MF_STRING | (i == cur ? MF_CHECKED : 0),
-                            CMD_MOOD_BASE + i, names[i].c_str());
-            }
+        const CycleConfig& cc = CycleGet();
+        const CycleStatus cs = CycleState();
+        const bool running = cs.phase != CYCLE_OFF;
+        const UINT none = cc.stages.empty() ? MF_GRAYED : 0;
+        AppendMenuW(cycle, MF_STRING | none | (running ? MF_CHECKED : 0), CMD_CYCLE_TOGGLE,
+                    L"Cycle looks");
+        AppendMenuW(cycle, MF_STRING | (running ? 0 : MF_GRAYED), CMD_CYCLE_NEXT, L"Next stage");
+        AppendMenuW(cycle, MF_STRING | (running ? 0 : MF_GRAYED), CMD_CYCLE_PREV, L"Previous stage");
+        AppendMenuW(cycle, MF_SEPARATOR, 0, nullptr);
+        for (int i = 0; i < (int)cc.stages.size() && i < 99; i++) {
+            const std::wstring label = CycleStageLabel(i);
+            AppendMenuW(cycle, MF_STRING | (cc.stages[i].ok ? 0 : MF_GRAYED) |
+                               (running && i == cs.stage ? MF_CHECKED : 0),
+                        CMD_CYCLE_STAGE_BASE + i, label.c_str());
         }
-        if (names.empty())
-            AppendMenuW(moods, MF_STRING | MF_GRAYED, 0, L"(no moods found)");
+        if (cc.stages.empty())
+            AppendMenuW(cycle, MF_STRING | MF_GRAYED, 0, L"(no [cycle] stages in settings.ini)");
     }
-    AppendMenuW(menu, MF_POPUP, (UINT_PTR)moods, L"Moods");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)cycle, L"Cycle");
 
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)presets, L"Presets");
     AppendMenuW(menu, MF_STRING, CMD_SETTINGS, L"Settings…");
@@ -1244,22 +1243,26 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case CMD_ANALYZER:
             ShowAnalyzerWindow();
             break;
-        case CMD_SCENES:
-            ShowScenesWindow();
-            break;
         case CMD_PRESET_SAVE:
             SaveCurrentAsPreset();
             break;
-        case CMD_MOODS_TOGGLE:
-            MoodsSetEnabled(!g_moodSettings.enabled);
-            printf("mood cycling: %s\n", g_moodSettings.enabled ? "on" : "off");
+        case CMD_CYCLE_TOGGLE:
+            CycleSetEnabled(CycleState().phase == CYCLE_OFF, true);
             break;
-        case CMD_MOODS_NEXT:
-            if (g_renderer) MoodsNext(*g_renderer);
+        case CMD_CYCLE_ON:
+        case CMD_CYCLE_OFF:
+            CycleSetEnabled(LOWORD(wp) == CMD_CYCLE_ON, true);
+            break;
+        case CMD_CYCLE_NEXT:
+            CycleNext();
+            break;
+        case CMD_CYCLE_PREV:
+            CyclePrev();
             break;
         case CMD_PRESET_FOLDER: {
             wchar_t dir[MAX_PATH];
-            MoodsGetDirectory(dir);
+            GetPresetsDir(dir);
+            CreateDirectoryW(dir, nullptr);
             ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
             break;
         }
@@ -1267,8 +1270,8 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + 100 &&
                 LOWORD(wp) - CMD_PRESET_BASE < g_presetPaths.size()) {
                 ApplyPreset(g_presetPaths[LOWORD(wp) - CMD_PRESET_BASE]);
-            } else if (LOWORD(wp) >= CMD_MOOD_BASE && LOWORD(wp) < CMD_MOOD_BASE + 100) {
-                if (g_renderer) MoodsForceMood(*g_renderer, LOWORD(wp) - CMD_MOOD_BASE);
+            } else if (LOWORD(wp) >= CMD_CYCLE_STAGE_BASE && LOWORD(wp) < CMD_CYCLE_STAGE_BASE + 99) {
+                CycleJump(LOWORD(wp) - CMD_CYCLE_STAGE_BASE);
             }
             break;
         case CMD_GAMUT_SRGB: g_gamutMode = 0; SaveSettings(); break;
@@ -1985,6 +1988,12 @@ static void SaveFullConfig(const FluidConfig& c) {
 static void ApplyPreset(const std::wstring& path) {
     if (!g_renderer) return;
     CloseSettingsWindow();
+    // A preset picked by hand while cycling: the user took the wheel. The
+    // director lets go for this session ([cycle] enabled is untouched, so the
+    // cycle resumes on the next start, or from the tray).
+    CycleManualOverride("preset applied by hand");
+    g_renderer->SetFade(1.0f);
+    g_renderer->SetBlackOut(false);
 
     // merge the (possibly partial) preset over the current state
     FluidConfig fresh = g_renderer->Config();
@@ -2011,7 +2020,6 @@ static void ApplyPreset(const std::wstring& path) {
 
     SaveFullConfig(fresh);
     UpdateTrayTip();
-    MoodsAdoptPath(*g_renderer, path);   // keep conductor label/journey in sync
 
     const wchar_t* name = wcsrchr(path.c_str(), L'\\');
     ShowTrayBalloon(L"Preset applied", name ? name + 1 : path.c_str());
@@ -2019,18 +2027,17 @@ static void ApplyPreset(const std::wstring& path) {
 }
 
 static void SaveCurrentAsPreset() {
-    // one managed recipe system: new snapshots are mood files (no shell keys)
+    // new snapshots go to the presets folder (no shell keys)
     wchar_t dir[MAX_PATH], path[MAX_PATH];
-    MoodsGetDirectory(dir);
+    GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
     if (g_renderer) SaveFullConfig(g_renderer->Config());   // ini = live state
     for (int n = 1; n < 100; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
         if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
             if (g_renderer) WriteConfigToIni(path, g_renderer->Config(), false);
-            MoodsRescan();
             wchar_t msg[128];
-            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the moods folder if you like.", n);
+            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
             ShowTrayBalloon(L"Preset saved", msg);
             return;
         }
@@ -2095,7 +2102,30 @@ struct ShotOpts {
     std::wstring presetIni;
     float    presetAt = 0.0f;
     bool     presetApplied = false;
+    // Cycle director under --shot. [cycle] is read from the --ini file; these
+    // override it: --cycle (force on), --cycle-dwell S, --cycle-jitter J,
+    // --cycle-order fixed|alternate_random, --cycle-seed N (default: --seed),
+    // --cycle-stage N (1-based start stage).
+    bool     cycleForce = false;
+    float    cycleDwell = -1.0f, cycleJitter = -1.0f;
+    int      cycleOrder = -1;
+    unsigned cycleSeed = 0;
+    int      cycleStage = -1;
+    // --cycle-next-at T[,T2...]: CycleNext() at wallpaper time T, in process
+    // (the same call the tray's "Next stage" makes). --cycle-pause-at T1,T2:
+    // CyclePause() at T1, CycleResume() at T2 (animators.h, headless).
+    // --shot-freeze NAME,T1,T2: Freeze(animator) at T1, Unfreeze at T2
+    // (NAME = palette|hue2|rig|hueshift|transition).
+    std::vector<float> cycleNextAt;
+    size_t   cycleNextDone = 0;
+    float    pauseAt = -1.0f, resumeAt = -1.0f;
+    int      freezeAnim = -1;
+    float    freezeAt = -1.0f, unfreezeAt = -1.0f;
+    // --shot-png-only: write <out>.png only (stats still logged). Saves ~35 MB
+    // per capture on a long series; the md5 file is the same .png as always.
+    bool     pngOnly = false;
 };
+static bool g_shotPngOnly = false;
 
 static void ShotLog(const char* fmt, ...) {
     va_list ap;
@@ -2435,9 +2465,9 @@ static void WriteShotPair(const std::wstring& stem, const std::vector<float>& rg
     std::wstring pqPath  = stem + L"-pq.png";
     EnsureParentDir(sdrPath.c_str());
     bool okS = WritePng(sdrPath.c_str(), sdr, w, h);
-    bool okH = WritePng(hdrPath.c_str(), hdr, w, h);
-    bool okJ = WriteJxrHalf(jxrPath.c_str(), half, w, h);
-    bool okP = WritePng48(pqPath.c_str(), pq, w, h) && PngSetCicpPq(pqPath.c_str());
+    bool okH = g_shotPngOnly || WritePng(hdrPath.c_str(), hdr, w, h);
+    bool okJ = g_shotPngOnly || WriteJxrHalf(jxrPath.c_str(), half, w, h);
+    bool okP = g_shotPngOnly || (WritePng48(pqPath.c_str(), pq, w, h) && PngSetCicpPq(pqPath.c_str()));
 
     const double meanLum = lumSum / (double)n;
     ShotLog("[shot] t=%.1fs %ls %dx%d  mean_lum=%.4f scRGB (%.1f nits)  "
@@ -2491,6 +2521,25 @@ static bool ShotModeRequested() {
         if (wcscmp(argv[i], L"--shot") == 0) found = true;
     LocalFree(argv);
     return found;
+}
+
+// --shot + cycling: the message-only control window's procedure (see RunShotMode)
+static LRESULT CALLBACK ShotCycleWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_COMMAND) {
+        ShotLog("[cycle] WM_COMMAND %u from another process\n", (unsigned)LOWORD(w));
+        switch (LOWORD(w)) {
+        case CMD_CYCLE_NEXT: CycleNext(); break;
+        case CMD_CYCLE_PREV: CyclePrev(); break;
+        case CMD_CYCLE_ON:   CycleSetEnabled(true, false); break;
+        case CMD_CYCLE_OFF:  CycleSetEnabled(false, false); break;
+        default:
+            if (LOWORD(w) >= CMD_CYCLE_STAGE_BASE && LOWORD(w) < CMD_CYCLE_STAGE_BASE + 99)
+                CycleJump(LOWORD(w) - CMD_CYCLE_STAGE_BASE);
+            break;
+        }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
 }
 
 static int RunShotMode() {
@@ -2552,10 +2601,44 @@ static int RunShotMode() {
                 if (const wchar_t* v = next()) o.panelMaxNits = (float)_wtof(v);
             } else if (wcscmp(argv[i], L"--mouse-none") == 0) {
                 o.mouseNone = true;
+            } else if (wcscmp(argv[i], L"--cycle") == 0) {
+                o.cycleForce = true;
+            } else if (wcscmp(argv[i], L"--cycle-dwell") == 0 && i + 1 < argc) {
+                o.cycleDwell = (float)_wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cycle-jitter") == 0 && i + 1 < argc) {
+                o.cycleJitter = (float)_wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cycle-order") == 0 && i + 1 < argc) {
+                o.cycleOrder = (_wcsicmp(argv[++i], L"fixed") == 0) ? CYCLE_ORDER_FIXED
+                                                                     : CYCLE_ORDER_ALT_RANDOM;
+            } else if (wcscmp(argv[i], L"--cycle-seed") == 0 && i + 1 < argc) {
+                o.cycleSeed = (unsigned)_wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cycle-stage") == 0 && i + 1 < argc) {
+                o.cycleStage = _wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cycle-next-at") == 0 && i + 1 < argc) {
+                const wchar_t* v = argv[++i];
+                while (v && *v) {
+                    o.cycleNextAt.push_back((float)_wtof(v));
+                    v = wcschr(v, L',');
+                    if (v) v++;
+                }
+            } else if (wcscmp(argv[i], L"--cycle-pause-at") == 0 && i + 1 < argc) {
+                swscanf_s(argv[++i], L"%f,%f", &o.pauseAt, &o.resumeAt);
+            } else if (wcscmp(argv[i], L"--shot-freeze") == 0 && i + 1 < argc) {
+                wchar_t name[32] = {};
+                if (swscanf_s(argv[++i], L"%31[^,],%f,%f", name, 32, &o.freezeAt, &o.unfreezeAt) >= 2) {
+                    if (_wcsicmp(name, L"palette") == 0)         o.freezeAnim = ANIM_PALETTE;
+                    else if (_wcsicmp(name, L"hue2") == 0)       o.freezeAnim = ANIM_HUE2;
+                    else if (_wcsicmp(name, L"rig") == 0)        o.freezeAnim = ANIM_RIG;
+                    else if (_wcsicmp(name, L"hueshift") == 0)   o.freezeAnim = ANIM_HUE_SHIFT;
+                    else if (_wcsicmp(name, L"transition") == 0) o.freezeAnim = ANIM_TRANSITION;
+                }
+            } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
+                o.pngOnly = true;
             }
         }
         LocalFree(argv);
     }
+    g_shotPngOnly = o.pngOnly;
     if (o.out.empty()) {
         ShotLog("[shot] ERROR: --shot needs an output .png path\n");
         return 2;
@@ -2589,9 +2672,13 @@ static int RunShotMode() {
     LoadSettings();          // shell globals: peak_nits, gamut (from the shot ini)
     LoadFullConfig(cfg);     // full look config
     EnsureBuiltinPresets();  // no-op while read-only
-    srand(o.seed);           // mood dwell jitter is drawn during InitMoods
-    InitMoods();
-    MoodsApplyBase(cfg);
+    // Cycle director: [cycle] from the --ini file. Off (the default) = not a
+    // single call below changes the render path.
+    CycleSetLogger([](const char* s) { ShotLog("%s", s); });
+    CycleLoad(g_configIniPath);
+    CycleOverride(o.cycleDwell, o.cycleOrder, o.cycleSeed ? o.cycleSeed : o.seed,
+                  o.cycleStage, o.cycleForce, o.cycleJitter);
+    const bool cycling = CycleBoot(cfg);
 
     // HDR state exactly as the shell would resolve it, without querying the
     // real display (see the main loop: sdrScale / peak / SetHdrOptions).
@@ -2605,7 +2692,21 @@ static int RunShotMode() {
     FluidRenderer renderer;
     renderer.InitOffscreen(o.width, o.height, cfg);
     g_renderer = &renderer;
-    renderer.SetCoverageWanted(g_moodSettings.enabled);
+    renderer.SetCoverageWanted(CycleCoverageWanted());
+    // --cycle-next from ANOTHER process reaches a headless run through this
+    // message-only window (class FluidWallpaperShotCycle, never the live
+    // tray's class, so no script can mistake one for the other). Only while
+    // cycling: a plain capture creates nothing.
+    HWND shotCtl = nullptr;
+    if (cycling) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = ShotCycleWndProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"FluidWallpaperShotCycle";
+        RegisterClassW(&wc);
+        shotCtl = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0,
+                                  HWND_MESSAGE, nullptr, wc.hInstance, nullptr);
+    }
 
     const float dt = 1.0f / 144.0f;   // fixed timestep, no vsync, no sleeping
     FrameInput fin;                   // --mouse-none: all-zero, no user input
@@ -2679,9 +2780,44 @@ static int RunShotMode() {
                 ShotLog("[shot] drop injected at t=%.2fs (%.0f,%.0f) vy=%.0f\n",
                         frames / 144.0f, o.dropX, o.dropY, o.dropVy);
             }
-            UpdateMoods(renderer, dt);
+            if (cycling) {
+                if (shotCtl) {
+                    MSG m;
+                    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+                        TranslateMessage(&m);
+                        DispatchMessageW(&m);
+                    }
+                }
+                const float tNow = frames / 144.0f;
+                while (o.cycleNextDone < o.cycleNextAt.size() &&
+                       tNow >= o.cycleNextAt[o.cycleNextDone]) {
+                    ShotLog("[cycle] --cycle-next-at %.2f: Next stage (the tray's call)\n",
+                            o.cycleNextAt[o.cycleNextDone]);
+                    CycleNext();
+                    o.cycleNextDone++;
+                }
+                if (o.pauseAt >= 0.0f && tNow >= o.pauseAt) { CyclePause(); o.pauseAt = -1.0f; }
+                if (o.resumeAt >= 0.0f && tNow >= o.resumeAt) { CycleResume(); o.resumeAt = -1.0f; }
+            }
+            if (o.freezeAnim >= 0) {
+                const float tNow = frames / 144.0f;
+                if (o.freezeAt >= 0.0f && tNow >= o.freezeAt) {
+                    Freeze((Animator)o.freezeAnim);
+                    o.freezeAt = -1.0f;
+                }
+                if (o.unfreezeAt >= 0.0f && tNow >= o.unfreezeAt) {
+                    Unfreeze((Animator)o.freezeAnim);
+                    o.unfreezeAt = -1.0f;
+                }
+            }
+            // The director's frame: fade / black / warm-up sub-steps. With the
+            // cycle off this is fade 1.0, no black, no steps -- today's frame.
+            const CycleFrame cf = CycleTick(renderer, dt);
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
             renderer.SetHdrOptions(peak, g_gamutMode);
+            for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);
+            renderer.SetFade(cf.fade);
+            renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
             frames++;
             // Leave the GPU some air: an unthrottled full-res sim starves the
@@ -2725,6 +2861,15 @@ static int RunShotMode() {
             shotStem += suffix;
         }
         WriteShotPair(shotStem, pixels, o.width, o.height, sdrScale, (float)(frames / 144.0));
+        if (cycling || renderer.Config().acid.enabled) {
+            char cyc[256] = "cycle=off";
+            if (cycling) CycleDescribe(cyc, sizeof(cyc));
+            ShotLog("[state] t=%.3f %s blobs=%d droplets=%d hue_angle=%.1f palette_hue=%.1f "
+                    "hue2=%.1f fade=%.4f black=%d\n",
+                    frames / 144.0, cyc, renderer.AcidBlobCount(), renderer.AcidDropletCount(),
+                    renderer.HueAngleDeg(), renderer.PaletteHueDeg(), renderer.Hue2Deg(),
+                    renderer.Fade(), renderer.BlackOut() ? 1 : 0);
+        }
         // Where the camera rig is at this instant. Every [post] effect hangs
         // off these, and all of them are supposed to be moving, so a series of
         // shots at different t is the only honest test of the motion.
@@ -2757,10 +2902,41 @@ static int RunShotMode() {
 
 // ---------------------------------------------------------------------------
 
+// --cycle-next / --cycle-prev / --cycle-on / --cycle-off: message the RUNNING
+// instance (the tray window, like CMD_PAUSE_ON/OFF for away-pause.ps1) and
+// exit; never starts a wallpaper. --cycle-target shot sends to a headless
+// --shot run that is cycling instead (its own window class). Returns -1 when
+// the command line carries none of these, else the process exit code.
+static int CycleCliCommand() {
+    int argc = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    UINT cmd = 0;
+    bool shot = false;
+    for (int i = 1; i < argc; i++) {
+        if (wcscmp(argv[i], L"--cycle-next") == 0)      cmd = CMD_CYCLE_NEXT;
+        else if (wcscmp(argv[i], L"--cycle-prev") == 0) cmd = CMD_CYCLE_PREV;
+        else if (wcscmp(argv[i], L"--cycle-on") == 0)   cmd = CMD_CYCLE_ON;
+        else if (wcscmp(argv[i], L"--cycle-off") == 0)  cmd = CMD_CYCLE_OFF;
+        else if (wcscmp(argv[i], L"--cycle-target") == 0 && i + 1 < argc)
+            shot = _wcsicmp(argv[++i], L"shot") == 0;
+    }
+    LocalFree(argv);
+    if (!cmd) return -1;
+    HWND target = shot ? FindWindowExW(HWND_MESSAGE, nullptr, L"FluidWallpaperShotCycle", nullptr)
+                       : FindWindowW(L"FluidWallpaperTray", nullptr);
+    if (!target) return 1;
+    PostMessageW(target, WM_COMMAND, cmd, 0);
+    return 0;
+}
+
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     // Headless capture: no window, no WorkerW, no tray, no single-instance
     // handshake (a running wallpaper must not be disturbed), no config writes.
     if (ShotModeRequested()) return RunShotMode();
+    {
+        const int rc = CycleCliCommand();
+        if (rc >= 0) return rc;
+    }
 
     HANDLE mutex = CreateMutexW(nullptr, TRUE, L"FluidWallpaper_SingleInstance");
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -2778,11 +2954,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
 
     FluidConfig cfg;
+    int cycleStartStage = -1;   // --cycle-stage N (1-based)
     {
         int argc = 0;
         wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         for (int i = 1; i < argc; i++) {
-            if (wcscmp(argv[i], L"--console") == 0) {
+            if (wcscmp(argv[i], L"--cycle-stage") == 0 && i + 1 < argc) {
+                cycleStartStage = _wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--console") == 0) {
                 AllocConsole();
                 FILE* f;
                 freopen_s(&f, "CONOUT$", "w", stdout);
@@ -2825,8 +3004,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     LoadFullConfig(cfg);
     EnsureBuiltinPresets();
-    InitMoods();
-    MoodsApplyBase(cfg);   // resume the explicitly-chosen mood over settings
+    // Cycle director ([cycle] in settings.ini). Enabled: the start stage is
+    // composed into cfg now and the first frames are its black warm-up.
+    CycleLoad(g_configIniPath);
+    CycleOverride(-1.0f, -1, 0, cycleStartStage, false);
+    CycleBoot(cfg);
 
     printf("FluidWallpaper - fluid simulation behind desktop icons\n");
 
@@ -2865,7 +3047,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         printf("startup: the swap chain was refused; waiting for the output\n");
     }
     g_renderer = &renderer;
-    renderer.SetCoverageWanted(g_moodSettings.enabled);
+    renderer.SetCoverageWanted(CycleCoverageWanted());
 
     CreateTrayWindow();
 
@@ -2960,7 +3142,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         nextResumeTry = 0;
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;
         renderer.SetHdrOptions(peak, g_gamutMode);
-        renderer.SetCoverageWanted(g_moodSettings.enabled);
+        renderer.SetCoverageWanted(CycleCoverageWanted());
         renderer.ReassertColorSpace();
         g_suspended = false;
         // Mood/journey state lives in the config, so it survives via savedCfg;
@@ -3187,10 +3369,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         const float kMaxStep = 1.0f / 30.0f;
         const float simDt = (dt < kMaxStep) ? dt : kMaxStep;
 
-        // Mood conductor: dwell/shift/emit/return transitions between
-        // moods\*.ini recipes (replaces the old instant-swap interludes)
-        UpdateMoods(renderer, simDt);
-
         // FPS cap from settings. Present(1, 0) is ALSO vsynced, and the two
         // caps fight each other at high refresh: the wait below has a ~2 ms
         // floor, so on a 240 Hz panel (4.17 ms vblank interval) a loop asking
@@ -3252,8 +3430,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         // SDR mode: DWM maps scRGB 1.0 to panel white, so scale 1. HDR mode:
         // match the user's SDR-content brightness, like the reference did.
         float sdrScale = g_hdrActive ? (g_sdrWhiteNits / 80.0f) : 1.0f;
+        // Cycle director (it absorbed the mood conductor): stage dwell, the
+        // fluid->fluid lerp, fades, and the black warm-up -- N sim-only steps
+        // per shown frame while the target is cleared to black. Off: fade
+        // 1.0, no black, no steps, i.e. exactly today's frame.
+        const CycleFrame cf = CycleTick(renderer, simDt);
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
         renderer.SetHdrOptions(peak, g_gamutMode);
+        for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);
+        renderer.SetFade(cf.fade);
+        renderer.SetBlackOut(cf.black);
         renderer.Frame(simDt, sdrScale, g_hdrActive, fin);
     }
 

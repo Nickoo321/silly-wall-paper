@@ -1,9 +1,11 @@
 // animators.h -- the contract between the cycle director and the Settings UI
 // (brief reference/briefs/UI-ANIMATORS-MODEL.md, DECIDED 2026-09-25).
 // Landed first by the cycle side so the ui1/1b executor builds against it.
-// Implementation: src/cycle.cpp (director, freezes), src/fluid.cpp (the
-// derived clocks' freeze offsets + the const getters), src/moods.cpp (the
-// conductor hold).
+// Implementation: src/cycle.cpp (director, freezes, the transition hold),
+// src/fluid.cpp (the derived clocks' freeze offsets + the const getters).
+// The mood conductor is gone (absorbed into the director, brief
+// CYCLE-DIRECTOR.md SURVEY + DECISION 2026-09-25): its hold is now the
+// director's TRANSITION hold.
 //
 // BASE vs LIVE. Two kinds of animator:
 //  (a) DERIVED at constant-upload time, never written to Config: the acid
@@ -12,9 +14,10 @@
 //      axis, lid, focus, pixel-shift orbit), the fluid hue-shift angle
 //      (m_hueAngle). Config IS the base; the UI shows the LIVE value through
 //      the const getters on FluidRenderer (listed at the bottom).
-//  (b) WRITTEN into Config: the mood conductor (LerpLook during SHIFT/EMIT/
-//      RETURN), journeys (during DWELL). In DWELL Config == the mood target ==
-//      base; during a transition the target is base and Config is live.
+//  (b) WRITTEN into Config: the director's fluid->fluid lerp (LerpLook during
+//      its SHIFT/EMIT/RETURN sub-phases), journeys (during a fluid stage's
+//      DWELL). In DWELL Config == the stage's composed base (journey keys
+//      aside); during a lerp CycleStageBase() is the TARGET and Config is live.
 //
 // FREEZE = hold the phase, never reset it. A derived clock reads
 //      phase = fmod((m_time - frozenAccum) / P)
@@ -33,7 +36,8 @@ enum Animator {
     ANIM_HUE2,           // [liquid_acid] film_hue2_wobble (the second hue's swing)
     ANIM_RIG,            // camera rig: lamp drift, lens axis, lid, focus readjusts, pixel-shift orbit
     ANIM_HUE_SHIFT,      // fluid hue-shift cycler (m_hueAngle bursts)
-    ANIM_CONDUCTOR,      // mood conductor + journey (a hold in moods.cpp)
+    ANIM_TRANSITION,     // the director's fluid->fluid lerp + journey legs (a hold)
+    ANIM_CONDUCTOR = ANIM_TRANSITION,   // old name (the conductor was absorbed)
     ANIM_CYCLE,          // the director's DWELL timer (same as CyclePause)
     ANIM_COUNT
 };

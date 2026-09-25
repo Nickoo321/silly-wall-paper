@@ -15,7 +15,7 @@
 #include <cstddef>
 #include <cmath>
 #include "app_state.h"
-#include "moods.h"
+#include "cycle.h"
 #include "journey.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -199,9 +199,6 @@ static void BuildDefs() {
         { L"Contrast",                          0.5f,  2,    0.01f, 2, &c.postContrast,       nullptr, L"color", L"post_contrast", false, nullptr, 2, L"WE-style whole-frame filter" },
         { L"Brightness",                        0.5f,  1.5f, 0.01f, 2, &c.postBrightness,     nullptr, L"color", L"post_brightness", false, nullptr, 2, L"WE-style whole-frame filter" },
         { L"Hue rotate (deg)",                  0,     360,  1,     0, &c.postHue,            nullptr, L"color", L"post_hue", false, nullptr, 2, L"Rotates all colors. Warning: rotates outside the hue band" },
-        { L"Dwell (min per mood)",              1,     30,   1,     0, &g_moodSettings.dwellMinutes,   nullptr, L"moods", L"dwell_minutes", false, L"Mood cycling", 2, L"Minutes in a mood before switching" },
-        { L"Transition length (s)",             2,     60,   1,     0, &g_moodSettings.transitionSec,  nullptr, L"moods", L"transition_seconds", false, nullptr, 2, L"Seconds a mood change takes" },
-        { L"Timing jitter (± fraction)",        0,     0.5f, 0.05f,2, &g_moodSettings.jitter,          nullptr, L"moods", L"jitter", false, nullptr, 2, L"Random +/- on dwell time so switches feel organic" },
         { L"Cycle time (s per lap)",            2,     120,  1,     0, &c.colorCyclePeriod,   nullptr, L"behavior", L"color_cycle_period", false, L"Color wheel", 3, L"Seconds for emitted hue to sweep its band" },
         { L"Hue band center (deg)",             0,     360,  1,     0, &c.hueCenter,          nullptr, L"color", L"hue_center", false, nullptr, 3, L"Where on the color wheel emission lives (0=red 120=green 240=blue)" },
         { L"Hue band range (180 = full wheel)", 5,     180,  1,     0, &c.hueRange,           nullptr, L"color", L"hue_range", false, nullptr, 3, L"Half-width of the emission band. 180 = full wheel" },
@@ -526,7 +523,6 @@ static void BuildDefs() {
         { L"Response curve (bright rims)",      &c.curveEnabled,     L"color",    L"curve_enabled", nullptr, 2, L"Enable the brightness hump curve" },
         { L"Pause on fullscreen app",           &g_pauseOnFullscreen,L"general",  L"pause_on_fullscreen", L"System", 3, L"Pause the wallpaper while a fullscreen app has focus" },
         { L"Pause on maximized app",            &g_pauseOnMaximized, L"general",  L"pause_on_maximized", nullptr, 3, L"Pause the wallpaper while a maximized window has focus" },
-        { L"Mood cycling (auto-switch looks)",  &g_moodSettings.enabled, L"moods", L"enabled", nullptr, 3, L"Auto-switch between moods/*.ini recipes" },
         { L"Mirror on second monitor",          &c.mirrorSecond,     L"general",  L"mirror_second", nullptr, 3, L"Also render the wallpaper on the second monitor" },
         // Look switch. Writes [look] liquid_acid=0|1; the ini also accepts
         // [look] style=fluid|liquid_acid. LIVE since the display PSO variants
@@ -651,7 +647,7 @@ static const FieldMap kFieldMap[] = {
 };
 static float MoodFileValue(const wchar_t* sec, const wchar_t* key, bool& ok) {
     ok = false;
-    const FluidConfig* m = MoodsCachedConfig();
+    const FluidConfig* m = nullptr;   // mood markers retired with the conductor (ui1: dirty vs CycleStageBase)
     if (!m || !sec || !key) return 0.0f;
     const char* base = reinterpret_cast<const char*>(m);
     for (const FieldMap& f : kFieldMap) {
@@ -688,7 +684,7 @@ static void UpdateSliderLabel(size_t i) {
         swprintf_s(val, L"%.*f", d.decimals, v);
     wchar_t buf[192];
     swprintf_s(buf, L"%s%s:  %s%s",
-               MoodsLocksKey(d.section, d.key) ? L"● " : L"○ ",
+               L"",
                d.label, val, DiffersFromMood(d) ? L" *" : L"");
     if (s_lastSliderText[i] != buf) {
         s_lastSliderText[i] = buf;
@@ -702,8 +698,7 @@ static void UpdateCheckLabel(size_t i) {
     if (!d.section) {
         text = d.label;   // autostart: not an ini-backed setting, no markers
     } else {
-        text = MoodsLocksKey(d.section, d.key) ? L"● " : L"○ ";
-        text += d.label;
+        text = d.label;
         bool ok = false;
         float mv = MoodFileValue(d.section, d.key, ok);
         if (ok && d.val && (*d.val != (mv >= 0.5f))) text += L" *";
@@ -715,22 +710,20 @@ static void UpdateCheckLabel(size_t i) {
 }
 
 // mood bar: current mood name, in-cycle checkbox, save/new/delete buttons
+// (the mood conductor is gone -- absorbed by the cycle director; this strip
+// now only names the current cycle stage until ui1 replaces the window)
 static void RefreshMoodBar() {
     if (!s_moodName) return;
-    int cur = MoodsCurrentIndex();
-    bool curOk = cur >= 0 && cur < (int)MoodsNames().size();
-    const std::wstring& nm = MoodsCurrentName();
-    const wchar_t* shown = curOk ? nm.c_str() : L"-";
-    if (s_lastMoodName != shown) {
-        s_lastMoodName = shown;
-        SetWindowTextW(s_moodName, shown);
+    const CycleStatus cs = CycleState();
+    const std::wstring label = cs.phase != CYCLE_OFF ? CycleStageLabel(cs.stage) : L"-";
+    if (s_lastMoodName != label) {
+        s_lastMoodName = label;
+        SetWindowTextW(s_moodName, label.c_str());
     }
-    EnableWindow(s_inCycle, curOk);
-    EnableWindow(s_moodSave, curOk);
-    EnableWindow(s_moodNew, curOk);
-    EnableWindow(s_moodDel, curOk && MoodsNames().size() > 1);
-    SendMessageW(s_inCycle, BM_SETCHECK,
-                 (curOk && !MoodsIsSkipped(cur)) ? BST_CHECKED : BST_UNCHECKED, 0);
+    EnableWindow(s_inCycle, FALSE);
+    EnableWindow(s_moodSave, FALSE);
+    EnableWindow(s_moodNew, FALSE);
+    EnableWindow(s_moodDel, FALSE);
 }
 
 static void PickPaletteColor(HWND owner, int idx) {
@@ -956,9 +949,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         if (id >= IDC_CHECK_BASE && id < IDC_CHECK_BASE + (int)s_checks.size()) {
             CheckDef& d = s_checks[id - IDC_CHECK_BASE];
             bool on = SendMessageW((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            if (d.val == &g_moodSettings.enabled) {
-                MoodsSetEnabled(on);   // also toggles the coverage override
-            } else if (d.val) {
+            if (d.val) {
                 *d.val = on;
                 WriteIniInt(d.section, d.key, on ? 1 : 0);
                 // Look switches are live. The two looks are mutually exclusive
@@ -998,37 +989,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             return 0;
         }
         if (id == IDC_OPEN_ANALYZER) { ShowAnalyzerWindow(); return 0; }
-        if (id == IDC_SCENES_BTN)    { ShowScenesWindow();   return 0; }
-        if (id == IDC_NEXT_MOOD)     { MoodsNext(*g_renderer); return 0; }
         if (id == IDC_SAVE_SCENE)    { SaveCurrentAsPresetFile(); return 0; }
-        if (id == IDC_MOOD_SAVE) {
-            if (g_renderer) MoodsSaveCurrent(*g_renderer);
-            return 0;
-        }
-        if (id == IDC_MOOD_NEW) {
-            if (g_renderer && MoodsCreateFromLive(*g_renderer) >= 0) {
-                DestroyWindow(hwnd);     // WM_DESTROY nulls s_wnd
-                ShowSettingsWindow();    // recreate so markers/caches are fresh
-            }
-            return 0;
-        }
-        if (id == IDC_MOOD_DELETE) {
-            wchar_t q[512];
-            swprintf_s(q, L"Delete mood '%s'? This removes the file.",
-                       MoodsCurrentName().c_str());
-            if (MessageBoxW(hwnd, q, L"Delete mood", MB_YESNO | MB_ICONWARNING) == IDYES &&
-                MoodsDeleteCurrent()) {
-                if (g_renderer) MoodsRefreshUiCache(*g_renderer);
-                DestroyWindow(hwnd);
-                ShowSettingsWindow();
-            }
-            return 0;
-        }
-        if (id == IDC_MOOD_INCYCLE) {
-            bool on = SendMessageW((HWND)lp, BM_GETCHECK, 0, 0) == BST_CHECKED;
-            MoodsSetSkipped(MoodsCurrentIndex(), !on);
-            return 0;
-        }
         if (id == IDC_PAUSE_BTN) {
             TogglePause();
             SetWindowTextW(s_pauseBtn, IsManualPaused() ? L"Resume wallpaper" : L"Pause wallpaper");
@@ -1070,51 +1031,32 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             wchar_t buf[96];
             swprintf_s(buf, L"Rendering at %.0f fps", g_currentFps);
             SetWindowTextW(s_fpsLabel, buf);
-            const auto& names = MoodsNames();
-            int cur = MoodsCurrentIndex();
-            int nxt = MoodsNextIndex();
-            bool curOk = cur >= 0 && cur < (int)names.size();
-            bool nxtOk = nxt >= 0 && nxt < (int)names.size();
-            if (curOk && nxtOk)
-                swprintf_s(buf, L"Mood: %s -> %s", names[cur].c_str(), names[nxt].c_str());
+            // cycle status (the mood conductor was absorbed by the director)
+            const CycleStatus cs = CycleState();
+            if (cs.phase == CYCLE_OFF)
+                swprintf_s(buf, L"Cycle: off");
             else if (JourneyActive()) {
                 int legI = 0, legN = 0;
                 JourneyLegInfo(&legI, &legN);
-                swprintf_s(buf, L"Mood: %s [journey leg %d/%d%s]",
-                           curOk ? names[cur].c_str() : L"-", legI + 1, legN,
-                           JourneyInBlendHold() ? L" blend" : L"");
+                _snwprintf_s(buf, _TRUNCATE, L"Cycle: %s [journey leg %d/%d%s]",
+                             CycleStageLabel(cs.stage).c_str(),
+                             legI + 1, legN, JourneyInBlendHold() ? L" blend" : L"");
             } else
-                swprintf_s(buf, L"Mood: %s", curOk ? names[cur].c_str() : L"-");
+                _snwprintf_s(buf, _TRUNCATE, L"Cycle: %s  %.0f s left",
+                             CycleStageLabel(cs.stage).c_str(), cs.remainingSec);
             SetWindowTextW(s_moodLabel, buf);
             RefreshMoodBar();
 
-            // the current mood file vanished on disk (external delete):
-            // rebuild the UI caches once so every marker falls back to "○"
-            static bool s_moodFileMissing = false;
-            wchar_t mp[MAX_PATH];
-            MoodsCurrentPath(mp);
-            bool missing = !mp[0] || GetFileAttributesW(mp) == INVALID_FILE_ATTRIBUTES;
-            if (missing != s_moodFileMissing && g_renderer) {
-                s_moodFileMissing = missing;
-                MoodsRefreshUiCache(*g_renderer);
-            }
-
-            // markers: ● = key saved in this mood, ○ = not in the mood,
-            // trailing * = live value differs from the mood file. The labels
-            // only get SetWindowTextW when the composed string changed.
             for (size_t i = 0; i < s_sliders.size(); i++) UpdateSliderLabel(i);
             for (size_t i = 0; i < s_checks.size(); i++) UpdateCheckLabel(i);
 
-            // a mood switch changes Config() behind the sliders' backs; rebuild
-            // so they show the new mood's values. Skipped while the user is
-            // mid-drag (capture held) — retried on the next tick instead. The
-            // selected page survives via the file-static s_page.
-            static int s_shownMood = -1;
-            if (s_shownMood < 0) {
-                s_shownMood = cur;
-            } else if (cur != s_shownMood && GetCapture() == nullptr) {
-                s_shownMood = cur;
-                if (g_renderer) MoodsRefreshUiCache(*g_renderer);   // markers track the new mood
+            // a stage switch changes Config() behind the sliders' backs;
+            // rebuild so they show the new stage's values (skipped mid-drag)
+            static int s_shownStage = -2;
+            if (s_shownStage == -2) {
+                s_shownStage = cs.stage;
+            } else if (cs.stage != s_shownStage && GetCapture() == nullptr) {
+                s_shownStage = cs.stage;
                 DestroyWindow(hwnd);     // WM_DESTROY nulls s_wnd
                 ShowSettingsWindow();    // recreates fresh from Config()
             }
@@ -1230,7 +1172,6 @@ void ShowSettingsWindow() {
     if (s_page >= (int)s_pages.size()) s_page = 0;
     s_navScr = ScrollState{};
     s_pageScr = ScrollState{};
-    MoodsRefreshUiCache(*g_renderer);   // markers compare against the current mood
 
     RECT r = { 0, 0, 760, 640 };   // compact default: nav + one page column
     AdjustWindowRect(&r, kWndStyle, FALSE);
@@ -1315,7 +1256,7 @@ void ShowSettingsWindow() {
     // mood bar (top strip, always visible): name + cycle + save/new/delete.
     // Label and name share the head font so their baselines line up — the old
     // 44px label clipped its colon and jammed the two texts together.
-    MakeCtl(s_wnd, L"STATIC", L"Mood:", 0, kMargin, 7, 60, 22, nullptr, true);
+    MakeCtl(s_wnd, L"STATIC", L"Stage:", 0, kMargin, 7, 60, 22, nullptr, true);
     s_moodName = MakeCtl(s_wnd, L"STATIC", L"-", 0, kMargin + 62, 7, 196, 22, nullptr);
     SendMessageW(s_moodName, WM_SETFONT, (WPARAM)s_headFont, TRUE);
     s_inCycle = MakeCtl(s_wnd, L"BUTTON", L"In cycle", BS_AUTOCHECKBOX,
@@ -1394,10 +1335,6 @@ void ShowSettingsWindow() {
     // row 3: windows + mood step + scene save
     RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Open HDR analyzer", BS_PUSHBUTTON, 0, 0, 10, 10,
                       (HMENU)(UINT_PTR)IDC_OPEN_ANALYZER), 3, kMargin, 0, 150, 26);
-    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Scenes…", BS_PUSHBUTTON, 0, 0, 10, 10,
-                      (HMENU)(UINT_PTR)IDC_SCENES_BTN), 3, 172, 0, 90, 26);
-    RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Next mood", BS_PUSHBUTTON, 0, 0, 10, 10,
-                      (HMENU)(UINT_PTR)IDC_NEXT_MOOD), 3, 272, 0, 100, 26);
     RegBottom(MakeCtl(s_wnd, L"BUTTON", L"Save look as scene", BS_PUSHBUTTON, 0, 0, 10, 10,
                       (HMENU)(UINT_PTR)IDC_SAVE_SCENE), 3, 382, 0, 170, 26);
 

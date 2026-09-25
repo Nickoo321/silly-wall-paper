@@ -40,6 +40,12 @@ const float kMaxDwellSec = 240.0f;
 // An overlay stage's own fades (it snaps a fold on/off, no look switch, no
 // warm-up): short, unless the stage sets stage_N_fade_out / _fade_in.
 const float kSoftFadeOut = 0.6f, kSoftFadeIn = 0.9f;
+// Tier mode (brief FINAL-CYCLE A / B.3): proven : moderate : wild.
+const float kTierWeight[3] = { 7.0f, 2.0f, 1.0f };
+const int   kBurst = -2;             // DrawTiered: the burst moment was drawn
+// The proven anchors of the hue_anchor_weight warp (fluid.cpp AnchorWarpDeg):
+// magenta, blue, red, violet. A tamed burst lands on one of them.
+const float kAnchorHue[4] = { 325.0f, 215.0f, 355.0f, 275.0f };
 
 CycleConfig  s_cfg;
 std::wstring s_iniPath;              // where [cycle] was read from
@@ -85,6 +91,23 @@ double s_pauseUntil = 0.0;
 bool   s_frozen[ANIM_COUNT] = {};
 double s_frozenUntil[ANIM_COUNT] = {};
 void (*s_logger)(const char*) = nullptr;
+// tier mode: the non-WE stage drawn (at an oil / ink visit's midpoint) for the
+// slot after the WE interlude; this visit's draw / burst done
+int   s_queued = -1;
+bool  s_midDrawn = false;
+bool  s_burstDone = false;
+bool  s_burstWatch = false;          // a burst is landing: log where it lands
+float s_burstAnchor = 0.0f;
+bool  s_entryDrop = false;           // ink stage: one drop at the start of the warm-up
+// the oil -> oil scheme change (CYCLE_SCHEME)
+int   s_schemeSub = 0;               // 0 = ramping down, 1 = ramping back up
+float s_amtFrom[4] = {}, s_amtTo[4] = {};
+float s_schemeLogT = -1.0f;
+// draw statistics (CycleDrawTest) + quiet mode
+bool  s_quiet = false;
+long  s_statTier[3] = {};
+long  s_statDraws = 0, s_statBurst = 0, s_statRedraw = 0;
+std::vector<long> s_statStage;
 
 void Log(const char* fmt, ...) {
     char buf[1024];
@@ -106,6 +129,7 @@ const char* PhaseName(int p) {
     case CYCLE_WARMUP:   return "warmup";
     case CYCLE_FADE_IN:  return "fade_in";
     case CYCLE_LERP:     return "lerp";
+    case CYCLE_SCHEME:   return "scheme";
     default:             return "off";
     }
 }
@@ -190,9 +214,27 @@ int LookOf(const CycleStage& st) {
 void ResolveStage(CycleStage& st, const std::wstring& ini) {
     st.path = Resolve(st.file, ini);
     st.basePath = Resolve(st.base, ini);
+    // no stage_N_base: the file's own [meta] base= (a partial "Save as", or a
+    // variant such as acid-rise-12-tone-half.ini), relative to the FILE's folder
+    if (st.base.empty() && Exists(st.path)) {
+        const std::wstring mb = IniStr(L"meta", L"base", st.path.c_str());
+        if (!mb.empty()) st.basePath = Resolve(mb, st.path);
+    }
     st.name = Stem(st.file);
-    st.ok = Exists(st.path) && (st.base.empty() || Exists(st.basePath));
+    st.ok = Exists(st.path) && (st.basePath.empty() || Exists(st.basePath));
     st.look = st.ok ? LookOf(st) : CYCLE_LOOK_FLUID;
+    // can a tamed burst land here? the palette clock must turn the film
+    // (hue_rotate_period on) and the sweep must be off (the landing maths
+    // assumes the film's own hue is oil_color_1's) -- file over base
+    float rot = LiquidAcidConfig{}.hueRotatePeriod, sweep = LiquidAcidConfig{}.hueSweepPeriod;
+    for (const std::wstring* p : { &st.basePath, &st.path }) {
+        if (p->empty() || !Exists(*p)) continue;
+        std::wstring v = IniStr(L"liquid_acid", L"hue_rotate_period", p->c_str());
+        if (!v.empty()) rot = (float)_wtof(v.c_str());
+        v = IniStr(L"liquid_acid", L"hue_sweep_period", p->c_str());
+        if (!v.empty()) sweep = (float)_wtof(v.c_str());
+    }
+    st.burstOk = st.ok && !st.overlay && st.look == CYCLE_LOOK_ACID && rot > 0.01f && !(sweep > 0.01f);
 }
 
 int OkCount() {
@@ -203,6 +245,16 @@ int OkCount() {
 bool Valid(int i) { return i >= 0 && i < (int)s_cfg.stages.size() && s_cfg.stages[i].ok; }
 bool IsOverlay(int i) { return Valid(i) && s_cfg.stages[i].overlay; }
 bool IsFluid(int i) { return Valid(i) && !s_cfg.stages[i].overlay && s_cfg.stages[i].look == CYCLE_LOOK_FLUID; }
+// an oil or ink LOOK stage (the "other" side of the WE alternation)
+bool IsOtherLook(int i) { return Valid(i) && !s_cfg.stages[i].overlay && s_cfg.stages[i].look != CYCLE_LOOK_FLUID; }
+bool TierMode() {
+    for (auto& s : s_cfg.stages) if (s.tier >= 0) return true;
+    return false;
+}
+int TierOf(int j) {                      // tier mode: an untiered stage counts as wild
+    const int t = s_cfg.stages[j].tier;
+    return (t >= CYCLE_TIER_PROVEN && t <= CYCLE_TIER_WILD) ? t : CYCLE_TIER_WILD;
+}
 // the look stage actually running (an overlay's base)
 int LookStage(int i) { return IsOverlay(i) ? s_base : i; }
 
@@ -344,6 +396,11 @@ void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int&
     c.stats         = live.stats;
     c.hdrPeakNits   = live.hdrPeakNits;     // resolved per frame by the shell
     c.gamutMode     = live.gamutMode;
+    // FINAL-CYCLE B.2: under oil the fluid hue-shift cycler (a rotation of the
+    // FINISHED image, after equal load) never runs while cycling -- hue motion
+    // on an oil stage is the palette clock (anchor drift + the rare tamed
+    // burst). Off glides any angle home (UpdateHueShift), never a snap.
+    if (st.look == CYCLE_LOOK_ACID && !st.overlay) c.hsEnabled = false;
     out = c;
     // [hdr] peak_nits / gamut are shell globals: the stage's value when it
     // carries one (file over base), else the user's own setting
@@ -412,6 +469,8 @@ void EnterDwell(FluidRenderer& r, int i) {
     s_phaseT = 0.0f;
     s_dwellT = 0.0f;
     s_darkSince = -1.0f;
+    s_midDrawn = false;                  // a new visit: its midpoint draw + one burst
+    s_burstDone = false;
     const float j = JitterOf(i);
     s_dwellTarget = fminf(DwellOf(i) * (1.0f - j + 2.0f * j * NextUnit()), kMaxDwellSec);
     s_soft = false;
@@ -435,6 +494,9 @@ void ApplyStage(FluidRenderer& r, int i) {
     const double compileMs = r.LastLookCompileMs() + r.PrecompilePostPsos();
     r.ResetLookState();
     s_base = -1;                    // a fresh composition drops any overlay
+    // FINAL-CYCLE B.1: an ink stage never opens on clear water -- one drop at
+    // the START of the warm-up (queued in CycleTick's WARMUP, after the clear)
+    s_entryDrop = s_cfg.stages[i].look == CYCLE_LOOK_INK && !s_cfg.stages[i].overlay;
     PushHistory(s_cur, i);
     s_cur = i;
     s_next = -1;
@@ -447,9 +509,143 @@ void ApplyStage(FluidRenderer& r, int i) {
         st.transition == CYCLE_TR_LERP ? " (transition=lerp across looks runs as a fade)" : "");
 }
 
+// ---- tier mode (brief FINAL-CYCLE A / B.2 / B.3) ------------------------------
+// ONE tiered draw over the non-WE stages: a tier by 7 : 2 : 1 (tiers with no
+// allowed member drop out), then a member by its within-tier multiplier. The
+// wild tier also holds the "burst moment" (burst_weight); drawn where it
+// cannot fire (allowBurst false), the member is redrawn inside the wild tier,
+// so the tier shares stay 70/20/10. Returns a stage, kBurst, or -1.
+int DrawTiered(bool allowBurst, bool allowOverlays, const char* why) {
+    if (!s_rngSeeded) SeedRng();
+    const int n = (int)s_cfg.stages.size();
+    std::vector<int> mem[3];
+    float tot[3] = {};
+    for (int j = 0; j < n; j++) {
+        if (!Valid(j) || IsFluid(j)) continue;
+        if (s_cfg.stages[j].overlay && !allowOverlays) continue;
+        const float w = fmaxf(s_cfg.stages[j].weight, 0.0f);
+        if (w <= 0.0f) continue;
+        const int t = TierOf(j);
+        mem[t].push_back(j);
+        tot[t] += w;
+    }
+    const float bw = fmaxf(s_cfg.burstWeight, 0.0f);
+    bool avail[3];
+    float T = 0.0f;
+    for (int t = 0; t < 3; t++) {
+        avail[t] = tot[t] > 0.0f || (t == CYCLE_TIER_WILD && allowBurst && bw > 0.0f);
+        if (avail[t]) T += kTierWeight[t];
+    }
+    if (T <= 0.0f) return -1;
+    const float u1 = NextUnit();
+    int tier = -1;
+    float acc = 0.0f;
+    for (int t = 0; t < 3; t++) {
+        if (!avail[t]) continue;
+        acc += kTierWeight[t] / T;
+        tier = t;
+        if (u1 < acc) break;
+    }
+    const bool burstIn = tier == CYCLE_TIER_WILD && bw > 0.0f;
+    auto pickMember = [&](bool withBurst, float u) {
+        const float total = tot[tier] + (withBurst ? bw : 0.0f);
+        float a2 = 0.0f;
+        for (int j : mem[tier]) {
+            a2 += fmaxf(s_cfg.stages[j].weight, 0.0f) / total;
+            if (u < a2) return j;
+        }
+        if (withBurst) return kBurst;
+        return mem[tier].empty() ? -1 : mem[tier].back();
+    };
+    const float u2 = NextUnit();
+    int pick = pickMember(burstIn, u2);
+    bool redraw = false;
+    if (pick == kBurst && !allowBurst) {     // not on an oil stage that can take one
+        redraw = true;
+        s_statRedraw++;
+        pick = pickMember(false, NextUnit());
+    }
+    s_statDraws++;
+    s_statTier[tier]++;
+    if (pick == kBurst) s_statBurst++;
+    else if (pick >= 0 && pick < (int)s_statStage.size()) s_statStage[pick]++;
+    if (!s_quiet)
+        Log("[cycle] draw (%s) tier=%s u=%.4f/%.4f%s -> %s%ls\n", why, CycleTierName(tier), u1, u2,
+            redraw ? " [burst moment not possible here: redrawn in the wild tier]" : "",
+            pick == kBurst ? "BURST MOMENT" : (Valid(pick) ? "stage " : "none"),
+            Valid(pick) ? (std::to_wstring(pick + 1) + L" " + s_cfg.stages[pick].name).c_str() : L"");
+    return pick;
+}
+
+// The WE side of the alternation: a fluid look stage, by stage_N_weight.
+int DrawFluid() {
+    if (!s_rngSeeded) SeedRng();
+    const int n = (int)s_cfg.stages.size();
+    const std::wstring curPath = Valid(s_cur) ? s_cfg.stages[s_cur].path : L"";
+    std::vector<int> c;
+    for (int j = 0; j < n; j++)
+        if (IsFluid(j) && (j != s_cur) && _wcsicmp(s_cfg.stages[j].path.c_str(), curPath.c_str()) != 0)
+            c.push_back(j);
+    if (c.empty()) for (int j = 0; j < n; j++) if (IsFluid(j) && j != s_cur) c.push_back(j);
+    if (c.empty()) return -1;
+    float total = 0.0f;
+    for (int j : c) total += fmaxf(s_cfg.stages[j].weight, 0.0f);
+    const float u = NextUnit();
+    int pick = c.back();
+    if (total > 0.0f) {
+        float acc = 0.0f;
+        for (int j : c) {
+            acc += fmaxf(s_cfg.stages[j].weight, 0.0f) / total;
+            if (u < acc) { pick = j; break; }
+        }
+    }
+    if (!s_quiet)
+        Log("[cycle] WE interlude u=%.4f -> stage %d %ls\n", u, pick + 1, s_cfg.stages[pick].name.c_str());
+    return pick;
+}
+
+// The queued non-WE stage, if still usable here (overlays not after an overlay).
+int TakeQueued(bool allowOverlay) {
+    const int q = s_queued;
+    s_queued = -1;
+    if (!Valid(q) || IsFluid(q) || (IsOverlay(q) && !allowOverlay)) return -1;
+    return q;
+}
+
+// Tier mode, alternate_random: WE alternates with everything else.
+int PickTier() {
+    bool haveFluid = false;
+    for (int j = 0; j < (int)s_cfg.stages.size(); j++) if (IsFluid(j)) { haveFluid = true; break; }
+    if (!Valid(s_cur)) {                     // boot / turned on: never an overlay first
+        const int q = TakeQueued(false);
+        return q >= 0 ? q : DrawTiered(false, false, "start");
+    }
+    if (IsOverlay(s_cur)) {
+        // the overlay was the WE's partner: next a non-WE look (never back to
+        // its base look, overlays never chain); over a non-WE look: WE
+        if (IsFluid(s_base) || !haveFluid) {
+            const int q = TakeQueued(false);
+            return q >= 0 ? q : DrawTiered(false, false, "after overlay");
+        }
+        return DrawFluid();
+    }
+    if (IsFluid(s_cur) || !haveFluid) {
+        const int q = TakeQueued(true);
+        return q >= 0 ? q : DrawTiered(false, true, "after WE");
+    }
+    // oil / ink: the WE interlude; its successor is drawn now if the midpoint
+    // draw has not queued one (or it was the burst)
+    if (s_queued < 0) {
+        const int r = DrawTiered(false, true, "for after WE");
+        if (Valid(r)) s_queued = r;
+    }
+    return DrawFluid();
+}
+
 int PickNext() {
     const int n = (int)s_cfg.stages.size();
     if (n == 0 || OkCount() == 0) return -1;
+    if (s_cfg.order != CYCLE_ORDER_FIXED && TierMode()) return PickTier();
     if (s_cfg.order == CYCLE_ORDER_FIXED) {
         if (s_cur >= 0 && !s_cfg.loop) {
             bool anyAfter = false;       // no loop: stop on the last valid stage
@@ -593,6 +789,130 @@ void FinishLerp(FluidRenderer& r) {
     EnterDwell(r, target);
 }
 
+float Wrap360(float h) {
+    h = fmodf(h, 360.0f);
+    return h < 0.0f ? h + 360.0f : h;
+}
+
+// ---- the tamed burst (FINAL-CYCLE B.2 + auditor pre-flight 1) ----------------
+// NOT the fluid hue-shift (CommandHueShift / fm1.x rotates the FINISHED image
+// after equal load). A burst = a smoothstepped temporary advance of the acid
+// PALETTE CLOCK (AnimatorKick(ANIM_PALETTE)), CPU only: the film's hue runs
+// forward through the wheel for burst_sec and lands on the proven anchor
+// nearest to a 90..200 deg forward swing (at least 60 deg away), found by
+// inverting the anchor warp (PalettePhaseForHue); the offset is kept, so the
+// anchor drift resumes from the landing. Equal load is per pixel in the
+// shader, so it holds through the swing.
+bool FireBurst(FluidRenderer& r, const char* why) {
+    const LiquidAcidConfig& a = r.Config().acid;
+    if (!a.enabled || !(a.hueRotatePeriod > 0.01f) || a.hueSweepPeriod > 0.01f) {
+        Log("[cycle] burst (%s) skipped: needs an oil stage with hue_rotate_period on and the sweep off\n", why);
+        return false;
+    }
+    const float P = a.hueRotatePeriod;
+    const float h0 = r.PaletteBaseHueDeg();
+    const float hc = Wrap360(h0 + r.PaletteHueDeg());
+    const float swing = 90.0f + 110.0f * NextUnit();
+    int best = -1;
+    float bestErr = 1e9f, bestFwd = 0.0f;
+    for (int pass = 0; pass < 2 && best < 0; pass++)
+        for (int k = 0; k < 4; k++) {
+            const float fwd = Wrap360(kAnchorHue[k] - hc);
+            if (pass == 0 && fwd < 60.0f) continue;
+            const float err = fabsf(fwd - swing);
+            if (err < bestErr) { bestErr = err; best = k; bestFwd = fwd; }
+        }
+    const float anchor = kAnchorHue[best];
+    const float sec = fmaxf(s_cfg.burstSec, 1.0f);
+    // land at the END of the kick: the clock also runs sec of its own time
+    const float clockEnd = r.AnimatorTime(ANIM_PALETTE) + sec;
+    float uEnd = fmodf(clockEnd / P, 1.0f);
+    if (uEnd < 0.0f) uEnd += 1.0f;
+    float du = r.PalettePhaseForHue(anchor) - uEnd;
+    du -= floorf(du);
+    if (du < 0.005f) du += 1.0f;
+    AnimatorKick(ANIM_PALETTE, du * P, sec);
+    s_burstDone = true;
+    s_burstWatch = true;
+    s_burstAnchor = anchor;
+    Log("[cycle] BURST (%s) on %ls: palette hue %.1f -> anchor %.0f (+%.0f deg forward, swing %.0f), "
+        "palette clock +%.1f s (%.3f turn) over %.1f s, film_equal_load %.2f\n",
+        why, Valid(s_cur) ? s_cfg.stages[s_cur].name.c_str() : L"-", hc, anchor, bestFwd, swing,
+        du * P, du, sec, a.filmEqualLoad);
+    return true;
+}
+
+// ---- the oil -> oil scheme change (FINAL-CYCLE B.5 + pre-flight 2) ------------
+void GetAmts(const LiquidAcidConfig& a, float v[4]) {
+    v[0] = a.filmHue2Amt; v[1] = a.filmHue3Amt; v[2] = a.shadowTone; v[3] = a.highlightToneAmt;
+}
+void SetAmts(LiquidAcidConfig& a, const float v[4], float k) {
+    a.filmHue2Amt = v[0] * k; a.filmHue3Amt = v[1] * k; a.shadowTone = v[2] * k; a.highlightToneAmt = v[3] * k;
+}
+
+// Both liquid_acid partial overlays on the SAME base (two Scheme presets on
+// monotone-post-0924) whose palette clock and film load agree: the change is
+// then only the extra colours + tones, which are invisible at amount 0.
+bool WantsScheme(int target) {
+    if (!Valid(s_cur) || !Valid(target) || IsOverlay(s_cur) || IsOverlay(target)) return false;
+    const CycleStage& A = s_cfg.stages[s_cur];
+    const CycleStage& B = s_cfg.stages[target];
+    if (A.look != CYCLE_LOOK_ACID || B.look != CYCLE_LOOK_ACID) return false;
+    if (B.transition == CYCLE_TR_CUT || B.transition == CYCLE_TR_FADE) return false;
+    if (A.basePath.empty() || _wcsicmp(A.basePath.c_str(), B.basePath.c_str()) != 0) return false;
+    if (!g_renderer) return false;
+    FluidConfig ca, cb;
+    float pk;
+    int gm;
+    Compose(s_cur, g_renderer->Config(), ca, pk, gm);
+    Compose(target, g_renderer->Config(), cb, pk, gm);
+    const LiquidAcidConfig& x = ca.acid;
+    const LiquidAcidConfig& y = cb.acid;
+    const bool same = x.hueRotatePeriod == y.hueRotatePeriod && x.hueSweepPeriod == y.hueSweepPeriod &&
+                      x.hueAnchorWeight == y.hueAnchorWeight && x.filmEqualLoad == y.filmEqualLoad &&
+                      memcmp(x.oilColors, y.oilColors, sizeof(x.oilColors)) == 0;
+    if (!same) Log("[cycle] %ls -> %ls: palette clock / film load differ, fading through black instead\n",
+                   A.name.c_str(), B.name.c_str());
+    return same;
+}
+
+void BeginScheme(FluidRenderer& r, int target) {
+    GetAmts(r.Config().acid, s_amtFrom);
+    s_next = target;
+    s_phase = CYCLE_SCHEME;
+    s_schemeSub = 0;
+    s_phaseT = 0.0f;
+    s_schemeLogT = -1.0f;
+    Log("[cycle] scheme change %ls -> %ls: hue2/hue3/shadow_tone/highlight_tone amounts "
+        "(%.2f %.2f %.2f %.2f) -> 0 over %.1f s, plain set, back over %.1f s -- no black\n",
+        s_cfg.stages[s_cur].name.c_str(), s_cfg.stages[target].name.c_str(),
+        s_amtFrom[0], s_amtFrom[1], s_amtFrom[2], s_amtFrom[3], s_cfg.schemeRampSec, s_cfg.schemeRampSec);
+}
+
+// At amount 0: the target stage's config as a PLAIN SET (never the generic
+// lerp: film_hue2 would travel round the wheel), its amounts held at 0.
+void SchemeSwap(FluidRenderer& r) {
+    const int target = s_next;
+    FluidConfig c;
+    float peak;
+    int gamut;
+    Compose(target, r.Config(), c, peak, gamut);
+    GetAmts(c.acid, s_amtTo);
+    SetAmts(c.acid, s_amtTo, 0.0f);
+    r.Config() = c;
+    g_hdrPeakNits = peak;
+    g_gamutMode = gamut;
+    r.EnsureLookResources();                 // same look: nothing to compile
+    PushHistory(s_cur, target);
+    s_cur = target;
+    s_next = -1;
+    PersistCurrent();
+    s_schemeSub = 1;
+    s_phaseT = 0.0f;
+    Log("[cycle] scheme swap at amount 0 -> %d %ls; amounts ramp back to (%.2f %.2f %.2f %.2f)\n",
+        target + 1, s_cfg.stages[target].name.c_str(), s_amtTo[0], s_amtTo[1], s_amtTo[2], s_amtTo[3]);
+}
+
 void BeginSwitch(FluidRenderer& r, int target) {
     if (!Valid(target)) return;
     // an overlay can only go on over a formed look: not mid black / hard fade
@@ -614,8 +934,18 @@ void BeginSwitch(FluidRenderer& r, int target) {
         r.ReleaseHueShift(false);
         FinishLerp(r);
     }
+    if (s_phase == CYCLE_SCHEME) {          // land the scheme change first
+        if (s_schemeSub == 0) SchemeSwap(r);
+        SetAmts(r.Config().acid, s_amtTo, 1.0f);
+        EnterDwell(r, s_cur);
+        if (s_phase == CYCLE_OFF) return;
+    }
     if (s_phase == CYCLE_DWELL && WantsLerp(target)) {
         BeginLerp(r, target);
+        return;
+    }
+    if (s_phase == CYCLE_DWELL && WantsScheme(target)) {
+        BeginScheme(r, target);
         return;
     }
     // Soft switch (short fade, no black hold, no sim reset): an overlay goes on
@@ -724,6 +1054,9 @@ void CycleLoad(const wchar_t* ini) {
     s_cfg.jitter = fminf(fmaxf(IniF(S, L"jitter", 0.3f, I), 0.0f), 0.9f);
     s_cfg.earlyDarkPct = IniF(S, L"early_switch_darkpct", 92.0f, I);
     s_cfg.minDwellSec = IniF(S, L"min_dwell", 60.0f, I);
+    s_cfg.burstWeight = fmaxf(IniF(S, L"burst_weight", 1.0f, I), 0.0f);
+    s_cfg.burstSec = fminf(fmaxf(IniF(S, L"burst_sec", 12.0f, I), 1.0f), 60.0f);
+    s_cfg.schemeRampSec = fminf(fmaxf(IniF(S, L"scheme_ramp", 2.0f, I), 0.1f), 10.0f);
     const int count = (int)GetPrivateProfileIntW(S, L"stage_count", 0, I);
     for (int k = 1; k <= count && k <= 99; k++) {
         wchar_t key[48];
@@ -749,6 +1082,7 @@ void CycleLoad(const wchar_t* ini) {
         st.warmupSec = IniF(S, K(L"warmup"), -1.0f, I);
         st.jitter = IniF(S, K(L"jitter"), -1.0f, I);
         st.weight = fmaxf(IniF(S, K(L"weight"), 1.0f, I), 0.0f);
+        st.tier = CycleTierFromName(IniStr(S, K(L"tier"), I).c_str());
         st.lerpSec = IniF(S, K(L"lerp"), -1.0f, I);
         st.journey = IniStr(S, K(L"journey"), I);
         ResolveStage(st, s_iniPath);
@@ -799,6 +1133,7 @@ bool CycleBoot(FluidConfig& cfg) {
     s_phaseT = 0.0f;
     s_warmSim = 0.0f;
     s_fade = 0.0f;
+    s_entryDrop = s_cfg.stages[start].look == CYCLE_LOOK_INK;   // FINAL-CYCLE B.1
     g_cycleActive = true;
     JourneyDetach();
     PersistCurrent();
@@ -815,6 +1150,14 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
     s_clock += dt;
     AnimatorsTick();
     if (s_phase == CYCLE_OFF) { s_fade = 1.0f; return f; }
+    if (s_burstWatch && !r.AnimatorKicking(ANIM_PALETTE)) {   // the burst has landed
+        s_burstWatch = false;
+        const float h = Wrap360(r.PaletteBaseHueDeg() + r.PaletteHueDeg());
+        float err = h - s_burstAnchor;
+        err -= 360.0f * floorf((err + 180.0f) / 360.0f);
+        Log("[cycle] burst landed: palette hue %.2f deg, anchor %.0f, error %+.2f deg; anchor drift resumes\n",
+            h, s_burstAnchor, err);
+    }
     const bool held = s_frozen[ANIM_TRANSITION];
 
     // advance the clock of the phase we are in
@@ -831,6 +1174,19 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
         }
         if (s_paused) break;                 // Settings open: the dwell timer holds
         s_dwellT += dt;
+        // tier mode: an oil / ink visit's ONE draw, at its dwell midpoint, for
+        // the slot after the WE interlude -- or the burst moment, which fires
+        // here on an oil stage that can take it (else it is redrawn)
+        if (!s_midDrawn && s_dwellT >= 0.5f * s_dwellTarget && s_cfg.order != CYCLE_ORDER_FIXED &&
+            TierMode() && IsOtherLook(s_cur)) {
+            s_midDrawn = true;
+            if (s_queued < 0) {
+                const bool canBurst = s_cfg.stages[s_cur].burstOk && !s_burstDone;
+                const int d = DrawTiered(canBurst, true, "midpoint");
+                if (d == kBurst) FireBurst(r, "drawn");
+                else if (Valid(d)) s_queued = d;
+            }
+        }
         bool early = false;
         if (IsFluid(s_cur)) {                // fluid LOOK stages only (not overlays)
             // the conductor's dark-screen trigger: past min dwell, the field
@@ -866,6 +1222,31 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
         if (fi <= 0.0f || s_phaseT >= fi) EnterDwell(r, s_cur);
         break;
     }
+    case CYCLE_SCHEME: {
+        if (held) break;                     // transition hold
+        s_phaseT += dt;
+        const float R = fmaxf(s_cfg.schemeRampSec, 0.1f);
+        const float t = fminf(1.0f, s_phaseT / R);
+        LiquidAcidConfig& a = r.Config().acid;
+        const int sub = s_schemeSub;
+        if (sub == 0) SetAmts(a, s_amtFrom, 1.0f - Smooth(t));
+        else          SetAmts(a, s_amtTo, Smooth(t));
+        // proof log: the four amounts every 0.25 s of each half
+        if (s_schemeLogT < 0.0f || s_phaseT - s_schemeLogT >= 0.25f || t >= 1.0f) {
+            s_schemeLogT = s_phaseT;
+            Log("[cycle] scheme %s t=%.2f amts hue2=%.3f hue3=%.3f shadow=%.3f highlight=%.3f\n",
+                sub == 0 ? "down" : "up", s_phaseT, a.filmHue2Amt, a.filmHue3Amt, a.shadowTone,
+                a.highlightToneAmt);
+        }
+        if (t >= 1.0f) {
+            if (sub == 0) { SchemeSwap(r); s_schemeLogT = -1.0f; }
+            else {
+                Log("[cycle] scheme change landed on %d %ls\n", s_cur + 1, s_cfg.stages[s_cur].name.c_str());
+                EnterDwell(r, s_cur);
+            }
+        }
+        break;
+    }
     case CYCLE_LERP: {
         if (held) break;                     // transition hold: stays mid-lerp
         s_phaseT += dt;
@@ -894,6 +1275,14 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
     }
     case CYCLE_WARMUP: {
         s_fade = 0.0f;
+        if (s_entryDrop) {                   // FINAL-CYCLE B.1: ink opens on a drop
+            s_entryDrop = false;
+            const DropConfig& d = r.Config().drops;
+            const float u = d.xMin + (d.xMax - d.xMin) * NextUnit();
+            const float v = d.yMin + (d.yMax - d.yMin) * NextUnit();
+            r.QueueDropUv(u, v);             // lands after the black-point clear
+            Log("[cycle] ink entry: one drop at (%.2f, %.2f) of the frame, start of the warm-up\n", u, v);
+        }
         f.extraSteps = s_cfg.warmupSteps - 1;
         s_warmSim += dt + f.extraSteps * f.stepDt;   // Frame() steps dt too
         const float need = WarmupOf(s_cur);
@@ -902,6 +1291,15 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
             r.PrecompilePostPsos();          // boot path: never compile on a visible frame
             Log("[cycle] warm-up done: %.2f sim s (need %.1f)%s -> fade in %.2f s\n",
                 s_warmSim, need, hueHome ? "" : " [hue glide cap hit]", FadeInOf(s_cur));
+            // FINAL-CYCLE B.1: a WE stage never opens on an empty screen: its
+            // own idle burst, in THIS (still black) frame's first sim step, so
+            // the splats have a few frames of motion before the first visible
+            // fade-in frame (the startup burst has decayed during the warm-up)
+            if (IsFluid(s_cur)) {
+                const int amount = r.Config().idleAmount > 0 ? r.Config().idleAmount : 8;
+                r.QueueSplatBurst(amount);
+                Log("[cycle] WE entry: splat burst of %d queued in the last black frame\n", amount);
+            }
             s_phase = CYCLE_FADE_IN;         // this frame is still black
             s_phaseT = 0.0f;
         }
@@ -1022,7 +1420,11 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.jitter = fminf(fmaxf(c.jitter, 0.0f), 0.9f);
     s_cfg.earlyDarkPct = c.earlyDarkPct;
     s_cfg.minDwellSec = c.minDwellSec;
+    s_cfg.burstWeight = fmaxf(c.burstWeight, 0.0f);
+    s_cfg.burstSec = fminf(fmaxf(c.burstSec, 1.0f), 60.0f);
+    s_cfg.schemeRampSec = fminf(fmaxf(c.schemeRampSec, 0.1f), 10.0f);
     s_cfg.stages = c.stages;
+    s_queued = -1;                           // indices may have moved
     const std::wstring base = s_iniPath.empty() ? std::wstring(g_iniPath) : s_iniPath;
     for (auto& st : s_cfg.stages) ResolveStage(st, base);
     if (!Valid(s_cur)) s_cur = -1;
@@ -1049,6 +1451,9 @@ void CycleSet(const CycleConfig& c) {
         putF(L"jitter", s_cfg.jitter);
         putF(L"early_switch_darkpct", s_cfg.earlyDarkPct);
         putF(L"min_dwell", s_cfg.minDwellSec);
+        if (s_cfg.burstWeight != 1.0f) putF(L"burst_weight", s_cfg.burstWeight);
+        if (s_cfg.burstSec != 12.0f) putF(L"burst_sec", s_cfg.burstSec);
+        if (s_cfg.schemeRampSec != 2.0f) putF(L"scheme_ramp", s_cfg.schemeRampSec);
         putI(L"stage_count", (int)s_cfg.stages.size());
         for (int k = 0; k < (int)s_cfg.stages.size(); k++) {
             const CycleStage& st = s_cfg.stages[k];
@@ -1065,6 +1470,11 @@ void CycleSet(const CycleConfig& c) {
             if (st.warmupSec >= 0.0f)  putF(K(L"warmup"), st.warmupSec);
             if (st.jitter >= 0.0f)     putF(K(L"jitter"), st.jitter);
             if (st.weight != 1.0f)     putF(K(L"weight"), st.weight);
+            if (st.tier >= 0) {
+                const wchar_t* tn = st.tier == CYCLE_TIER_PROVEN ? L"proven"
+                                  : (st.tier == CYCLE_TIER_MODERATE ? L"moderate" : L"wild");
+                putS(K(L"tier"), tn);
+            }
             if (st.lerpSec >= 0.0f)    putF(K(L"lerp"), st.lerpSec);
             if (!st.journey.empty())   putS(K(L"journey"), st.journey.c_str());
         }
@@ -1076,11 +1486,12 @@ void CycleSet(const CycleConfig& c) {
 CycleStatus CycleState() {
     CycleStatus s;
     s.stage = s_cur;
-    s.next = (s_phase == CYCLE_FADE_OUT || s_phase == CYCLE_LERP) ? s_next : -1;
+    s.next = (s_phase == CYCLE_FADE_OUT || s_phase == CYCLE_LERP ||
+              (s_phase == CYCLE_SCHEME && s_schemeSub == 0)) ? s_next : -1;
     s.phase = s_phase;
     s.fade = s_fade;
     s.transitioning = s_phase == CYCLE_FADE_OUT || s_phase == CYCLE_WARMUP ||
-                      s_phase == CYCLE_FADE_IN || s_phase == CYCLE_LERP;
+                      s_phase == CYCLE_FADE_IN || s_phase == CYCLE_LERP || s_phase == CYCLE_SCHEME;
     s.warmSimSec = s_warmSim;
     switch (s_phase) {
     case CYCLE_DWELL:    s.remainingSec = fmaxf(s_dwellTarget - s_dwellT, 0.0f); break;
@@ -1088,9 +1499,126 @@ CycleStatus CycleState() {
     case CYCLE_WARMUP:   s.remainingSec = 0.0f; break;   // sim-time bound, not wall time
     case CYCLE_FADE_IN:  s.remainingSec = fmaxf(FadeInOf(s_cur) - s_phaseT, 0.0f); break;
     case CYCLE_LERP:     s.remainingSec = fmaxf(LerpOf(s_next) - s_phaseT, 0.0f); break;
+    case CYCLE_SCHEME:   s.remainingSec = fmaxf(s_cfg.schemeRampSec * (s_schemeSub == 0 ? 2.0f : 1.0f)
+                                                - s_phaseT, 0.0f); break;
     default: break;
     }
     return s;
+}
+
+const char* CycleTierName(int tier) {
+    switch (tier) {
+    case CYCLE_TIER_PROVEN:   return "proven";
+    case CYCLE_TIER_MODERATE: return "moderate";
+    case CYCLE_TIER_WILD:     return "wild";
+    default:                  return "";
+    }
+}
+
+int CycleTierFromName(const wchar_t* s) {
+    if (!s || !s[0]) return CYCLE_TIER_NONE;
+    if (!_wcsicmp(s, L"proven") || !_wcsicmp(s, L"home"))    return CYCLE_TIER_PROVEN;
+    if (!_wcsicmp(s, L"moderate"))                           return CYCLE_TIER_MODERATE;
+    if (!_wcsicmp(s, L"wild") || !_wcsicmp(s, L"rare"))      return CYCLE_TIER_WILD;
+    return CYCLE_TIER_NONE;
+}
+
+bool CycleBurst() {
+    if (!g_renderer || s_phase != CYCLE_DWELL || !IsOtherLook(s_cur)) {
+        Log("[cycle] burst refused: not dwelling on an oil stage\n");
+        return false;
+    }
+    return FireBurst(*g_renderer, "forced");
+}
+
+void AnimatorKick(Animator a, float phaseDelta, float sec) {
+    if (!g_renderer || a < ANIM_PALETTE || a > ANIM_HUE_SHIFT) return;
+    g_renderer->AnimatorKick((int)a, phaseDelta, sec);
+}
+
+// --cycle-draw-test N: the director's own draw logic, no renderer. Walks the
+// alternation from a WE stage; each oil / ink visit makes its midpoint draw
+// (the burst moment counts when it lands on an oil stage that can take one),
+// then PickNext() as at the dwell end. Logs tier shares, the per-stage split
+// against the nominal shares, bursts, and any break of the WE alternation.
+void CycleDrawTest(int draws) {
+    if (s_orderOverride >= 0) s_cfg.order = s_orderOverride;
+    const int n = (int)s_cfg.stages.size();
+    if (n == 0 || OkCount() == 0 || draws <= 0) { Log("[drawtest] no stages\n"); return; }
+    SeedRng();
+    s_quiet = true;
+    s_statStage.assign(n, 0);
+    for (long& t : s_statTier) t = 0;
+    s_statDraws = s_statBurst = s_statRedraw = 0;
+    s_queued = -1;
+    s_base = -1;
+    s_cur = -1;
+    for (int j = 0; j < n; j++) if (IsFluid(j)) { s_cur = j; break; }
+    if (s_cur < 0) s_cur = PickNext();
+    long visits = 0, breaks = 0, overlays = 0, weVisits = 0;
+    int lastLook = -1;                       // last LOOK stage's look (overlays are transparent)
+    std::vector<long> visitCount(n, 0);
+    while (Valid(s_cur) && s_statDraws < draws && visits < (long)draws * 20) {
+        visits++;
+        visitCount[s_cur]++;
+        if (IsFluid(s_cur)) weVisits++;
+        if (IsOverlay(s_cur)) overlays++;
+        else {
+            const int lk = s_cfg.stages[s_cur].look;
+            const bool we = lk == CYCLE_LOOK_FLUID;
+            if (lastLook >= 0 && (lastLook == CYCLE_LOOK_FLUID) == we) breaks++;
+            lastLook = lk;
+        }
+        s_burstDone = false;
+        if (s_cfg.order != CYCLE_ORDER_FIXED && TierMode() && IsOtherLook(s_cur) && s_queued < 0) {
+            const int d = DrawTiered(s_cfg.stages[s_cur].burstOk, true, "midpoint");
+            if (d == kBurst) s_burstDone = true;
+            else if (Valid(d)) s_queued = d;
+        }
+        const int nx = PickNext();
+        if (!Valid(nx)) break;
+        if (IsOverlay(nx)) { if (!IsOverlay(s_cur)) s_base = s_cur; }
+        else s_base = -1;
+        s_cur = nx;
+    }
+    s_quiet = false;
+    const double D = (double)(s_statDraws > 0 ? s_statDraws : 1);
+    Log("[drawtest] order=%s seed=%u draws=%ld visits=%ld (WE %ld, overlay %ld) bursts=%ld "
+        "burst-redraws=%ld WE-alternation breaks=%ld\n",
+        s_cfg.order == CYCLE_ORDER_FIXED ? "fixed" : "alternate_random",
+        s_seedOverride ? s_seedOverride : s_cfg.seed, s_statDraws, visits, weVisits, overlays,
+        s_statBurst, s_statRedraw, breaks);
+    Log("[drawtest] tier shares: proven %.2f%%  moderate %.2f%%  wild %.2f%%  (target 70 / 20 / 10)\n",
+        100.0 * s_statTier[0] / D, 100.0 * s_statTier[1] / D, 100.0 * s_statTier[2] / D);
+    // nominal shares: tier weight x multiplier / tier total (all members allowed;
+    // the burst moment in wild with burst_weight)
+    float tot[3] = {};
+    for (int j = 0; j < n; j++)
+        if (Valid(j) && !IsFluid(j)) tot[TierOf(j)] += fmaxf(s_cfg.stages[j].weight, 0.0f);
+    tot[CYCLE_TIER_WILD] += fmaxf(s_cfg.burstWeight, 0.0f);
+    for (int t = 0; t < 3; t++) {
+        for (int j = 0; j < n; j++) {
+            if (!Valid(j) || IsFluid(j) || TierOf(j) != t) continue;
+            const double inTier = s_statTier[t] > 0 ? 100.0 * s_statStage[j] / (double)s_statTier[t] : 0.0;
+            const double nomIn = tot[t] > 0.0f ? 100.0 * s_cfg.stages[j].weight / tot[t] : 0.0;
+            Log("[drawtest]   %-8s x%-4g %-34ls drawn %5ld = %5.2f%% of all, %5.2f%% of its tier (nominal %5.2f%%)\n",
+                CycleTierName(t), s_cfg.stages[j].weight, s_cfg.stages[j].name.c_str(), s_statStage[j],
+                100.0 * s_statStage[j] / D, inTier, nomIn);
+        }
+        if (t == CYCLE_TIER_WILD) {
+            const double inTier = s_statTier[t] > 0 ? 100.0 * s_statBurst / (double)s_statTier[t] : 0.0;
+            Log("[drawtest]   %-8s x%-4g %-34s drawn %5ld = %5.2f%% of all, %5.2f%% of its tier (nominal %5.2f%%; "
+                "fires only on a burst-capable oil stage, else redrawn)\n",
+                "wild", s_cfg.burstWeight, "(burst moment)", s_statBurst, 100.0 * s_statBurst / D, inTier,
+                tot[t] > 0.0f ? 100.0 * s_cfg.burstWeight / tot[t] : 0.0);
+        }
+    }
+    for (int j = 0; j < n; j++)
+        if (IsFluid(j))
+            Log("[drawtest]   WE (alternates) %-34ls visited %ld\n", s_cfg.stages[j].name.c_str(), visitCount[j]);
+    s_cur = -1;
+    s_queued = -1;
+    s_base = -1;
 }
 
 // Shot-log helper: one line describing where the director is.

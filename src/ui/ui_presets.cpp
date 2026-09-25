@@ -188,11 +188,12 @@ const std::vector<UiPresetFile>& UiLibrary(bool rescan) {
 void UiApplyPresetFile(const std::wstring& path) {
     std::wstring base = UiPresetBase(path);
     const UiHooks& h = UiGetHooks();
-    // [meta] base first (a partial "Save as" sits on it), then the file itself
-    if (!base.empty() && Exists(base)) {
-        if (h.applyPreset) h.applyPreset(base); else UiApplyPresetHeadless(base);
-    }
-    if (h.applyPreset) h.applyPreset(path); else UiApplyPresetHeadless(path);
+    // The shell's ApplyPreset (main.cpp) resolves [meta] base itself now
+    // (FINAL-CYCLE B.4, same as the tray): one call, one undo entry.
+    if (h.applyPreset) { h.applyPreset(path); return; }
+    // headless: [meta] base first (a partial "Save as" sits on it), then the file
+    if (!base.empty() && Exists(base)) UiApplyPresetHeadless(base);
+    UiApplyPresetHeadless(path);
 }
 
 bool UiSavePartial(const std::wstring& target, std::vector<std::string>* log) {

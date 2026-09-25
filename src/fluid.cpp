@@ -1875,6 +1875,15 @@ void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
         if (m_cfg.idleSplats) MultipleSplats((int)(RandF() * 20) + 3);
         m_firstFrame = false;
     }
+    // The director's WE entry burst (QueueSplatBurst, brief FINAL-CYCLE B.1):
+    // after the clear above, in the last black warm-up frame. 0 = nothing
+    // pending, which is every cycle-off frame.
+    if (m_entrySplats > 0) {
+        const int n = m_entrySplats;
+        m_entrySplats = 0;
+        MultipleSplats(n);
+        m_idleTimer = 0.0f;         // the regular idle burst does not pile on
+    }
 
     // global color wheel
     m_globalHue = fmodf(m_globalHue + dt / fmaxf(1.0f, m_cfg.colorCyclePeriod), 1.0f);
@@ -2136,6 +2145,71 @@ float FluidRenderer::Hue2Deg() const {
                                               + 1.7f + m_mixPhase * 0.7f));
     }
     return h;
+}
+
+// ---- AnimatorKick (animators.h, brief FINAL-CYCLE B.2) ----------------------
+// The kicked clock reads AnimatorTime(a) = m_time - m_animFrozenAccum[a]; a
+// kick LOWERS the accumulator by the smoothstepped share of clockDeltaSec, so
+// the clock runs ahead and then keeps the offset (the drift resumes from the
+// landing). Only the director calls this; with the cycle off m_kickOn stays
+// false and the accumulators stay exactly 0.0f.
+void FluidRenderer::AnimatorKick(int a, float clockDeltaSec, float overSec) {
+    if (a < 0 || a >= kAnimClocks) return;
+    if (m_kickDur[a] > 0.0f)                      // land a running kick first
+        m_animFrozenAccum[a] -= m_kickTotal[a] - m_kickDone[a];
+    m_kickTotal[a] = clockDeltaSec;
+    m_kickDone[a] = 0.0f;
+    m_kickT[a] = 0.0f;
+    m_kickDur[a] = fmaxf(overSec, 0.05f);
+    m_kickOn = true;
+}
+
+void FluidRenderer::StepKicks(float dt) {
+    bool any = false;
+    for (int a = 0; a < kAnimClocks; a++) {
+        if (!(m_kickDur[a] > 0.0f)) continue;
+        m_kickT[a] += dt;
+        float x = fminf(m_kickT[a] / m_kickDur[a], 1.0f);
+        x = x * x * (3.0f - 2.0f * x);
+        const float want = m_kickTotal[a] * x;
+        m_animFrozenAccum[a] -= want - m_kickDone[a];
+        m_kickDone[a] = want;
+        if (m_kickT[a] >= m_kickDur[a]) m_kickDur[a] = 0.0f;   // landed
+        else any = true;
+    }
+    m_kickOn = any;
+}
+
+float FluidRenderer::PaletteBaseHueDeg() const {
+    float h0, s0, v0;
+    RgbToHsv(&m_cfg.acid.oilColors[0], h0, s0, v0);
+    return h0 * 360.0f;
+}
+
+float FluidRenderer::PalettePhaseForHue(float hueDeg) const {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    float h0 = fmodf(PaletteBaseHueDeg(), 360.0f);
+    if (h0 < 0.0f) h0 += 360.0f;
+    float H = fmodf(hueDeg, 360.0f);
+    if (H < 0.0f) H += 360.0f;
+    if (!(a.hueAnchorWeight > 0.0005f)) {         // linear clock: deg = 360 u
+        float d = H - h0;
+        if (d < 0.0f) d += 360.0f;
+        return d / 360.0f;
+    }
+    // AnchorWarpDeg: y = F(h0) + u (mod 1), landing hue = Finv(y) -> u = F(H) - F(h0)
+    AnchorWarpDeg(0.0f, h0, a.hueAnchorWeight);   // (re)builds m_anchorCdf for this weight
+    auto F = [&](float x0) {                      // the same piecewise-linear F
+        const float x = x0 * (256.0f / 360.0f);
+        int j = (int)floorf(x);
+        if (j < 0) j = 0; if (j > 255) j = 255;
+        const float t = x - (float)j;
+        return m_anchorCdf[j] + (m_anchorCdf[j + 1] - m_anchorCdf[j]) * t;
+    };
+    float u = F(H) - F(h0);
+    if (u < 0.0f) u += 1.0f;
+    if (u >= 1.0f) u -= 1.0f;
+    return u;
 }
 
 int FluidRenderer::AcidDropletCount() const {

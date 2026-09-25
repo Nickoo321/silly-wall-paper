@@ -77,6 +77,8 @@ struct View {
     int  addStageSel = -1;
     int  dwellEditRow = -1;
     float dwellEditVal = 0;
+    int  weightEditRow = -1;       // the x (within-tier multiplier) drag in progress
+    float weightEditVal = 1;
     UiLiveValues liveNow;          // sampled once per frame (motion detection needs one sample)
 };
 View s_view;
@@ -1028,8 +1030,17 @@ std::string MinSec(float sec) {
 }
 
 // ---- CENTRE (Cycle pane): the playlist (D2)
+// Tiers are READ from stage_N_tier (brief FINAL-CYCLE B.3 + pre-flight 5): the
+// tier's draw weight is fixed (7 : 2 : 1, split among its members) and the
+// stage's weight is the multiplier INSIDE its tier (the "x" column). The tier
+// is never inferred from the weight any more.
 struct Tier { const char* name; float w; };
 const Tier kTiers[] = { { "proven", 7.0f }, { "moderate", 2.0f }, { "wild", 1.0f } };
+std::string TierLabel(const UiStageInfo& st, bool tierMode) {
+    if (st.fluid && tierMode) return "WE (alternates)";
+    if (st.tier >= 0 && st.tier < 3) return kTiers[st.tier].name;
+    return tierMode ? "wild (default)" : "none";
+}
 
 void DrawPlaylist() {
     UiCycleStatusView cs = UiCycleStatus();
@@ -1073,14 +1084,16 @@ void DrawPlaylist() {
     float rowH = ImGui::GetFrameHeightWithSpacing();
     float h = rowH * (float)(std::min)((std::max)(n, 3), 14) + rowH + 10;
     if (ImGui::BeginChild("playlist", ImVec2(0, h), ImGuiChildFlags_Borders)) {
-        if (ImGui::BeginTable("stages", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        const bool tierMode = UiCycleTierMode();
+        if (ImGui::BeginTable("stages", 8, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
             float fs = ImGui::GetFontSize();
             ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, fs * 2.4f);
             ImGui::TableSetupColumn("in", ImGuiTableColumnFlags_WidthFixed, fs * 1.8f);
-            ImGui::TableSetupColumn("stage", ImGuiTableColumnFlags_WidthStretch, 0.38f);
-            ImGui::TableSetupColumn("look", ImGuiTableColumnFlags_WidthStretch, 0.16f);
+            ImGui::TableSetupColumn("stage", ImGuiTableColumnFlags_WidthStretch, 0.36f);
+            ImGui::TableSetupColumn("look", ImGuiTableColumnFlags_WidthStretch, 0.14f);
             ImGui::TableSetupColumn("tier", ImGuiTableColumnFlags_WidthStretch, 0.18f);
-            ImGui::TableSetupColumn("dwell", ImGuiTableColumnFlags_WidthStretch, 0.28f);
+            ImGui::TableSetupColumn("x", ImGuiTableColumnFlags_WidthFixed, fs * 3.4f);
+            ImGui::TableSetupColumn("dwell", ImGuiTableColumnFlags_WidthStretch, 0.26f);
             ImGui::TableSetupColumn("order", ImGuiTableColumnFlags_WidthFixed, fs * 3.6f);
             ImGui::TableHeadersRow();
             int removeAt = -1, moveAt = -1, moveDir = 0;
@@ -1109,21 +1122,36 @@ void DrawPlaylist() {
                 ImGui::AlignTextToFramePadding();
                 ImGui::TextColored(kDim, "%s", st.overlay ? "overlay" : UiLookName(st.look));
                 ImGui::TableSetColumnIndex(4);
-                int tier = -1;
-                for (int t = 0; t < 3; t++) if (fabsf(st.weight - kTiers[t].w) < 0.01f) tier = t;
-                char tl[48];
-                if (tier >= 0) snprintf(tl, sizeof(tl), "%s", kTiers[tier].name);
-                else snprintf(tl, sizeof(tl), "weight %g", st.weight);
+                const std::string tl = TierLabel(st, tierMode);
                 ImGui::SetNextItemWidth(-FLT_MIN);
-                if (ImGui::BeginCombo("##tier", tl)) {
+                if (ImGui::BeginCombo("##tier", tl.c_str())) {
                     for (int t = 0; t < 3; t++) {
-                        char o[48];
-                        snprintf(o, sizeof(o), "%s (weight %g)", kTiers[t].name, kTiers[t].w);
-                        if (ImGui::Selectable(o, t == tier) && t != tier) UiCycleSetStageWeight(i, kTiers[t].w);
+                        char o[64];
+                        snprintf(o, sizeof(o), "%s (tier %g of 10)", kTiers[t].name, kTiers[t].w);
+                        if (ImGui::Selectable(o, t == st.tier) && t != st.tier) UiCycleSetStageTier(i, t);
                     }
+                    if (ImGui::Selectable("none", st.tier < 0) && st.tier >= 0) UiCycleSetStageTier(i, -1);
                     ImGui::EndCombo();
                 }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Draw tier: proven 7, moderate 2, wild 1 (of 10), split among the tier's stages by x.\n"
+                                      "WE stages are not drawn by tier: they alternate with every other stage.");
                 ImGui::TableSetColumnIndex(5);
+                {
+                    float wv = s_view.weightEditRow == i ? s_view.weightEditVal : st.weight;
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (ImGui::DragFloat("##x", &wv, 0.05f, 0.0f, 10.0f, "x%.2g")) {
+                        s_view.weightEditRow = i;
+                        s_view.weightEditVal = roundf(fmaxf(wv, 0.0f) * 4.0f) / 4.0f;
+                    }
+                    if (ImGui::IsItemDeactivatedAfterEdit() && s_view.weightEditRow == i) {
+                        UiCycleSetStageWeight(i, s_view.weightEditVal);   // one write per drag
+                        s_view.weightEditRow = -1;
+                    }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Multiplier inside the tier (1 = an equal share of the tier; 0 = never drawn)");
+                }
+                ImGui::TableSetColumnIndex(6);
                 float dv = s_view.dwellEditRow == i ? s_view.dwellEditVal : st.dwellSec;
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 const char* df = st.ownDwell ? "%.0f s" : "%.0f s (default)";
@@ -1135,7 +1163,7 @@ void DrawPlaylist() {
                     UiCycleSetStageDwell(i, s_view.dwellEditVal);   // one write per drag
                     s_view.dwellEditRow = -1;
                 }
-                ImGui::TableSetColumnIndex(6);
+                ImGui::TableSetColumnIndex(7);
                 ImGui::BeginDisabled(i == 0);
                 if (ImGui::ArrowButton("##up", ImGuiDir_Up)) { moveAt = i; moveDir = -1; }
                 ImGui::EndDisabled();
@@ -1597,12 +1625,14 @@ bool WriteDump(const std::wstring& path, const std::vector<std::string>& scriptL
         o += "  \"playlist\": [";
         for (int i = 0; i < UiCycleStageCount(); i++) {
             UiStageInfo st = UiCycleStage(i);
-            const char* tier = "custom";
-            for (auto& t : kTiers) if (fabsf(st.weight - t.w) < 0.01f) tier = t.name;
-            char b[160];
-            snprintf(b, sizeof(b), ", \"look\": \"%s\", \"tier\": \"%s\", \"weight\": %g, \"dwell_s\": %.0f, \"ok\": %s, \"current\": %s}",
-                     st.overlay ? "overlay" : UiLookName(st.look), tier, st.weight, st.dwellSec, st.ok ? "true" : "false",
-                     cs.on && cs.stage == i ? "true" : "false");
+            // tier READ from stage_N_tier (never inferred from the weight);
+            // weight = the within-tier multiplier
+            const std::string tier = TierLabel(st, UiCycleTierMode());
+            char b[256];
+            snprintf(b, sizeof(b), ", \"look\": \"%s\", \"tier\": \"%s\", \"stage_tier\": %d, \"multiplier\": %g, \"weight\": %g, "
+                     "\"dwell_s\": %.0f, \"ok\": %s, \"current\": %s}",
+                     st.overlay ? "overlay" : UiLookName(st.look), tier.c_str(), st.tier, st.weight, st.weight,
+                     st.dwellSec, st.ok ? "true" : "false", cs.on && cs.stage == i ? "true" : "false");
             o += std::string(i ? ",\n    " : "\n    ") + "{\"n\": " + std::to_string(i + 1) + ", \"name\": " + J(UiNarrow(st.name)) + b;
         }
         o += "],\n";

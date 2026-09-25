@@ -23,6 +23,10 @@
 // startup): reads [journey] file= from the mood ini; empty/missing/bad file
 // leaves the journey inactive (normal static mood).
 void JourneyAttach(const wchar_t* moodPath);
+// Same, with the journey named directly (cycle stage_N_journey=<name>);
+// stubPath is the stage file (its [behavior] wanderers / idle_splats are the
+// emit=1 restore values).
+void JourneyAttachNamed(const wchar_t* name, const wchar_t* stubPath);
 void JourneyDetach();                        // stops legs; renderer untouched
 bool JourneyActive();
 void JourneyUpdate(FluidRenderer& r, float dt);   // DWELL-branch tick

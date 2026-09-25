@@ -107,7 +107,7 @@ def group_of(sec, key):
     if sec == 'hdr': return 'G_OUTPUT'
     if sec == 'color':
         return 'G_COLOUR'
-    if sec == 'moods': return 'G_SYSTEM'
+    if sec == 'cycle': return 'G_SYSTEM'
     if sec == 'look': return 'G_SYSTEM'
     if sec == 'general':
         return 'G_OUTPUT' if key == 'mirror_second' else 'G_SYSTEM'
@@ -183,7 +183,7 @@ def gate_of(sec, key):
         if key == 'mode': return ''
         if key == 'segments': return 'mirror.mode==4'
         return 'mirror.mode>0'
-    if sec == 'moods' and key != 'enabled': return 'moods.enabled>0'
+    if sec == 'cycle' and key != 'enabled': return 'cycle.enabled>0'
     if sec == 'behavior':
         if key in ('wanderer_count', 'wanderer_speed', 'wanderer_brightness', 'wanderer_scale',
                    'wanderer_resume_delay', 'wanderer_mode'):
@@ -214,8 +214,8 @@ UNVERIFIED = {('liquid_acid', k) for k in ('oil_ink_blur', 'oil_dye_block', 'wea
     | {('color', k) for k in ('colorful', 'more_colors', 'hue_center', 'hue_range', 'hue_linger')}
 SUPERSEDED = {('liquid_acid', 'dye_masses'), ('liquid_acid', 'dye_droplets')}
 MACHINE = {('general', 'fps_limit'), ('general', 'mirror_second'), ('general', 'pause_on_fullscreen'),
-           ('general', 'pause_on_maximized'), ('moods', 'enabled'), ('moods', 'dwell_minutes'),
-           ('moods', 'transition_seconds'), ('moods', 'jitter'), ('system', 'autostart'), ('hdr', 'gamut')}
+           ('general', 'pause_on_maximized'), ('cycle', 'enabled'), ('cycle', 'dwell'),
+           ('cycle', 'lerp'), ('cycle', 'jitter'), ('system', 'autostart'), ('hdr', 'gamut')}
 
 ENUMS = {
     ('mirror', 'mode'): '0=Off|1=Horizontal|2=Vertical|3=Quad|4=Kaleidoscope',

@@ -13,7 +13,7 @@
 //   special enum:v=Name|.. | peak | neg:<name> (value<0 shown as name) | zero:<word> | look | autostart
 //   front   looks whose front page carries this knob (brief 3B proposal, used by phase 1b)
 // Pointers: expressions over `c` (the FluidConfig being edited) or a listed global (ui_model.cpp asserts);
-// the cycle keys go through the ui_cycle.h adapter, never g_moodSettings directly.
+// the cycle keys go through the ui_cycle.h adapter, never the director internals directly.
 
 KEY_SLIDER("Vorticity (swirl strength)", 0, 50, 0.5f, 1, &c.curl, nullptr, "sim", "vorticity", false, "Small-scale swirl. High = cauliflower billows, low = smooth streams",
            G_FLUID, "FAI", "", 0, "", "")
@@ -89,12 +89,12 @@ KEY_SLIDER("Brightness", 0.5f, 1.5f, 0.01f, 2, &c.postBrightness, nullptr, "colo
            G_COLOUR, "FAI", "", 0, "", "")
 KEY_SLIDER("Hue rotate (deg)", 0, 360, 1, 0, &c.postHue, nullptr, "color", "post_hue", false, "Rotates all colors. Warning: rotates outside the hue band",
            G_COLOUR, "FAI", "", 0, "", "")
-KEY_SLIDER("Dwell (min per preset)", 1, 30, 1, 0, UiCycleDwellPtr(), nullptr, "moods", "dwell_minutes", false, "Minutes on a preset before switching",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
-KEY_SLIDER("Transition length (s)", 2, 60, 1, 0, UiCycleTransitionPtr(), nullptr, "moods", "transition_seconds", false, "Seconds a preset change takes",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
-KEY_SLIDER("Timing jitter (± fraction)", 0, 0.5f, 0.05f, 2, UiCycleJitterPtr(), nullptr, "moods", "jitter", false, "Random +/- on dwell time so switches feel organic",
-           G_SYSTEM, "FAI", "moods.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Stage dwell (s)", 30, 240, 10, 0, UiCycleDwellPtr(), nullptr, "cycle", "dwell", false, "Seconds on a cycle stage before the next (stages may set their own; 240 = the 4-minute maximum)",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Fluid transition (s)", 1, 20, 1, 0, UiCycleTransitionPtr(), nullptr, "cycle", "lerp", false, "Seconds a fluid-to-fluid stage change glides (hue bridge + lerp); look changes fade through black",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
+KEY_SLIDER("Timing jitter (± fraction)", 0, 0.5f, 0.05f, 2, UiCycleJitterPtr(), nullptr, "cycle", "jitter", false, "Random +/- on dwell time so switches feel organic",
+           G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
 KEY_SLIDER("Cycle time (s per lap)", 2, 120, 1, 0, &c.colorCyclePeriod, nullptr, "behavior", "color_cycle_period", false, "Seconds for emitted hue to sweep its band",
            G_COLOUR, "FAI", "color.colorful>0", 0, "", "F")
 KEY_SLIDER("Hue band center (deg)", 0, 360, 1, 0, &c.hueCenter, nullptr, "color", "hue_center", false, "Where on the color wheel emission lives (0=red 120=green 240=blue)",
@@ -735,7 +735,7 @@ KEY_CHECK("Pause on fullscreen app", &g_pauseOnFullscreen, "general", "pause_on_
           G_SYSTEM, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")
 KEY_CHECK("Pause on maximized app", &g_pauseOnMaximized, "general", "pause_on_maximized", "Pause the wallpaper while a maximized window has focus",
           G_SYSTEM, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")
-KEY_CHECK("Cycle presets (auto-switch)", UiCycleEnabledPtr(), "moods", "enabled", "Auto-switch between the presets in the cycle (fluid presets only today)",
+KEY_CHECK("Cycle looks (auto-switch)", UiCycleEnabledPtr(), "cycle", "enabled", "Walk the [cycle] stage list: WE fluid, oil, ink, mirror overlays",
           G_SYSTEM, "FAI", "", KF_MACHINE, "", "")
 KEY_CHECK("Mirror on second monitor", &c.mirrorSecond, "general", "mirror_second", "Also render the wallpaper on the second monitor",
           G_OUTPUT, "FAI", "", KF_MACHINE|KF_GLOBAL, "", "")

@@ -99,7 +99,19 @@ UiStageInfo UiCycleStage(int i) {
     o.ownDwell = st.dwellSec > 0.0f;
     o.dwellSec = o.ownDwell ? st.dwellSec : c.dwellSec;
     o.weight = st.weight;
+    o.tier = st.tier;
+    o.fluid = !st.overlay && st.look == CYCLE_LOOK_FLUID;
     return o;
+}
+bool UiCycleTierMode() {
+    for (auto& st : CycleGet().stages) if (st.tier >= 0) return true;
+    return false;
+}
+void UiCycleSetStageTier(int i, int tier) {
+    if (!Valid(i)) return;
+    CycleConfig c = CycleGet();
+    c.stages[i].tier = (tier >= CYCLE_TIER_PROVEN && tier <= CYCLE_TIER_WILD) ? tier : CYCLE_TIER_NONE;
+    CycleSet(c);
 }
 
 int  UiCycleOrder() { return CycleGet().order; }

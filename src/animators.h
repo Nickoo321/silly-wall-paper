@@ -52,6 +52,14 @@ const wchar_t* AnimatorName(Animator a);                    // "Hue rotation", "
 // Called once per shown frame by the shell (via CycleTick) -- auto-release.
 void  AnimatorsTick();
 
+// ---- kicks (brief FINAL-CYCLE B.2) ---------------------------------------------
+// Advance a DERIVED clock by phaseDelta SECONDS OF ITS OWN TIME (AnimatorTime),
+// smoothstepped over sec; the offset is kept, so the animator resumes from the
+// landing. ANIM_PALETTE = the tamed burst (the director picks phaseDelta so the
+// palette lands on an anchor). Only the director calls it (cycle on); a no-op
+// for the non-clock animators and without a renderer.
+void  AnimatorKick(Animator a, float phaseDelta, float sec);
+
 // ---- the director, as the UI sees it ------------------------------------------
 // Settings window open => the DWELL timer holds (colour clocks keep running
 // unless frozen). Auto-resumes after autoResumeSec of wall time; call

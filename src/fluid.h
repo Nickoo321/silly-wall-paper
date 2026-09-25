@@ -1683,6 +1683,15 @@ public:
     // compile in RunPostPass never lands on a visible fade-in frame. Selection
     // is unchanged (RunPostPass still decides per frame). Returns the ms spent.
     double PrecompilePostPsos();
+    // Entry content (brief FINAL-CYCLE B.1): both are DEFERRED to the next
+    // FrameSim, i.e. after a pending black-point clear (m_firstFrame) in the
+    // same step, so the content can never be wiped by the reset. Only the
+    // director calls them (cycle on), so a cycle-off run never takes a branch.
+    //   QueueSplatBurst: MultipleSplats(amount) -- the WE stage's own idle
+    //     burst, fired in the last black warm-up frame before the fade-in.
+    //   QueueDropUv: one [drops] drop at (u, v) of the frame (QueueDrop).
+    void QueueSplatBurst(int amount) { m_entrySplats = amount; }
+    void QueueDropUv(float u, float v) { QueueDrop(u * (float)m_width, v * (float)m_height); }
 
     // ---- animators.h: freezes of the DERIVED clocks + live-value getters ----
     // Indices = the first four Animator values (ANIM_PALETTE, ANIM_HUE2,
@@ -1699,6 +1708,21 @@ public:
         return (a >= 0 && a < kAnimClocks) ? m_time - m_animFrozenAccum[a] : m_time;
     }
     float PaletteHueDeg() const;    // acid hue_rotate_period angle now (0..360), 0 = off
+    // animators.h AnimatorKick (brief FINAL-CYCLE B.2, the tamed burst): advance
+    // derived clock a by clockDeltaSec of ITS OWN time, smoothstepped over
+    // overSec of sim time, by lowering its frozen-offset accumulator; the
+    // offset is KEPT, so the clock resumes from the landing (never snaps back).
+    // A new kick on the same clock lands the old one first. Never called with
+    // the cycle off -> the accumulators stay exactly 0.0f (parity).
+    void  AnimatorKick(int a, float clockDeltaSec, float overSec);
+    bool  AnimatorKicking(int a) const { return a >= 0 && a < kAnimClocks && m_kickDur[a] > 0.0f; }
+    // The palette's own hue (oil_color_1, 0..360): the absolute film hue is
+    // PaletteBaseHueDeg() + PaletteHueDeg() (sweep off, as every Scheme preset).
+    float PaletteBaseHueDeg() const;
+    // Inverse of the hue_anchor_weight warp: the rotation-clock phase u (0..1)
+    // at which the palette's absolute hue equals hueDeg (linear when the
+    // weight is 0). The burst lands on an anchor with it.
+    float PalettePhaseForHue(float hueDeg) const;
     float PaletteSweepPos() const;  // hue_sweep_period position in pairs, -1 = off
     float Hue2Deg() const;          // film_hue2 after the wobble
 
@@ -1788,7 +1812,17 @@ private:
     float  m_animFrozenAccum[kAnimClocks] = {};   // 0.0f when never frozen
     void   AccumFrozen(float dt) {
         for (int k = 0; k < kAnimClocks; k++) if (m_animFrozen[k]) m_animFrozenAccum[k] += dt;
+        if (m_kickOn) StepKicks(dt);   // AnimatorKick; false unless the director kicked
     }
+    // AnimatorKick state per derived clock: total clock seconds to add, how
+    // much is applied so far, elapsed / duration (0 = no kick running).
+    bool   m_kickOn = false;
+    float  m_kickTotal[kAnimClocks] = {};
+    float  m_kickDone[kAnimClocks] = {};
+    float  m_kickT[kAnimClocks] = {};
+    float  m_kickDur[kAnimClocks] = {};
+    void   StepKicks(float dt);
+    int    m_entrySplats = 0;          // QueueSplatBurst; 0 = nothing pending
     float  m_fade = 1.0f;              // SetFade; 1.0 = today
     bool   m_blackOut = false;         // SetBlackOut
     double m_lastLookCompileMs = 0.0;

@@ -45,6 +45,33 @@
 // Phase 1: lerp exists only fluid->fluid (the absorbed conductor path); a
 // transition=lerp across looks runs as a fade (logged). The generic keys.inc
 // lerp is phase 2.
+//
+// Final cycle (brief reference/briefs/FINAL-CYCLE.md A + B), all inert unless
+// the [cycle] list uses it:
+//   stage_K_tier=proven|moderate|wild  TIER MODE (any stage carries a tier):
+//       per-tier draw weights 7 : 2 : 1, split among the tier's members by
+//       stage_K_weight (now a WITHIN-TIER multiplier, default 1); an untiered
+//       stage counts as wild. The fluid (WE) look stages are not drawn by
+//       tier: they ALTERNATE with every oil / ink / overlay stage. Each oil or
+//       ink visit makes ONE tiered draw at its dwell midpoint for the slot
+//       after the WE interlude (queued); the draw can also land on the
+//       "burst moment" (wild, burst_weight): ONE tamed burst on the current
+//       oil stage -- the acid PALETTE CLOCK is kicked forward (AnimatorKick)
+//       and lands on the nearest proven anchor via the inverse anchor warp.
+//       A burst drawn anywhere it cannot fire (not an oil stage with the hue
+//       rotation on and the sweep off, or a burst already this visit) is
+//       redrawn inside the wild tier. Oil stages run with hueshift_enabled
+//       forced OFF (the finished-image hue rotation is never used under oil).
+//   burst_weight=1  burst_sec=12  scheme_ramp=2
+//   Entry content: a WE stage fires its idle splat burst in the last black
+//   warm-up frame (the fade-in opens on content); an ink stage fires one
+//   [drops] drop at the start of its warm-up (after the clear).
+//   Oil -> oil (both liquid_acid partial overlays on the SAME base with the
+//   same palette clock / film load, e.g. two Scheme presets): no black --
+//   film_hue2_amt, film_hue3_amt, shadow_tone, highlight_tone_amt ramp to 0
+//   over scheme_ramp s, the rest is swapped as a PLAIN SET, then they ramp
+//   back (CYCLE_SCHEME).
+//   A stage file's own [meta] base= is its base when stage_K_base is empty.
 #pragma once
 #include <windows.h>
 #include <string>
@@ -55,7 +82,10 @@ enum CycleLook       { CYCLE_LOOK_FLUID = 0, CYCLE_LOOK_ACID = 1, CYCLE_LOOK_INK
 enum CycleTransition { CYCLE_TR_DEFAULT = -1, CYCLE_TR_CUT = 0, CYCLE_TR_FADE = 1, CYCLE_TR_LERP = 2 };
 enum CycleOrder      { CYCLE_ORDER_FIXED = 0, CYCLE_ORDER_ALT_RANDOM = 1 };
 enum CyclePhase      { CYCLE_OFF = 0, CYCLE_DWELL, CYCLE_FADE_OUT, CYCLE_WARMUP, CYCLE_FADE_IN,
-                       CYCLE_LERP };   // fluid -> fluid, no black
+                       CYCLE_LERP,     // fluid -> fluid, no black
+                       CYCLE_SCHEME }; // oil -> oil scheme change, no black
+enum CycleTier       { CYCLE_TIER_NONE = -1, CYCLE_TIER_PROVEN = 0, CYCLE_TIER_MODERATE = 1,
+                       CYCLE_TIER_WILD = 2 };
 
 struct CycleStage {
     std::wstring file;             // as written (relative to the ini folder, or absolute)
@@ -67,7 +97,9 @@ struct CycleStage {
     float fadeInSec  = -1.0f;      // -1 = [cycle] fade_in
     float warmupSec  = -1.0f;      // SIM seconds; -1 = the measured per-look default
     float jitter     = -1.0f;      // -1 = 0.3 (+- fraction of the dwell)
-    float weight     = 1.0f;       // alternate_random: relative draw weight
+    float weight     = 1.0f;       // alternate_random: relative draw weight (tier mode:
+                                   // the multiplier inside the stage's tier)
+    int   tier       = CYCLE_TIER_NONE;   // stage_N_tier (CycleTier)
     float lerpSec    = -1.0f;      // -1 = [cycle] lerp (4 s)
     std::wstring journey;          // journeys\<name>.txt; empty = the file's [journey] file=
     // resolved by CycleLoad / CycleSet (not persisted)
@@ -75,6 +107,7 @@ struct CycleStage {
     std::wstring path, basePath;   // absolute
     int   look = CYCLE_LOOK_FLUID; // from the composed config
     bool  ok = false;              // the file exists
+    bool  burstOk = false;         // oil, hue_rotate_period on, sweep off: a burst can land
 };
 
 struct CycleConfig {
@@ -91,6 +124,9 @@ struct CycleConfig {
     float    jitter = 0.3f;        // [cycle] jitter: default +- fraction
     float    earlyDarkPct = 92.0f; // dark-screen trigger (fluid stages)
     float    minDwellSec = 60.0f;
+    float    burstWeight = 1.0f;   // [cycle] burst_weight: the burst moment's wild multiplier
+    float    burstSec = 12.0f;     // [cycle] burst_sec: the tamed burst's length
+    float    schemeRampSec = 2.0f; // [cycle] scheme_ramp: each half of an oil -> oil change
     std::vector<CycleStage> stages;
 };
 
@@ -141,6 +177,15 @@ void CycleNext();
 void CyclePrev();
 void CycleSetEnabled(bool on, bool persist);  // persist -> [cycle] enabled in settings.ini
 std::wstring CycleStageLabel(int i);          // "3. acid-rise-2hue (oil)"
+// The tamed burst on the current oil stage now (tests: --cycle-burst-at T);
+// false when the current stage cannot take one.
+bool CycleBurst();
+// Headless draw statistics (--cycle-draw-test N): walk the director's own draw
+// logic for N tiered draws with the seeded RNG, no renderer, and log the tier
+// shares, the per-stage split and the look alternation. Leaves the director off.
+void CycleDrawTest(int draws);
+const char* CycleTierName(int tier);          // "proven" / "moderate" / "wild" / ""
+int CycleTierFromName(const wchar_t* s);      // proven|home, moderate, wild|rare -> CycleTier
 
 // ---- the small API for the Settings UI (phase 1b Modes page) ---------------
 const CycleConfig& CycleGet();

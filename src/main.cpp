@@ -1076,9 +1076,45 @@ static const size_t kMaxTrayPresets = 2000;
 
 // Which look a preset file carries: its [look] section (style= string, or the int forms
 // the old checkboxes wrote). No [look] section at all = a partial overlay (Mirror - *).
-static int PresetLookGroup(const wchar_t* path) {
+// [meta] base= of a preset (FINAL-CYCLE B.4, the same rule as the settings
+// window's UiPresetBase): relative to the preset's own folder, or absolute.
+// Empty when the preset has none or the file is missing.
+static std::wstring PresetMetaBase(const std::wstring& path) {
+    wchar_t b[MAX_PATH] = {};
+    GetPrivateProfileStringW(L"meta", L"base", L"", b, MAX_PATH, path.c_str());
+    if (!b[0]) return L"";
+    std::wstring base = b;
+    while (!base.empty() && (base.back() == L' ' || base.back() == L'\t')) base.pop_back();
+    size_t a = 0;
+    while (a < base.size() && (base[a] == L' ' || base[a] == L'\t')) a++;
+    base = base.substr(a);
+    const bool absolute = base.size() > 2 && (base[1] == L':' || (base[0] == L'\\' && base[1] == L'\\'));
+    if (!absolute) {
+        size_t sl = path.find_last_of(L"\\/");
+        base = (sl == std::wstring::npos ? std::wstring(L".") : path.substr(0, sl)) + L"\\" + base;
+    }
+    wchar_t full[MAX_PATH * 2] = {};
+    if (GetFullPathNameW(base.c_str(), MAX_PATH * 2, full, nullptr)) base = full;
+    if (GetFileAttributesW(base.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
+    return base;
+}
+
+static int PresetLookGroup(const wchar_t* path, int depth = 0) {
     wchar_t sec[512] = {};
-    if (GetPrivateProfileSectionW(L"look", sec, 512, path) == 0) return 3;   // overlay
+    if (GetPrivateProfileSectionW(L"look", sec, 512, path) == 0) {
+        // no [look]: a partial. [meta] base= carries the look it sits on;
+        // [meta] look= names it outright; else an overlay (the old rule)
+        if (depth < 4) {
+            std::wstring base = PresetMetaBase(path);
+            if (!base.empty()) return PresetLookGroup(base.c_str(), depth + 1);
+        }
+        wchar_t ml[32] = {};
+        GetPrivateProfileStringW(L"meta", L"look", L"", ml, 32, path);
+        if (!_wcsicmp(ml, L"liquid_acid")) return 1;
+        if (!_wcsicmp(ml, L"ink")) return 2;
+        if (!_wcsicmp(ml, L"fluid")) return 0;
+        return 3;   // overlay
+    }
     // same rule as LoadConfigFromIni: style= string first, a PRESENT int key overrides it,
     // ink wins ties (reading just [look] keeps the menu instant with 60+ files)
     wchar_t style[32] = {};
@@ -2077,6 +2113,44 @@ static void SaveFullConfig(const FluidConfig& c) {
     SaveSettings();   // shell globals: pauses, peak, gamut, cycle config
 }
 
+// A preset's [look] keys, or those of the [meta] base chain under it.
+static bool PresetCarriesLook(const std::wstring& path, int depth = 0) {
+    for (const wchar_t* k : { L"style", L"liquid_acid", L"ink" }) {
+        wchar_t lk[32] = {};
+        GetPrivateProfileStringW(L"look", k, L"", lk, 32, path.c_str());
+        if (lk[0]) return true;
+    }
+    if (depth >= 4) return false;
+    const std::wstring base = PresetMetaBase(path);
+    return !base.empty() && PresetCarriesLook(base, depth + 1);
+}
+
+// Merge a preset onto cfg: its [meta] base chain first (FINAL-CYCLE B.4, the
+// way the settings window applies a partial "Save as"), then the file.
+static void MergePresetChain(const std::wstring& path, FluidConfig& cfg, int depth = 0) {
+    if (depth < 4) {
+        const std::wstring base = PresetMetaBase(path);
+        if (!base.empty()) {
+            MergePresetChain(base, cfg, depth + 1);
+            printf("preset base applied: %ls\n", base.c_str());
+        }
+    }
+    LoadConfigFromIni(path.c_str(), cfg);
+}
+
+// [hdr] peak_nits / gamut along the same chain (file over base).
+static void ApplyPresetShellChain(const std::wstring& path, int depth = 0) {
+    if (depth < 4) {
+        const std::wstring base = PresetMetaBase(path);
+        if (!base.empty()) ApplyPresetShellChain(base, depth + 1);
+    }
+    wchar_t buf[64] = {};
+    GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, path.c_str());
+    if (buf[0]) g_hdrPeakNits = (float)_wtof(buf);
+    int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", g_gamutMode, path.c_str());
+    if (gm >= 0 && gm <= 2) g_gamutMode = gm;
+}
+
 static void ApplyPreset(const std::wstring& path) {
     if (!g_renderer) return;
     // A LOOK preset ([look] keys) picked by hand while cycling: the user took
@@ -2085,18 +2159,8 @@ static void ApplyPreset(const std::wstring& path) {
     // partial overlay without [look] (the mirror overlays) folds the current
     // stage instead and lasts until the next stage switch; nothing is written
     // to settings.ini for it while the director owns the look.
-    bool lookPreset = false;
-    {
-        wchar_t lk[32] = {};
-        GetPrivateProfileStringW(L"look", L"style", L"", lk, 32, path.c_str());
-        lookPreset = lk[0] != 0;
-        lk[0] = 0;
-        GetPrivateProfileStringW(L"look", L"liquid_acid", L"", lk, 32, path.c_str());
-        lookPreset = lookPreset || lk[0] != 0;
-        lk[0] = 0;
-        GetPrivateProfileStringW(L"look", L"ink", L"", lk, 32, path.c_str());
-        lookPreset = lookPreset || lk[0] != 0;
-    }
+    // (a partial whose [meta] base carries a [look] is a look preset too)
+    const bool lookPreset = PresetCarriesLook(path);
     if (lookPreset || !g_cycleActive) {
         CycleManualOverride("look preset applied by hand");
         g_renderer->SetFade(1.0f);
@@ -2109,16 +2173,13 @@ static void ApplyPreset(const std::wstring& path) {
     const bool uiTrack = !g_configReadOnly && !g_cycleActive;
     if (uiTrack) UiBeginWholeChange();
 
-    // merge the (possibly partial) preset over the current state
+    // merge the (possibly partial) preset over the current state: its [meta]
+    // base chain first, then the file (B.4)
     FluidConfig fresh = g_renderer->Config();
-    LoadConfigFromIni(path.c_str(), fresh);
+    MergePresetChain(path, fresh);
 
     // shell globals: take the preset's value only when it specifies one
-    wchar_t buf[64] = {};
-    GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, path.c_str());
-    if (buf[0]) g_hdrPeakNits = (float)_wtof(buf);
-    int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", g_gamutMode, path.c_str());
-    if (gm >= 0 && gm <= 2) g_gamutMode = gm;
+    ApplyPresetShellChain(path);
 
     int oldSim = g_renderer->Config().simRes;
     int oldDye = g_renderer->Config().dyeRes;
@@ -2234,6 +2295,12 @@ struct ShotOpts {
     // (NAME = palette|hue2|rig|hueshift|transition).
     std::vector<float> cycleNextAt;
     size_t   cycleNextDone = 0;
+    // --cycle-burst-at T[,T..]: CycleBurst() at wallpaper time T (the tamed
+    // burst on the current oil stage, forced). --cycle-draw-test N: the draw
+    // statistics over N tiered draws (no renderer, no GPU), then exit.
+    std::vector<float> cycleBurstAt;
+    size_t   cycleBurstDone = 0;
+    int      cycleDrawTest = 0;
     float    pauseAt = -1.0f, resumeAt = -1.0f;
     int      freezeAnim = -1;
     float    freezeAt = -1.0f, unfreezeAt = -1.0f;
@@ -2746,6 +2813,15 @@ static int RunShotMode() {
                     v = wcschr(v, L',');
                     if (v) v++;
                 }
+            } else if (wcscmp(argv[i], L"--cycle-burst-at") == 0 && i + 1 < argc) {
+                const wchar_t* v = argv[++i];
+                while (v && *v) {
+                    o.cycleBurstAt.push_back((float)_wtof(v));
+                    v = wcschr(v, L',');
+                    if (v) v++;
+                }
+            } else if (wcscmp(argv[i], L"--cycle-draw-test") == 0 && i + 1 < argc) {
+                o.cycleDrawTest = _wtoi(argv[++i]);
             } else if (wcscmp(argv[i], L"--cycle-pause-at") == 0 && i + 1 < argc) {
                 swscanf_s(argv[++i], L"%f,%f", &o.pauseAt, &o.resumeAt);
             } else if (wcscmp(argv[i], L"--shot-freeze") == 0 && i + 1 < argc) {
@@ -2815,6 +2891,11 @@ static int RunShotMode() {
     CycleLoad(g_configIniPath);
     CycleOverride(o.cycleDwell, o.cycleOrder, o.cycleSeed ? o.cycleSeed : o.seed,
                   o.cycleStage, o.cycleForce, o.cycleJitter);
+    if (o.cycleDrawTest > 0) {               // statistics only: no renderer, no GPU
+        CycleDrawTest(o.cycleDrawTest);
+        CoUninitialize();
+        return 0;
+    }
     const bool cycling = CycleBoot(cfg);
 
     // HDR state exactly as the shell would resolve it, without querying the
@@ -2959,6 +3040,12 @@ static int RunShotMode() {
                     CycleNext();
                     o.cycleNextDone++;
                 }
+                while (o.cycleBurstDone < o.cycleBurstAt.size() &&
+                       tNow >= o.cycleBurstAt[o.cycleBurstDone]) {
+                    ShotLog("[cycle] --cycle-burst-at %.2f\n", o.cycleBurstAt[o.cycleBurstDone]);
+                    CycleBurst();
+                    o.cycleBurstDone++;
+                }
                 if (o.pauseAt >= 0.0f && tNow >= o.pauseAt) { CyclePause(); o.pauseAt = -1.0f; }
                 if (o.resumeAt >= 0.0f && tNow >= o.resumeAt) { CycleResume(); o.resumeAt = -1.0f; }
             }
@@ -3030,10 +3117,11 @@ static int RunShotMode() {
             char cyc[256] = "cycle=off";
             if (cycling) CycleDescribe(cyc, sizeof(cyc));
             ShotLog("[state] t=%.3f %s blobs=%d droplets=%d hue_angle=%.1f palette_hue=%.1f "
-                    "hue2=%.1f fade=%.4f black=%d\n",
+                    "palette_abs=%.1f hue2=%.1f fade=%.4f black=%d\n",
                     frames / 144.0, cyc, renderer.AcidBlobCount(), renderer.AcidDropletCount(),
-                    renderer.HueAngleDeg(), renderer.PaletteHueDeg(), renderer.Hue2Deg(),
-                    renderer.Fade(), renderer.BlackOut() ? 1 : 0);
+                    renderer.HueAngleDeg(), renderer.PaletteHueDeg(),
+                    fmodf(renderer.PaletteBaseHueDeg() + renderer.PaletteHueDeg(), 360.0f),
+                    renderer.Hue2Deg(), renderer.Fade(), renderer.BlackOut() ? 1 : 0);
         }
         // Where the camera rig is at this instant. Every [post] effect hangs
         // off these, and all of them are supposed to be moving, so a series of

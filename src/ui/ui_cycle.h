@@ -33,7 +33,9 @@ struct UiStageInfo {
     bool  overlay = false, ok = false;
     float dwellSec = 180.0f;                  // effective (stage's own, else [cycle] dwell)
     bool  ownDwell = false;
-    float weight = 1.0f;
+    float weight = 1.0f;                      // tier mode: the multiplier inside the tier
+    int   tier = -1;                          // stage_N_tier: -1 none, 0 proven, 1 moderate, 2 wild
+    bool  fluid = false;                      // a WE look stage (alternates; not drawn by tier)
 };
 struct UiCycleStatusView {
     bool  on = false;
@@ -54,7 +56,9 @@ void         UiCycleNext();
 void         UiCyclePrev();
 void         UiCycleJump(int i);
 void         UiCycleSetStageDwell(int i, float sec);
-void         UiCycleSetStageWeight(int i, float w);
+void         UiCycleSetStageWeight(int i, float w);   // tier mode: the within-tier multiplier
+void         UiCycleSetStageTier(int i, int tier);    // stage_N_tier (-1 clears it)
+bool         UiCycleTierMode();                       // any stage carries a tier
 void         UiCycleMoveStage(int i, int dir);           // -1 up, +1 down
 void         UiCycleRemoveStage(int i);
 // append a stage for a preset file (absolute); base = its [meta] base (may be empty)

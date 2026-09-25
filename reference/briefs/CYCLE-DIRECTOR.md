@@ -64,6 +64,16 @@ stages (they are display-time effects, not stage values).
   5 Oil + Lightroom effects (monotone-post-0924 with lamp_grey and shadow_tone on, values from the BU
     sheet the user picks)
   (ink and mirror: NOT in the first cycle unless the user says so; see QUESTIONS)
+  USER'S ORDER (2026-09-25, supersedes the grouping above): interleave the looks, never two WE or
+  two oil stages back to back -- monotone-post-0924 -> WE -> acid-rise-2hue -> WE -> acid-rise-12 ->
+  WE -> acid-rise-rotate -> WE -> lapd-look-candidate -> WE -> (Lightroom-effects stage, when BU
+  merges) -> WE. Dwell WE 1200 s, oil 720 s. The WE slots reuse we-look-live.ini (no reference
+  fluid preset has a distinct hue band). Then (user refinement): [cycle] order=alternate_random
+  (default) draws the next stage from those whose LOOK differs, never the same file twice, seeded
+  from the wall clock unless [cycle] seed=; order=fixed walks the list as written. Draw weights
+  stage_N_weight (default 1): proven 7 (we-look-live, monotone-post-0924), moderate 2
+  (acid-rise-2hue, acid-rise-12), wild 1 (acid-rise-rotate, lapd-look-candidate). Shipped as
+  reference/configs/cycle-first.ini.
 Dwell 10 min each for the proof render (use --shot-series with shortened dwell, e.g. 20 s per stage,
 to capture every transition).
 

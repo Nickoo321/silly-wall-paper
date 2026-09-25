@@ -65,10 +65,14 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   CONSTANTS at b3 — bind it on EVERY display draw. Display-only and
   look-agnostic, so it ships as PARTIAL overlay presets
   (`reference/presets/Mirror - *.ini`) that fold whatever look is running.
-- `src/moods.cpp/h` — mood conductor (DWELL→SHIFT→EMIT→RETURN transitions).
+- `src/cycle.cpp/h` + `src/animators.h` — cycle director ([cycle] stage list in settings.ini,
+  composed onto a declared base, applied in memory; fade through black between looks with a
+  sub-stepped black warm-up; fluid->fluid lerp = the absorbed mood conductor's hue bridge;
+  journeys as a fluid stage type; freezes/CyclePause for the UI). `enabled=0` = today's app bit
+  for bit. moods.cpp and scenes.cpp are GONE (2026-09-25); the files in %APPDATA% moods\ are
+  the user's and stay untouched, nothing scans them.
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).
-- `src/scenes.cpp` — Scenes manager (interlude UI is dead; Job 2 rework pending).
 - Docs: WORKLOG.md (session logs + state dumps), NOTES.md (full history),
   CALIBRATION.md (quiz benchmarks), backup-pre-rework-2026-07-24/ (snapshot).
 

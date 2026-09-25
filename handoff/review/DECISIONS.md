@@ -15,3 +15,7 @@ Format: date | item | files | creative verdict + reason | my position | outcome 
 2026-09-25 | request 3: schemes | bv/schemes-sheet.png, developed-*.png | creative: keep all 14; Teal/Orange → 3-colour; Synthwave +70; Square+ stays; coverage GAP 10-15% vs 30-45% → fix before ship | agree | KEPT + follow-up
 2026-09-25 | request 3: luminance | schemes-sheet | creative: accept darker blue films | agree | KEPT (no brighten)
 2026-09-25 | request 3: home weights | — | creative: RtF ×3, Lightroom ×2, photo pairs ×1.5, derived ×1 | agree | KEPT
+2026-09-25 | request 4: coverage vs proven-2 | build2/shots/live/fw-cover/coverage-*.png | creative: colour+proportion PASS; seam too wide (5-hue rainbow) | agree | KEPT + seam follow-up
+2026-09-25 | request 4: swing | same | creative: ship 0.08 now; tonight's follow-up must keep photo-sized patches (no spotty islands, user rejected 'too bubbly'); else cap the peak ~55-60% | agree | KEPT (0.08)
+2026-09-25 | request 4: seam width | same | creative: NARROW to ~1/3 (thin yellow-orange line like proven-2); follow-up key approved | agree | KEPT (follow-up)
+2026-09-25 | note: black oil share | same | creative: photos have 20-30% black masses, renders <10% (corners) → structure pass later | agree | NOTED

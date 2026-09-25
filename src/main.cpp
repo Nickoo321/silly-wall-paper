@@ -694,6 +694,11 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.shadowTonePeriod = getF(S, L"shadow_tone_period", a.shadowTonePeriod);
         a.shadowToneFade   = getF(S, L"shadow_tone_fade", a.shadowToneFade);
         a.shadowToneHue    = getF(S, L"shadow_tone_hue", a.shadowToneHue);
+        a.highlightToneHue   = getF(S, L"highlight_tone_hue", a.highlightToneHue);
+        a.highlightToneAmt   = getF(S, L"highlight_tone_amt", a.highlightToneAmt);
+        a.highlightToneSat   = getF(S, L"highlight_tone_sat", a.highlightToneSat);
+        a.highlightToneDesat = getF(S, L"highlight_tone_desat", a.highlightToneDesat);
+        a.toneBalance        = getF(S, L"tone_balance", a.toneBalance);
         a.postChroma   = getF(S, L"post_chroma", a.postChroma);
         a.postLift     = getF(S, L"post_lift", a.postLift);
         {   // ink_mode = bands | water (string wins); int form ink_water=0|1
@@ -1988,6 +1993,11 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"shadow_tone_period", a.shadowTonePeriod, 0);
         putF(S, L"shadow_tone_fade", a.shadowToneFade, 0);
         putF(S, L"shadow_tone_hue", a.shadowToneHue, 0);
+        putF(S, L"highlight_tone_hue", a.highlightToneHue, 0);
+        putF(S, L"highlight_tone_amt", a.highlightToneAmt, 3);
+        putF(S, L"highlight_tone_sat", a.highlightToneSat, 3);
+        putF(S, L"highlight_tone_desat", a.highlightToneDesat, 3);
+        putF(S, L"tone_balance", a.toneBalance, 3);
         putF(S, L"post_chroma", a.postChroma, 3);
         putF(S, L"post_lift", a.postLift, 3);
         WritePrivateProfileStringW(S, L"ink_mode", a.inkMode == 1 ? L"water" : L"bands", path);
@@ -3005,6 +3015,14 @@ static int RunShotMode() {
                 renderer.BuState(bu);
                 ShotLog("[bu] grey centre %.4f,%.4f corner %d sliding %d  tone %.5f,%.5f,%.5f\n",
                         bu[0], bu[1], (int)bu[2], (int)bu[3], bu[4], bu[5], bu[6]);
+            }
+            // brief BU-b: the highlight tint, the shared gate and its origin.
+            if (la.enabled && (la.shadowTone > 1e-4f || la.highlightToneAmt > 1e-4f ||
+                               la.highlightToneDesat > 1e-4f)) {
+                float bb[5];
+                renderer.BubState(bb);
+                ShotLog("[bub] hi %.5f,%.5f,%.5f  gate %.4f  t0 %.2f\n",
+                        bb[0], bb[1], bb[2], bb[3], bb[4]);
             }
         }
         // DIAGNOSTIC ONLY (brief A): FW_ACID_DUMP=1 writes a CSV of the acid

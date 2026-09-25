@@ -2692,9 +2692,11 @@ struct AcidParamsGPU {
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
     // laP38: free (declared so BU-b's laP39 can follow).
     float p36[4], p37[4], p38[4];
+    // brief BU-b: p39 = highlight tint + balance.
+    float p39[4];
     float mix[60][4];
 };
-static_assert(sizeof(AcidParamsGPU) == 1728, "AcidCB layout");
+static_assert(sizeof(AcidParamsGPU) == 1744, "AcidCB layout");
 
 // One particle of the droplet sim. Must match StructuredBuffer<float4>
 // AcidDrops in shaders.h: xy = centre uv, z = visible radius SIGNED (negative
@@ -5345,7 +5347,7 @@ void FluidRenderer::UploadAcidConstants() {
         p.p0,  p.p1,  p.p2,  p.p3,  p.p4,  p.p5,  p.p6,  p.p7,  p.p8,  p.p9,
         p.p10, p.p11, p.p12, p.p13, p.p14, p.p15, p.p16, p.p17, p.p18, p.p19,
         p.p20, p.p21, p.p22, p.p23, p.p24, p.p25, p.p26, p.p27, p.p28, p.p29,
-        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35, p.p36, p.p37, p.p38 };
+        p.p30, p.p31, p.p32, p.p33, p.p34, p.p35, p.p36, p.p37, p.p38, p.p39 };
     auto slot = [&](AcidSlot s, float v) { V[s >> 2][s & 3] = v; };
 
     const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
@@ -5715,8 +5717,27 @@ void FluidRenderer::UploadAcidConstants() {
         float tr = 0.0f, tg = 0.0f, tb = 0.0f;
         const float amt  = fminf(fmaxf(a.shadowTone, 0.0f), 1.0f);
         const float lift = fminf(fmaxf(a.shadowToneLift, 0.0f), 0.25f);
+        const float hAmt = fminf(fmaxf(a.highlightToneAmt, 0.0f), 1.0f);
+        const float hDes = fminf(fmaxf(a.highlightToneDesat, 0.0f), 1.0f);
+        // brief BU-b: turning the tone on from 0 STARTS the ON half of the
+        // gate (no dark wait of up to period/2). The clock's origin m_toneT0
+        // moves to now when the tone keys go from all-zero to any nonzero, or
+        // when the acid look comes back after a gap (> 1 s without an upload,
+        // e.g. the cycle director was on another look). At launch (never
+        // seen) and while the keys stay put, m_toneT0 stays 0: the gate is
+        // BU's exactly.
+        {
+            const int on = (amt > 1e-4f || hAmt > 1e-4f || hDes > 1e-4f) ? 1 : 0;
+            int prev = m_tonePrevOn;
+            if (prev >= 0 && m_toneSeenT >= 0.0f && m_time - m_toneSeenT > 1.0f) prev = 0;
+            if (prev == 0 && on) m_toneT0 = m_time;
+            m_tonePrevOn = on;
+            m_toneSeenT  = m_time;
+        }
+        const float g = ShadowToneGate((double)m_time - (double)m_toneT0,
+                                       a.shadowTonePeriod, a.shadowToneFade);
+        m_toneGate = g;
         if (amt > 1e-4f && lift > 1e-6f) {
-            const float g = ShadowToneGate((double)m_time, a.shadowTonePeriod, a.shadowToneFade);
             if (g > 1e-5f) {
                 // The tint is an HSV colour (value 1, shadow_tone_sat) whose
                 // HSV hue is SOLVED so that what lands on the black -- the
@@ -5760,6 +5781,74 @@ void FluidRenderer::UploadAcidConstants() {
         slot(LA_TONE_R, tr);
         slot(LA_TONE_G, tg);
         slot(LA_TONE_B, tb);
+
+        // ---- brief BU-b: HIGHLIGHT tint (Lightroom split toning) ----------
+        // The film (alpha) above the split takes a white-balance MULTIPLY
+        // toward the tint, renormalised in the shader to the pixel's own
+        // linear Y (as lamp grey does): colour moves, luminance does not.
+        // Folded here into one RGB U = M x (1 + desat x gate):
+        //   T = linear HSV(h, highlight_tone_sat, 1) scaled to dot(T,Y709)=1
+        //   M = lerp(1, T, amount x gate)   (still dot(M,Y709) = 1)
+        // The shader recovers desat = dot(U,Y709) - 1 and M = U / dot(U,Y709).
+        // Hue: highlight_tone_hue >= 0 = absolute HSV degrees (Lightroom's
+        // Hue slider); < 0 = the OKLab complement of the RESOLVED shadow hue:
+        // with shadow_tone_hue fixed, OKLab(HSV(it, shadow sat, 1)) + 180;
+        // with the shadow hue itself the film's complement, that is the
+        // film's own OKLab hue. The HSV hue of the tint is SOLVED (96 steps +
+        // 1/4608 refine, as above) so that the tint's OKLab hue hits it.
+        float hr = 0.0f, hg = 0.0f, hb = 0.0f;
+        if ((hAmt > 1e-4f || hDes > 1e-4f) && g > 1e-5f) {
+            const float hs = fminf(fmaxf(a.highlightToneSat, 0.0f), 1.0f);
+            float best = 0.0f;
+            if (a.highlightToneHue >= 0.0f) {
+                best = fmodf(a.highlightToneHue, 360.0f) / 360.0f;
+            } else if (hs > 1e-3f) {
+                const float sSat = fminf(fmaxf(a.shadowToneSat, 0.0f), 1.0f);
+                float tgt;
+                if (a.shadowToneHue >= 0.0f && sSat > 1e-3f) {
+                    const float sh = fmodf(a.shadowToneHue, 360.0f) / 360.0f;
+                    const RGB sc = HSVtoRGB(sh - floorf(sh), sSat, 1.0f);
+                    tgt = BuOkHueEnc(sc.r, sc.g, sc.b) + 3.14159265f;
+                } else {
+                    tgt = BuOkHueEnc(effOil[0], effOil[1], effOil[2]);
+                }
+                auto herr = [&](float hh) {
+                    const RGB c = HSVtoRGB(hh - floorf(hh), hs, 1.0f);
+                    float d = BuOkHueEnc(c.r, c.g, c.b) - tgt;
+                    d = fmodf(d, 6.2831853f);
+                    if (d >  3.14159265f) d -= 6.2831853f;
+                    if (d < -3.14159265f) d += 6.2831853f;
+                    return fabsf(d);
+                };
+                float be = 1e9f;
+                for (int i = 0; i < 96; i++) {
+                    const float hh = i / 96.0f, e = herr(hh);
+                    if (e < be) { be = e; best = hh; }
+                }
+                const float c0 = best;
+                for (int i = -24; i <= 24; i++) {
+                    const float hh = c0 + i / 4608.0f, e = herr(hh);
+                    if (e < be) { be = e; best = hh; }
+                }
+            }
+            const RGB c = HSVtoRGB(best - floorf(best), hs, 1.0f);
+            auto lin = [](float v) {
+                v = fmaxf(v, 0.0f);
+                return v <= 0.04045f ? v / 12.92f : powf((v + 0.055f) / 1.055f, 2.4f);
+            };
+            float T[3] = { lin(c.r), lin(c.g), lin(c.b) };
+            const float tY = 0.2126f * T[0] + 0.7152f * T[1] + 0.0722f * T[2];
+            const float k  = hAmt * g;
+            const float u  = 1.0f + hDes * g;
+            float M[3];
+            for (int i = 0; i < 3; i++) M[i] = (1.0f + (T[i] / fmaxf(tY, 1e-6f) - 1.0f) * k) * u;
+            hr = M[0]; hg = M[1]; hb = M[2];
+        }
+        m_toneHi[0] = hr; m_toneHi[1] = hg; m_toneHi[2] = hb;
+        slot(LA_HTONE_R, hr);
+        slot(LA_HTONE_G, hg);
+        slot(LA_HTONE_B, hb);
+        slot(LA_TONE_BAL, fminf(fmaxf(a.toneBalance, -1.0f), 1.0f));
     }
     {
         // Only the VISIBLE rows are uploaded: the hidden seed rows under the

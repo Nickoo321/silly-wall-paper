@@ -61,6 +61,9 @@ $headHash = $headHash.Trim()
 
 $fluidHPath = Join-Path $root 'src\fluid.h'
 $settingsCppPath = Join-Path $root 'src\settings.cpp'
+# The slider table moved to src\ui\keys.inc (KEY_SLIDER rows, plain '...' C strings, no L);
+# settings.cpp is gone, so fall back to it (brief BU-b fix).
+if (-not (Test-Path $settingsCppPath)) { $settingsCppPath = Join-Path $root 'src\ui\keys.inc' }
 if (-not (Test-Path $fluidHPath)) { throw "Not found: $fluidHPath" }
 if (-not (Test-Path $settingsCppPath)) { throw "Not found: $settingsCppPath" }
 
@@ -153,7 +156,7 @@ $sliderMap = @{}
 foreach ($line in Get-Content -Path $settingsCppPath) {
     $ptrMatch = [regex]::Match($line, '&c\.(\w+)\.(\w+)')
     if (-not $ptrMatch.Success) { continue }
-    $pairs = [regex]::Matches($line, 'L"([^"]*)"\s*,\s*L"([^"]*)"')
+    $pairs = [regex]::Matches($line, 'L?"([^"]*)"\s*,\s*L?"([^"]*)"')
     foreach ($p in $pairs) {
         $sec = $p.Groups[1].Value
         $key = $p.Groups[2].Value

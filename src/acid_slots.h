@@ -34,13 +34,14 @@
 // dark_sat (brief BP)}: full again; the next key needs laP34.
 // Brief AG-b added laP34 = {dye_lum_vary, dye_hue_vary, dye_thick_hue,
 // rise_speed for the identity fallback's drift}: full; the next key needs laP35.
-// Brief BR added laP35 = {dye_core, -, -, -}; .y / .z are reserved for BB / BH
+// Brief BR added laP35 = {dye_core, -, -, -}; .y / .z were reserved for BB / BH
 // (lamp temperature, breathing), .w for BQ's film_schlieren (not landed yet).
 // Brief BU added laP36 = {grey_k, lamp_grey_size, lamp_grey_cool, grey_cx} and
 // laP37 = {split-tone add rgb, grey_cy}: full; the next key needs laP38.
-// Brief BU-b added laP38 (EMPTY: reserved for brief BV) and laP39 =
-// {highlight tint rgb (folded: hue, sat, amount, desat, gate), tone_balance}:
-// full; the next key needs laP40 (or BV's laP38).
+// Brief BV took laP35.yz (film_hue3_share, film_equal_load); laP35.w and laP38
+// are free (laP38 is declared empty so BU-b's planned laP39 can follow).
+// Brief BU-b added laP39 = {highlight tint rgb (folded: hue, sat, amount,
+// desat, gate), tone_balance}: full; laP35.w and laP38 are still free.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -197,6 +198,8 @@
     X(TONE_G,              37, y, "split tone add g (computed, brief BU)") \
     X(TONE_B,              37, z, "split tone add b (computed, brief BU)") \
     X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)") \
+    X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
+    X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
     X(HTONE_R,             39, x, "highlight tint r: Y-held WB multiplier M = lerp(1, lin HSV(h, highlight_tone_sat, 1), amt * gate), dot(M, Y709) = 1, times (1 + highlight_tone_desat * gate); 0 = off (computed, brief BU-b)") \
     X(HTONE_G,             39, y, "highlight tint g (computed, brief BU-b)") \
     X(HTONE_B,             39, z, "highlight tint b (computed, brief BU-b)") \
@@ -215,5 +218,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP39; laP38 reserved for BV, empty).
+// Number of laP<n> float4s (laP0 .. laP39; laP38 declared empty).
 static const int kAcidSlotVecs = 40;

@@ -607,7 +607,7 @@ cbuffer AcidCB : register(b1) {
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
-    float4 laP35;     // x DYE_CORE  y -  z -  w -
+    float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w -
     float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
     float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
     float4 laP38;     // x -  y -  z -  w -
@@ -1795,6 +1795,9 @@ R"hlsl(
     // it stands in, so that a rim can carry a seam that is not under it. 0 =
     // today, and with boundary_reflect_r 0 it stays 0 for every pixel.
     float rimHueD = 0.0;
+    // brief BV: the patch shares, kept for the equal-load / lift split below
+    // (0 when both hues are off).
+    float bvK2 = 0.0, bvK3 = 0.0;
     [branch] if (LA_HUE2_AMT > 0.0005 || LA_HUE3_AMT > 0.0005) {
         float mixV = AcidMixAt(uv);
         // A soft threshold, not the raw field: the reference's patches have
@@ -1829,10 +1832,14 @@ R"hlsl(
         // ...and an optional THIRD hue off the other end of the SAME field,
         // so a second colour costs no second field and no second fetch.
         [branch] if (LA_HUE3_AMT > 0.0005) {
-            k3 = (1.0 - smoothstep(0.18, 0.46, mixV)) * saturate(LA_HUE3_AMT);
+            // film_hue3_share (brief BV): both thresholds move down together,
+            // so the hue3 end of the field shrinks (1 = today's 0.18 / 0.46).
+            float h3d = (1.0 - LA_HUE3_SHARE) * 0.16;
+            k3 = (1.0 - smoothstep(0.18 - h3d, 0.46 - h3d, mixV)) * saturate(LA_HUE3_AMT);
             if (fieldB < thresh) k3 *= saturate(LA_CRUST_HUE_MIX);
             oilC = AcidHueShift(oilC, LA_HUE3_DEG * k3);
         }
+        bvK2 = k2; bvK3 = k3;
         // ---- BOUNDARY REFLECTION REACH (boundary_reflect_r, brief AJ) ----
         // The user, on the hue2 seam live: "whatever algo is mixing the oil
         // boundary is insanely good", "and the way the bubbles reflect it,
@@ -1899,11 +1906,37 @@ R"hlsl(
             if (fieldB < thresh) k2s *= saturate(LA_CRUST_HUE_MIX);
             rimHueD = LA_HUE2_DEG * (k2s - k2);
             [branch] if (LA_HUE3_AMT > 0.0005) {
-                float k3s = (1.0 - smoothstep(0.18, 0.46, MIXSEAM)) * saturate(LA_HUE3_AMT);
+                float h3d = (1.0 - LA_HUE3_SHARE) * 0.16;
+                float h3lo = 0.18 - h3d, h3hi = 0.46 - h3d;
+                float k3s = (1.0 - smoothstep(h3lo, h3hi, MIXSEAM)) * saturate(LA_HUE3_AMT);
                 if (fieldB < thresh) k3s *= saturate(LA_CRUST_HUE_MIX);
                 rimHueD += LA_HUE3_DEG * (k3s - k3);
+                // brief BV (AJ seam reach): the march above only looks for the
+                // hue2 seam, so a rim beside a hue3 patch never took its seam.
+                // March to the hue3 seam too (same slope, four more taps) and
+                // blend the two targets by reach, normalised so they never add
+                // past one full seam rotation.
+                const float S3 = 0.5 * (h3lo + h3hi);
+                float  t0 = mixV - S3;
+                float2 dir3 = (g / max(length(g), 1e-6)) * -sign(t0);
+                float dN3 = 1.0, tp = t0;
+                [unroll] for (int mj = 1; mj <= 4; mj++) {
+                    float t  = (float)mj * 0.25;
+                    float2 o = dir3 * (R * t);
+                    float  tn = AcidMixAt(uv + float2(o.x / aspect, o.y)) - S3;
+                    if (dN3 >= 1.0 && tp * tn < 0.0)
+                        dN3 = t - 0.25 * (1.0 - saturate(-tp / (tn - tp)));
+                    tp = tn;
+                }
+                float w3 = saturate(LA_REFLECT_AMT) * (1.0 - smoothstep(0.0, 1.0, dN3));
+                float k3m = 0.5 * saturate(LA_HUE3_AMT);
+                float k2m = smoothstep(0.56, 0.68, S3) * saturate(LA_HUE2_AMT);
+                if (fieldB < thresh) { k3m *= saturate(LA_CRUST_HUE_MIX); k2m *= saturate(LA_CRUST_HUE_MIX); }
+                float d3 = LA_HUE2_DEG * (k2m - k2) + LA_HUE3_DEG * (k3m - k3);
+                rimHueD = (rimHueD * w + d3 * w3) / max(w + w3, 1.0);
+            } else {
+                rimHueD *= w;
             }
-            rimHueD *= w;
         }
     }
     // rise_bottom_light: a lava lamp is lit and heated from BELOW, so the wax
@@ -1914,6 +1947,22 @@ R"hlsl(
     if (LA_RISE_BOTTOM_LIGHT > 0.0005) {
         lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, uv.y), saturate(LA_RISE_BOTTOM_LIGHT));
         oilC *= lampG;
+    }
+    // ---- COLOUR SCHEMES: equal load (brief BV) -----------------------------
+    // film_equal_load, per pixel, the BASE film (1 - k2 - k3) only -- patches
+    // are never touched, so a yellow patch stays bright: dimmed in linear
+    // light to the luminance the same S/V would have at magenta (325), never
+    // brightened, so a yellow/green/cyan film loads the panel like magenta.
+    // 0 = today: the branch is skipped. (The yellow-patch lifts were dropped:
+    // patches sit at V 0.92..1 with nothing to lift, MAD 0.49 / 0.01.)
+    [branch] if (LA_EQUAL_LOAD > 0.0005) {
+        const float3 WY = float3(0.2126, 0.7152, 0.0722);
+        float3 hsv = AcidRgb2Hsv(oilC);
+        float  wb  = saturate(LA_EQUAL_LOAD) * saturate(1.0 - bvK2 - bvK3);
+        float  Y   = dot(DsToLin(oilC), WY);
+        float  Yt  = dot(DsToLin(AcidHsv2Rgb(float3(0.9027778, hsv.y, hsv.z))), WY);
+        float  gl  = lerp(1.0, min(1.0, Yt / max(Y, 1e-6)), wb);
+        oilC = DsToSrgb(DsToLin(oilC) * gl);
     }
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)

@@ -152,3 +152,9 @@ report done:
   visible, 0.3..0.7 the effect, above 0.7 only brightness"); if two keys do the same thing, say
   so and propose dropping one. Slider range = the useful range (policy).
 No proof block, no merge.
+
+## §7 The 3 review questions (answer at the end of every final report)
+1. WORKS: what did you verify actually works, and how (numbers, files), and what could only the user confirm?
+2. DIFFERENCE: what can the user see or do now that they could not before (one plain sentence per feature)?
+3. WHAT ADDS: which keys/values actually move the result, which are duplicates or inert, and what rote follow-ups can a cheaper model take?
+Then, optionally: what worries you about the project, and what would you change first.

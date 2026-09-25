@@ -578,6 +578,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.inkComplementSpan = getF(S, L"ink_complement_span", a.inkComplementSpan);
         a.hueSweepPeriod    = getF(S, L"hue_sweep_period", a.hueSweepPeriod);
         a.hueRotatePeriod   = getF(S, L"hue_rotate_period", a.hueRotatePeriod);
+        a.hueAnchorWeight   = getF(S, L"hue_anchor_weight", a.hueAnchorWeight);
         a.oilSaturation     = getF(S, L"oil_saturation", a.oilSaturation);
         a.sweepCount        = getI(S, L"sweep_count", a.sweepCount);
         if (a.sweepCount < 1) a.sweepCount = 1;
@@ -626,6 +627,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.filmHue2Decay      = getF(S, L"film_hue2_decay",  a.filmHue2Decay);
         a.filmHue3           = getF(S, L"film_hue3",        a.filmHue3);
         a.filmHue3Amt        = getF(S, L"film_hue3_amt",    a.filmHue3Amt);
+        a.filmHue3Share      = getF(S, L"film_hue3_share",  a.filmHue3Share);
+        a.filmEqualLoad      = getF(S, L"film_equal_load",  a.filmEqualLoad);
         a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.filmHue2Wobble     = getF(S, L"film_hue2_wobble",        a.filmHue2Wobble);
         a.filmHue2SeedRows   = getF(S, L"film_hue2_seed_rows",     a.filmHue2SeedRows);
@@ -1878,6 +1881,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"ink_complement_span", a.inkComplementSpan, 1);
         putF(S, L"hue_sweep_period", a.hueSweepPeriod, 1);
         putF(S, L"hue_rotate_period", a.hueRotatePeriod, 1);
+        putF(S, L"hue_anchor_weight", a.hueAnchorWeight, 3);
         putF(S, L"oil_saturation", a.oilSaturation, 3);
         putI(S, L"sweep_count", a.sweepCount);
         putI(S, L"droplets", a.droplets);
@@ -1922,6 +1926,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_hue2_decay", a.filmHue2Decay, 3);
         putF(S, L"film_hue3", a.filmHue3, 1);
         putF(S, L"film_hue3_amt", a.filmHue3Amt, 3);
+        putF(S, L"film_hue3_share", a.filmHue3Share, 3);
+        putF(S, L"film_equal_load", a.filmEqualLoad, 3);
         putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"film_hue2_wobble", a.filmHue2Wobble, 2);
         putF(S, L"film_hue2_seed_rows", a.filmHue2SeedRows, 0);

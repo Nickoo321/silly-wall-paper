@@ -25,6 +25,8 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
   MATCH/DIFFERS per preset and exits 1 on any diff. Before merging: `tools\preset-identity.ps1
   -Exe <your build> -Baseline <latest baseline>` must print MATCH for every preset whose keys you
   did not intentionally change.
+  Fast tier = 15 rows from tools\preset-identity.manifest.psd1; run with -Tier fast; the 1553a7f
+  baseline is retired (its list predates the manifest).
 - MSVC string literal cap 16380 bytes in `src\shaders.h` — split with `)hlsl"` / `R"hlsl(`.
   `tools\slot-check.ps1` prints the three largest pieces (and fails over 16000): split before
   adding more than ~20 lines to one within ~2.3 KB of the cap.

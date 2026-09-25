@@ -94,10 +94,12 @@ def preset_text(fname, h2, h3, sh, grade, names):
                  else 'lifts the second colour a little (a warm or third colour stays small).'))
         if h3 is not None:
             L.append('; film_hue3_share %g keeps the third at today\'s ~6%% mean (<= ~15%%) under that bias.' % SHARE3_COVER)
+    L.append('; palette_start_hue %d (brief BW): the palette clock starts where the film is %d (the' % (names[0][2], names[0][2]))
+    L.append('; anchor of the named look) at app start and at each cycle entry, not on oil_color_1 orange.')
     L.append('[meta]')
     L.append('look = liquid_acid')
     L.append('[liquid_acid]')
-    kv = [('hue_sweep_period', '0'), ('hue_anchor_weight', '1'),
+    kv = [('hue_sweep_period', '0'), ('hue_anchor_weight', '1'), ('palette_start_hue', '%d' % names[0][2]),
           ('dye_lum', '0'), ('dye_droplet_lum', '-1'),
           ('film_equal_load', '%g' % EQ)]
     if h2 is None:

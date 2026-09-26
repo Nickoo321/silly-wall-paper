@@ -23,6 +23,19 @@ EQ, SHARE3 = 0.75, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY v
 # 0.75 had (0-180 s mean 5.7%, max 19%), with a larger second colour.
 COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.08, 0.04, 1.0
 PAIR_COVER_PATTERNS = ('Magenta Mint', 'Magenta Cyan', 'Blue Coral')
+# brief BW (swing, solved STATICALLY): the home pairs' patch size and bias picked from the
+# multi-seed CPU coverage distribution (--cover-sweep b@scale --cover-seeds 12, Magenta/Mint's
+# flow): see the BW report; every other pattern keeps 0.40.
+SCALE_PAIR, SCALE_OTHER = 0.25, 0.40
+# brief BW: seam band width (1 = the old 0.56..0.68 run through every hue in between; 0.33 =
+# one thin seam line, the creative chat's ~1/3), on every pattern with a second colour.
+SEAM = 0.33
+# brief BW: film_equal_load_patches -- the patch cores at the magenta load too. 0.75 (as the
+# film) on patterns whose members are cool/pink; LOW on the patterns with a yellow/gold/lime/
+# amber/orange member (user rule: those stay bright; dimming them turns them olive/brown).
+EQP_COOL, EQP_WARM = 0.75, 0.25
+WARM_MEMBER_PATTERNS = ('Violet Amber', 'Teal Orange', 'Euphoria', 'Warm Arc', 'Bright Triad',
+                        'Bright Split', 'Synthwave', 'Square Plus')
 
 # (file name, hue2, hue3, shadow hue or None, grade-only, [(named scheme, tier, anchor, note)])
 PATTERNS = [
@@ -84,14 +97,20 @@ def preset_text(fname, h2, h3, sh, grade, names):
         L.append('; The 4th colour is the BU split tone on the dark tones at a FIXED hue')
         L.append('; (shadow_tone_hue), always on (shadow_tone_period 0), rule 7: cool/violet only.')
     L.append('; Rules (brief BV): oil + droplets black (dye_lum 0, dye_droplet_lum -1); FILMS')
-    L.append('; equal-loaded (film_equal_load, dims only); PATCHES are never dimmed, so a')
-    L.append('; yellow/gold/lime member stays bright; third colour <= ~15% of the frame')
+    L.append('; equal-loaded (film_equal_load, dims only); PATCH cores follow film_equal_load_patches (low')
+    L.append('; where a yellow/gold/lime member must stay bright); third colour <= ~15% of the frame')
     L.append('; (film_hue3_share: 0.75 ~ 13% at cover 0; with cover 0.04 it is 1, see below).')
     if h2 is not None:
         cov = COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW
-        L.append('; FINAL-CYCLE C: film_hue2_cover %g %s' % (cov,
-                 '(creative chat, 2026-09-25: 0.12 -> 0.08) raises the second colour toward the photos\' 30-45%% of the frame.' % () if cov == COVER_PAIR
-                 else 'lifts the second colour a little (a warm or third colour stays small).'))
+        if cov == COVER_PAIR:
+            L.append('; FINAL-CYCLE C + brief BW: film_hue2_cover %g with film_hue2_scale %.2f (was 0.08 at 0.40:' % (cov, SCALE_PAIR))
+            L.append('; mean ~37% but a big random swing: 12-seed P95 65-68%, max 91%); now the same mean with P95')
+            L.append('; ~59%, max 65%, 3 patches (the biggest ~3/4 of the colour): multi-seed CPU distribution, BW report.')
+        else:
+            L.append('; FINAL-CYCLE C: film_hue2_cover %g lifts the second colour a little (a warm or third colour stays small).' % cov)
+        L.append('; brief BW: film_hue2_seam %g (one thin seam line); film_equal_load_patches %g (%s).' % (
+            SEAM, EQP_WARM if fname in WARM_MEMBER_PATTERNS else EQP_COOL,
+            'LOW: a yellow/gold/amber/orange member stays bright' if fname in WARM_MEMBER_PATTERNS else 'the patch cores load the panel like the magenta film'))
         if h3 is not None:
             L.append('; film_hue3_share %g keeps the third at today\'s ~6%% mean (<= ~15%%) under that bias.' % SHARE3_COVER)
     L.append('; palette_start_hue %d (brief BW): the palette clock starts where the film is %d (the' % (names[0][2], names[0][2]))
@@ -105,8 +124,12 @@ def preset_text(fname, h2, h3, sh, grade, names):
     if h2 is None:
         kv += [('film_hue2_amt', '0'), ('film_hue3_amt', '0')]
     else:
-        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'), ('film_hue2_scale', '0.40'),
-               ('film_hue2_cover', '%g' % (COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW))]
+        pair = fname in PAIR_COVER_PATTERNS
+        kv += [('film_hue2', '%d' % h2), ('film_hue2_amt', '1'),
+               ('film_hue2_scale', '%.2f' % (SCALE_PAIR if pair else SCALE_OTHER)),
+               ('film_hue2_cover', '%g' % (COVER_PAIR if pair else COVER_LOW)),
+               ('film_hue2_seam', '%g' % SEAM),
+               ('film_equal_load_patches', '%g' % (EQP_WARM if fname in WARM_MEMBER_PATTERNS else EQP_COOL))]
         if h3 is None:
             kv += [('film_hue3_amt', '0')]
         else:

@@ -46,7 +46,10 @@
 //   --shot-fade F      hold the display fade at F (fade-scaling proof)
 //   --cover-sweep a,b,.. also step a CPU-only shadow hue2 mix field per listed
 //                      film_hue2_cover bias and log its [cover] line (every 5 s
-//                      and at each capture) beside the live field's; never drawn
+//                      and at each capture) beside the live field's; never drawn.
+//                      An entry b@s also sets that field's film_hue2_scale s.
+//   --cover-seeds N    run every --cover-sweep entry over N noise seeds (the
+//                      value-noise lattice; seed 0 = the live field's noise)
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -582,6 +585,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.hueSweepPeriod    = getF(S, L"hue_sweep_period", a.hueSweepPeriod);
         a.hueRotatePeriod   = getF(S, L"hue_rotate_period", a.hueRotatePeriod);
         a.hueAnchorWeight   = getF(S, L"hue_anchor_weight", a.hueAnchorWeight);
+        a.paletteStartHue   = getF(S, L"palette_start_hue", a.paletteStartHue);
         a.oilSaturation     = getF(S, L"oil_saturation", a.oilSaturation);
         a.sweepCount        = getI(S, L"sweep_count", a.sweepCount);
         if (a.sweepCount < 1) a.sweepCount = 1;
@@ -633,6 +637,8 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.filmHue3Share      = getF(S, L"film_hue3_share",  a.filmHue3Share);
         a.filmHue2Cover      = getF(S, L"film_hue2_cover",  a.filmHue2Cover);
         a.filmEqualLoad      = getF(S, L"film_equal_load",  a.filmEqualLoad);
+        a.filmEqualLoadP     = getF(S, L"film_equal_load_patches", a.filmEqualLoadP);
+        a.filmHue2Seam       = getF(S, L"film_hue2_seam",   a.filmHue2Seam);
         a.crustHueMix        = getF(S, L"crust_hue_mix",    a.crustHueMix);
         a.filmHue2Wobble     = getF(S, L"film_hue2_wobble",        a.filmHue2Wobble);
         a.filmHue2SeedRows   = getF(S, L"film_hue2_seed_rows",     a.filmHue2SeedRows);
@@ -1922,6 +1928,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"hue_sweep_period", a.hueSweepPeriod, 1);
         putF(S, L"hue_rotate_period", a.hueRotatePeriod, 1);
         putF(S, L"hue_anchor_weight", a.hueAnchorWeight, 3);
+        putF(S, L"palette_start_hue", a.paletteStartHue, 1);
         putF(S, L"oil_saturation", a.oilSaturation, 3);
         putI(S, L"sweep_count", a.sweepCount);
         putI(S, L"droplets", a.droplets);
@@ -1969,6 +1976,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"film_hue3_share", a.filmHue3Share, 3);
         putF(S, L"film_hue2_cover", a.filmHue2Cover, 3);
         putF(S, L"film_equal_load", a.filmEqualLoad, 3);
+        putF(S, L"film_equal_load_patches", a.filmEqualLoadP, 3);
+        putF(S, L"film_hue2_seam", a.filmHue2Seam, 3);
         putF(S, L"crust_hue_mix", a.crustHueMix, 3);
         putF(S, L"film_hue2_wobble", a.filmHue2Wobble, 2);
         putF(S, L"film_hue2_seed_rows", a.filmHue2SeedRows, 0);
@@ -2316,6 +2325,10 @@ struct ShotOpts {
     // shadow hue2 mix field per listed film_hue2_cover bias (CPU only, never
     // drawn) and logs each one's [cover] line beside the live field's.
     std::vector<float> coverSweep;
+    // brief BW: --cover-sweep entries may carry a scale (b@s), and
+    // --cover-seeds N replicates every entry over N noise seeds (0..N-1).
+    std::vector<float> coverScale;
+    int      coverSeeds = 1;
 };
 static bool g_shotPngOnly = false;
 
@@ -2837,6 +2850,10 @@ static int RunShotMode() {
                 o.pngOnly = true;
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
                 o.fixedFade = (float)_wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--cover-seeds") == 0 && i + 1 < argc) {
+                o.coverSeeds = _wtoi(argv[++i]);
+                if (o.coverSeeds < 1) o.coverSeeds = 1;
+                if (o.coverSeeds > 64) o.coverSeeds = 64;
             } else if (wcscmp(argv[i], L"--cover-sweep") == 0 && i + 1 < argc) {
                 const wchar_t* p = argv[++i];
                 while (*p) {
@@ -2845,6 +2862,13 @@ static int RunShotMode() {
                     if (end == p) break;
                     o.coverSweep.push_back(v);
                     p = end;
+                    float sc = -1.0f;
+                    if (*p == L'@') {
+                        const wchar_t* q = p + 1;
+                        const float s = (float)wcstod(q, &end);
+                        if (end != q) { sc = s; p = end; }
+                    }
+                    o.coverScale.push_back(sc);
                     while (*p == L',' || *p == L' ') p++;
                 }
             }
@@ -2911,20 +2935,34 @@ static int RunShotMode() {
     renderer.InitOffscreen(o.width, o.height, cfg);
     g_renderer = &renderer;
     renderer.SetCoverageWanted(CycleCoverageWanted());
-    if (!o.coverSweep.empty()) renderer.SetCoverSweep(o.coverSweep);
+    if (!o.coverSweep.empty()) {
+        std::vector<float> b, s;
+        std::vector<int> z;
+        for (size_t k = 0; k < o.coverSweep.size(); k++)
+            for (int sd = 0; sd < o.coverSeeds; sd++) {
+                b.push_back(o.coverSweep[k]);
+                s.push_back(k < o.coverScale.size() ? o.coverScale[k] : -1.0f);
+                z.push_back(sd);
+            }
+        renderer.SetCoverSweep(b, s, z);
+    }
     // FINAL-CYCLE C coverage logger: the hue2 mix field's visible-cell shares,
     // CPU only (no render needed to read them). live = the field the frame
     // draws; sweep rows = shadow fields at other film_hue2_cover biases.
     auto coverLog = [&](double t) {
         const LiquidAcidConfig& la = renderer.Config().acid;
         if (!la.enabled || (la.filmHue2Amt <= 0.0005f && la.filmHue3Amt <= 0.0005f)) return;
-        float c[8];
+        float c[10];
         for (int i = -1; i < renderer.CoverSweepCount(); i++) {
             if (!renderer.MixCoverage(i, c)) continue;
             const float b = (i < 0) ? la.filmHue2Cover : renderer.CoverSweepBias(i);
-            ShotLog("[cover] t=%.1f %s bias=%+.3f hi62=%.3f full68=%.3f band=%.3f "
-                    "lo32=%.3f lo28=%.3f lo24=%.3f lo20=%.3f mean=%.3f\n",
-                    t, i < 0 ? "live " : "sweep", b, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]);
+            float sc = (i < 0) ? la.filmHue2Scale : renderer.CoverSweepScale(i);
+            if (sc <= 0.0f) sc = la.filmHue2Scale;
+            const int sd = (i < 0) ? 0 : renderer.CoverSweepSeed(i);
+            ShotLog("[cover] t=%.1f %s bias=%+.3f scale=%.3f nseed=%d hi62=%.3f full68=%.3f band=%.3f "
+                    "lo32=%.3f lo28=%.3f lo24=%.3f lo20=%.3f mean=%.3f patches=%.0f big=%.3f\n",
+                    t, i < 0 ? "live " : "sweep", b, sc, sd, c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+                    c[8], c[9]);
         }
     };
     {   // settings-window model on the renderer's config; hooks = the calls the old window made

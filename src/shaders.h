@@ -607,10 +607,10 @@ cbuffer AcidCB : register(b1) {
     float4 laP32;     // x SHADOW_AMT  y SHADOW_LEN  z SHADOW_SOFT  w LIGHT_Z
     float4 laP33;     // x OIL_FLUOR  y OIL_FLUOR_REACH  z DYE_LAMP_FOLLOW  w DARK_SAT
     float4 laP34;     // x DYE_LUM_VARY  y DYE_HUE_VARY  z DYE_THICK_HUE  w DYE_ID_RISE
-    float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w -
+    float4 laP35;     // x DYE_CORE  y HUE3_SHARE  z EQUAL_LOAD  w HUE2_SEAM
     float4 laP36;     // x GREY_K  y GREY_SIZE  z GREY_COOL  w GREY_CX
     float4 laP37;     // x TONE_R  y TONE_G  z TONE_B  w GREY_CY
-    float4 laP38;     // x -  y -  z -  w -
+    float4 laP38;     // x EQUAL_LOAD_P  y -  z -  w -
     float4 laP39;     // x HTONE_R  y HTONE_G  z HTONE_B  w TONE_BAL
     float4 laMix[60]; // hue2 mix field: 20x12 cells, four per float4 (brief AE)
     // ---- END GENERATED
@@ -1816,7 +1816,16 @@ R"hlsl(
         // meeting. 0.56..0.68 keeps the rainbow as a thin rim, which is what
         // the reference actually shows at a patch edge.
         const float MIXSEAM = 0.62;   // the band's centre: THE seam (brief AJ)
-        float k2 = smoothstep(0.56, 0.68, mixV) * saturate(LA_HUE2_AMT);
+        // film_hue2_seam (brief BW): the band's WIDTH around that centre, as a
+        // factor of today's half-width 0.06 -- narrower = one thin seam line
+        // instead of red + green stripes. 1 = today: the literal band, never
+        // the runtime form (0.62 - 0.06 * 1 is not bit-identical to 0.56).
+        float k2b;
+        [branch] if (LA_HUE2_SEAM != 1.0)
+            k2b = smoothstep(MIXSEAM - 0.06 * LA_HUE2_SEAM, MIXSEAM + 0.06 * LA_HUE2_SEAM, mixV);
+        else
+            k2b = smoothstep(0.56, 0.68, mixV);
+        float k2 = k2b * saturate(LA_HUE2_AMT);
         float k3 = 0.0;
         // The droplets INSIDE a mass take their own share of it (the ref's
         // cyan-lit specks in the black). 1 = the same as the film.
@@ -1835,7 +1844,14 @@ R"hlsl(
             // film_hue3_share (brief BV): both thresholds move down together,
             // so the hue3 end of the field shrinks (1 = today's 0.18 / 0.46).
             float h3d = (1.0 - LA_HUE3_SHARE) * 0.16;
-            k3 = (1.0 - smoothstep(0.18 - h3d, 0.46 - h3d, mixV)) * saturate(LA_HUE3_AMT);
+            // film_hue2_seam narrows this band the same way, about its own
+            // centre 0.32 - h3d (half-width 0.14 today); 1 = the old line.
+            float h3b;
+            [branch] if (LA_HUE2_SEAM != 1.0)
+                h3b = smoothstep(0.32 - h3d - 0.14 * LA_HUE2_SEAM, 0.32 - h3d + 0.14 * LA_HUE2_SEAM, mixV);
+            else
+                h3b = smoothstep(0.18 - h3d, 0.46 - h3d, mixV);
+            k3 = (1.0 - h3b) * saturate(LA_HUE3_AMT);
             if (fieldB < thresh) k3 *= saturate(LA_CRUST_HUE_MIX);
             oilC = AcidHueShift(oilC, LA_HUE3_DEG * k3);
         }
@@ -1908,6 +1924,13 @@ R"hlsl(
             [branch] if (LA_HUE3_AMT > 0.0005) {
                 float h3d = (1.0 - LA_HUE3_SHARE) * 0.16;
                 float h3lo = 0.18 - h3d, h3hi = 0.46 - h3d;
+                // film_hue2_seam (brief BW): the reflection reads the SAME
+                // (narrowed) bands as the film, or a rim would carry a seam
+                // colour the film beside it no longer shows.
+                [branch] if (LA_HUE2_SEAM != 1.0) {
+                    h3lo = 0.32 - h3d - 0.14 * LA_HUE2_SEAM;
+                    h3hi = 0.32 - h3d + 0.14 * LA_HUE2_SEAM;
+                }
                 float k3s = (1.0 - smoothstep(h3lo, h3hi, MIXSEAM)) * saturate(LA_HUE3_AMT);
                 if (fieldB < thresh) k3s *= saturate(LA_CRUST_HUE_MIX);
                 rimHueD += LA_HUE3_DEG * (k3s - k3);
@@ -1930,7 +1953,12 @@ R"hlsl(
                 }
                 float w3 = saturate(LA_REFLECT_AMT) * (1.0 - smoothstep(0.0, 1.0, dN3));
                 float k3m = 0.5 * saturate(LA_HUE3_AMT);
-                float k2m = smoothstep(0.56, 0.68, S3) * saturate(LA_HUE2_AMT);
+                float k2mb;
+                [branch] if (LA_HUE2_SEAM != 1.0)
+                    k2mb = smoothstep(MIXSEAM - 0.06 * LA_HUE2_SEAM, MIXSEAM + 0.06 * LA_HUE2_SEAM, S3);
+                else
+                    k2mb = smoothstep(0.56, 0.68, S3);
+                float k2m = k2mb * saturate(LA_HUE2_AMT);
                 if (fieldB < thresh) { k3m *= saturate(LA_CRUST_HUE_MIX); k2m *= saturate(LA_CRUST_HUE_MIX); }
                 float d3 = LA_HUE2_DEG * (k2m - k2) + LA_HUE3_DEG * (k3m - k3);
                 rimHueD = (rimHueD * w + d3 * w3) / max(w + w3, 1.0);
@@ -1955,10 +1983,18 @@ R"hlsl(
     // brightened, so a yellow/green/cyan film loads the panel like magenta.
     // 0 = today: the branch is skipped. (The yellow-patch lifts were dropped:
     // patches sit at V 0.92..1 with nothing to lift, MAD 0.49 / 0.01.)
-    [branch] if (LA_EQUAL_LOAD > 0.0005) {
+    // film_equal_load_patches (brief BW): the same target on the PATCH
+    // CORES too (mint/cyan dimmed to the magenta load), weighted by
+    // smoothstep(0.8, 1, k) -- never by raw k, or the seam's yellow-orange
+    // (k ~0.3-0.6) would be dimmed to olive. 0 = today: the inner branch is
+    // skipped and the weight is the old expression.
+    [branch] if (LA_EQUAL_LOAD > 0.0005 || LA_EQUAL_LOAD_P > 0.0005) {
         const float3 WY = float3(0.2126, 0.7152, 0.0722);
         float3 hsv = AcidRgb2Hsv(oilC);
         float  wb  = saturate(LA_EQUAL_LOAD) * saturate(1.0 - bvK2 - bvK3);
+        [branch] if (LA_EQUAL_LOAD_P > 0.0005)
+            wb = saturate(wb + saturate(LA_EQUAL_LOAD_P)
+                             * saturate(smoothstep(0.8, 1.0, bvK2) + smoothstep(0.8, 1.0, bvK3)));
         float  Y   = dot(DsToLin(oilC), WY);
         float  Yt  = dot(DsToLin(AcidHsv2Rgb(float3(0.9027778, hsv.y, hsv.z))), WY);
         float  gl  = lerp(1.0, min(1.0, Yt / max(Y, 1e-6)), wb);

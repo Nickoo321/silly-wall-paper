@@ -25,12 +25,16 @@
            Note = 'FLUID PARITY: rendered first by the parity check (md5 10E36EBF...), never re-rendered as a row' }
         @{ Path = 'reference\configs\acid-rise-12.ini'; Look = 'acid'; Base = ''; Delay = 60; Tier = 'fast'
            Note = 'LIVE preset; ink_mode=water; post bloom 0.30' }
+        @{ Path = 'reference\configs\acid-rise-12-tone-half.ini'; Look = 'acid'; Base = 'reference\configs\acid-rise-12.ini'; Delay = 60; Tier = 'full'
+           Note = 'cycle-final moderate stage: PARTIAL ([meta] base = acid-rise-12.ini) with shadow_tone 0.5 (merged, overlay keys first)' }
         @{ Path = 'reference\configs\acid-rise-2hue.ini'; Look = 'acid'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'v1 default list; ink_mode=water' }
         @{ Path = 'reference\configs\acid-rise-8020.ini'; Look = 'acid'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'v1 default list; ink_mode=water' }
         @{ Path = 'reference\configs\acid-rise-rotate.ini'; Look = 'acid'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'v1 default list; ink_mode=water' }
+        @{ Path = 'reference\configs\cycle-final.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
+           Note = 'THE shipped cycle ([cycle] enabled=1, stage files relative to reference\configs): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
         @{ Path = 'reference\configs\eyes-diff015.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'
            Note = 'eye A/B test: we-look-live with one knob changed' }
         @{ Path = 'reference\configs\eyes-diff03.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'
@@ -181,6 +185,38 @@
            Note = 'PARTIAL [mirror] mode=0: md5 must equal acid-rise-12 (mode 0 is bit-identical)' }
         @{ Path = 'reference\presets\Mirror - quad (overlay).ini'; Look = 'overlay'; Base = 'reference\configs\acid-rise-12.ini'; Delay = 60; Tier = 'fast'
            Note = 'PARTIAL [mirror] overlay (mode 3) on the live acid preset' }
+        @{ Path = 'reference\presets\Scheme - Blue Coral.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Bright Split.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Bright Triad.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Euphoria.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Lightroom Triad.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); not a cycle stage' }
+        @{ Path = 'reference\presets\Scheme - Lightroom.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Magenta Cyan.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Magenta Mint.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Microscope.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Neon Demon.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Return to Form.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Square Plus.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Synthwave.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Teal Orange.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Violet Amber.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
+        @{ Path = 'reference\presets\Scheme - Warm Arc.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
         @{ Path = 'reference\presets\User - Preset 5 (2026-09-17).ini'; Look = 'ink'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'user-saved ink preset; no [moods]/[cycle]/[general] (built-in defaults); ink_mode=bands is inert under style=ink' }
         @{ Path = 'reference\presets\WE parity (fluid).ini'; Look = 'fluid'; Base = ''; Delay = 60; Tier = 'fast'

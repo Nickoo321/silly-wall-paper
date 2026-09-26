@@ -41,7 +41,9 @@
 // Brief BV took laP35.yz (film_hue3_share, film_equal_load); laP35.w and laP38
 // are free (laP38 is declared empty so BU-b's planned laP39 can follow).
 // Brief BU-b added laP39 = {highlight tint rgb (folded: hue, sat, amount,
-// desat, gate), tone_balance}: full; laP35.w and laP38 are still free.
+// desat, gate), tone_balance}: full; laP35.w and laP38 were still free.
+// Brief BW took laP35.w (film_hue2_seam) and laP38.x (film_equal_load_patches);
+// laP38.yzw are free.
 //
 // The fourth column is documentation only: the ini key ([liquid_acid] unless
 // a section is named) or where a computed value comes from. Hardcoded values
@@ -200,6 +202,8 @@
     X(GREY_CY,             37, w, "grey region centre y, p-units (computed, brief BU)") \
     X(HUE3_SHARE,          35, y, "film_hue3_share, 0..1, 1 = today's hue3 thresholds (brief BV)") \
     X(EQUAL_LOAD,          35, z, "film_equal_load, 0..1, base film dimmed to the magenta luminance (brief BV)") \
+    X(HUE2_SEAM,           35, w, "film_hue2_seam, 0.25..1, hue2/hue3 seam band width factor, 1 = today's literal bands (brief BW)") \
+    X(EQUAL_LOAD_P,        38, x, "film_equal_load_patches, 0..1, equal load on the patch cores smoothstep(0.8,1,k) (brief BW)") \
     X(HTONE_R,             39, x, "highlight tint r: Y-held WB multiplier M = lerp(1, lin HSV(h, highlight_tone_sat, 1), amt * gate), dot(M, Y709) = 1, times (1 + highlight_tone_desat * gate); 0 = off (computed, brief BU-b)") \
     X(HTONE_G,             39, y, "highlight tint g (computed, brief BU-b)") \
     X(HTONE_B,             39, z, "highlight tint b (computed, brief BU-b)") \
@@ -218,5 +222,5 @@ enum AcidSlot : int {
 #undef ACID_SLOT_ENUM
 };
 
-// Number of laP<n> float4s (laP0 .. laP39; laP38 declared empty).
+// Number of laP<n> float4s (laP0 .. laP39; laP38 only .x used, brief BW).
 static const int kAcidSlotVecs = 40;

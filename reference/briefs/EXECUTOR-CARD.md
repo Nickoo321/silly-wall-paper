@@ -17,8 +17,11 @@ Read this INSTEAD of WORKLOG/PROGRESS. Terse, no history.
 - Never touch `build\`, `build2\live`, the running `FluidWallpaper.exe`, or Wallpaper Engine, or
   `tools\away-pause.ps1`. No swap — the parent (Fable) does that, and only after asking the user.
 - Fluid parity is sacred: `reference\configs\we-look-live.ini`, 60 s, 2560x1440, seed 1234,
-  `--hdr on` must give md5 `10E36EBF1A74EDFE609065D757300054` after EVERY change (parity peak
+  `--hdr on` must give md5 `835AECBD9EF1384A8CAAF1A611EE3A26` after EVERY change (parity peak
   700). New keys default to today's behaviour so existing presets stay byte-identical.
+  gamut=2 since 2026-09-26; the gamut=1 render still gives 10E36EBF1A74EDFE609065D757300054
+  (re-verified 2026-09-26 on a scratch copy of we-look-live.ini with gamut forced back to 1 —
+  confirms nothing else on the fluid path changed since the old reference).
 - Acid-side equivalent of the above: `tools\preset-identity.ps1 -Exe <exe> [-Baseline <file>]
   [-Save <file>]` renders `we-look-live.ini` (checked first, must equal the md5 above) plus the
   `acid-rise-*` presets, prints `name md5` each; `-Save` writes a baseline, `-Baseline` prints

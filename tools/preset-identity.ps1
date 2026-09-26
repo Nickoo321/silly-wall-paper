@@ -64,7 +64,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $FluidIni = Join-Path $root 'reference\configs\we-look-live.ini'
 $FluidKey = 'reference\configs\we-look-live.ini'
-$FluidParityMd5 = '10E36EBF1A74EDFE609065D757300054'
+$FluidParityMd5 = '835AECBD9EF1384A8CAAF1A611EE3A26'   # gamut=2 since 2026-09-26; gamut=1 value was 10E36EBF1A74EDFE609065D757300054
 $CoveredDirs = @('reference\configs', 'reference\presets', 'reference\moods')
 
 # ---------------------------------------------------------------------------

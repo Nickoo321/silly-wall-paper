@@ -30,10 +30,11 @@ SCALE_PAIR, SCALE_OTHER = 0.25, 0.40
 # brief BW: seam band width (1 = the old 0.56..0.68 run through every hue in between; 0.33 =
 # one thin seam line, the creative chat's ~1/3), on every pattern with a second colour.
 SEAM = 0.33
-# brief BW: film_equal_load_patches -- the patch cores at the magenta load too. 0.75 (as the
-# film) on patterns whose members are cool/pink; LOW on the patterns with a yellow/gold/lime/
-# amber/orange member (user rule: those stay bright; dimming them turns them olive/brown).
-EQP_COOL, EQP_WARM = 0.75, 0.25
+# brief BW: film_equal_load_patches -- the patch cores at the magenta load too. 0.5 (decision
+# 2026-09-26, was 0.75) on patterns whose members are cool/pink; LOW on the patterns with a
+# yellow/gold/lime/amber/orange member (user rule: those stay bright; dimming them turns them
+# olive/brown).
+EQP_COOL, EQP_WARM = 0.5, 0.25
 WARM_MEMBER_PATTERNS = ('Violet Amber', 'Teal Orange', 'Euphoria', 'Warm Arc', 'Bright Triad',
                         'Bright Split', 'Synthwave', 'Square Plus')
 

@@ -880,14 +880,17 @@ struct LiquidAcidConfig {
     float lampGreyCool  = 0.20f;    // 0..1                       lamp_grey_cool
     // --- brief BX: GREY HEART (display pass, acid PSO only) ----------------
     // The same Y-flat desaturation (shared LampGreyY) with a CENTRED
-    // elliptical mask: full inside 0.3 x size, one smoothstep ramp to none
-    // at size, in half-frame
-    // units (x and y each -1..1 over the frame; edge midpoints 1, corners
-    // 1.41). Applied right before the final trim, neutral (no cool), so the
-    // middle reads greyscale and the stage's true colour survives around it.
-    // Lift: the greyed FILM's linear luminance x (1 + lift x mask x alpha);
-    // masses never lift. Size/lift defaults = the user's Lightroom edit
-    // scaled 1.3x (spec update). Amount 0 = today (the branch is skipped).
+    // elliptical mask hm = 1 - smoothstep(0.3 x size, size, r), r in
+    // half-frame units (x and y each -1..1 over the frame; edge midpoints 1,
+    // corners 1.41): one long ramp, no visible core edge. The grey weight is
+    // amount x sqrt(hm), the lift weight hm (fitted per r bin to the user's
+    // Lightroom radial edit: its colour returns more slowly than its
+    // brightness falls). Applied right before the final trim, neutral (no
+    // cool), so the middle reads greyscale and the stage's true colour
+    // survives around it. Lift: the greyed FILM's linear luminance x
+    // (1 + lift x hm x alpha), independent of the amount (0.45 = x1.45 in the
+    // middle, the edit's plateau); masses never lift. Size/lift defaults =
+    // the user's edit scaled 1.3x (spec update). Amount 0 = today (skipped).
     float lampGreyHeart     = 0.0f;   // 0..1, 0 = today          lamp_grey_heart
     float lampGreyHeartSize = 1.7f;   // 0.8..2.2 half-frames     lamp_grey_heart_size
     float lampGreyHeartLift = 0.45f;  // 0..0.8                   lamp_grey_heart_lift

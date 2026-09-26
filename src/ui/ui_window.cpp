@@ -1242,6 +1242,9 @@ void DrawCentre() {
     ImGui::Spacing();
     char adv[96];
     snprintf(adv, sizeof(adv), "Advanced: every other %s setting###adv", kTileNames[TileOfLook(look)]);
+    // a search text at the first frame (only --ui-search can set one: the box lives inside the
+    // expander) opens it, so a headless --ui-shot can show the rows it searched for (brief BX)
+    if (s_view.search[0]) ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     if (ImGui::CollapsingHeader(adv)) {
         DrawAdvanced();
         if (look == LOOK_F || s_view.everything) { ImGui::Spacing(); DrawPalette(); }

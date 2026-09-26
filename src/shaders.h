@@ -3137,23 +3137,25 @@ R"hlsl(
     // The user: "have a true colour and make it look grayscale in the
     // middle". The frame keeps its true stage colours; the lamp grey's
     // Y-flat desaturation (LampGreyY, neutral: no cool) with a CENTRED
-    // elliptical mask, full inside 0.3 x size, one long smoothstep ramp to
-    // none at size (no visible core edge), in half-frame units (x and y each
-    // -1..1 over the frame: edge midpoints r 1, corners r 1.41). Fitted to
-    // the user's own Lightroom radial edit (spec update 2026-09-25): at size
-    // 1.3 the ramp tracks its brightness profile within 0.03 per r bin. The RAW screen interpolant i.uv, never the folded uv, so a
-    // mirror fold does not move it. HERE, after every rim / halo / lens /
-    // glow / shadow / toe term, so the whole centre greys (a B&W print framed
-    // by the stage's own colour); the post_chroma the hold targets is the
-    // very next step, and the grain after it is a scalar. The lift raises the
-    // greyed film's linear luminance by lift x mask (the same weight as the
-    // grey), times alpha, so the masses (and their split tone) never lift.
-    // 0 = skipped.
+    // elliptical mask hm = 1 - smoothstep(0.3 S, S, r), one long ramp with no
+    // visible core edge, r in half-frame units (x and y each -1..1 over the
+    // frame: edge midpoints r 1, corners r 1.41), from the RAW screen
+    // interpolant i.uv, never the folded uv, so a mirror fold does not move
+    // it. Fitted to the user's own Lightroom radial edit (spec update
+    // 2026-09-25, measured per r bin, OKLab C and linear Y on film): the
+    // lift follows hm itself (x1.45 plateau at lift 0.45, gone at S), the
+    // grey follows sqrt(hm) -- the edit's colour comes back more slowly than
+    // its brightness falls; plain hm left the ramp 0.1-0.15 too colourful.
+    // HERE, after every rim / halo / lens / glow / shadow / toe term, so the
+    // whole centre greys (a B&W print framed by the stage's own colour); the
+    // post_chroma the hold targets is the very next step, and the grain
+    // after it is a scalar. The lift is times alpha (film), so the masses
+    // (and their split tone) never lift. Amount 0 = skipped.
     [branch] if (LA_HEART_K > 0.0) {
         float2 hq = i.uv * 2.0 - 1.0;
-        float  gh = LA_HEART_K * (1.0 - smoothstep(0.3 * LA_HEART_SIZE, LA_HEART_SIZE, length(hq)));
-        [branch] if (gh > 0.0)
-            col = LampGreyY(col, gh, 0.0, 1.0 + LA_HEART_LIFT * gh * alpha);
+        float  hm = 1.0 - smoothstep(0.3 * LA_HEART_SIZE, LA_HEART_SIZE, length(hq));
+        [branch] if (hm > 0.0)
+            col = LampGreyY(col, LA_HEART_K * sqrt(hm), 0.0, 1.0 + LA_HEART_LIFT * hm * alpha);
     }
     // ---- final trim: post_chroma / post_lift -----------------------------
     // A transparent film costs perceptual chroma (10-20%) and a little

@@ -35,6 +35,10 @@
            Note = 'v1 default list; ink_mode=water' }
         @{ Path = 'reference\configs\cycle-final.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'THE shipped cycle ([cycle] enabled=1, stage files relative to reference\configs): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
+        @{ Path = 'reference\configs\cycle-first.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
+           Note = 'CYCLE-DIRECTOR.md section 5 first draft ([cycle] enabled=1, interleaves WE/oil/ink/mirror stages, order=alternate_random): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
+        @{ Path = 'reference\configs\cycle-lerp-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
+           Note = 'proof config for the fluid->fluid LERP + journey stage type (order=fixed, 3 x 20 s stages: we-look-live, WE journey - Aurora over stage_2_base=we-look-live.ini, acid-rise-12); the 60 s frame lands just into stage 3' }
         @{ Path = 'reference\configs\eyes-diff015.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'
            Note = 'eye A/B test: we-look-live with one knob changed' }
         @{ Path = 'reference\configs\eyes-diff03.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'
@@ -219,6 +223,10 @@
            Note = 'brief BV colour scheme, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); a cycle-final.ini stage' }
         @{ Path = 'reference\presets\User - Preset 5 (2026-09-17).ini'; Look = 'ink'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'user-saved ink preset; no [moods]/[cycle]/[general] (built-in defaults); ink_mode=bands is inert under style=ink' }
+        @{ Path = 'reference\presets\WE journey - Aurora.ini'; Look = 'overlay'; Base = 'reference\configs\we-look-live.ini'; Delay = 60; Tier = 'full'
+           Note = 'kept fluid "journey" chassis, PARTIAL overlay (retired moods.cpp, merged, overlay keys first) meant for a cycle stage with stage_N_base=we-look-live.ini; [journey] file=Aurora needs %APPDATA%\FluidWallpaper\journeys\Aurora.txt to actually walk legs, otherwise static chassis colour' }
+        @{ Path = 'reference\presets\WE journey - Duet.ini'; Look = 'overlay'; Base = 'reference\configs\we-look-live.ini'; Delay = 60; Tier = 'full'
+           Note = 'kept fluid "journey" chassis, PARTIAL overlay (retired moods.cpp, merged, overlay keys first) meant for a cycle stage with stage_N_base=we-look-live.ini; [journey] file=Duet needs %APPDATA%\FluidWallpaper\journeys\Duet.txt to actually walk legs, otherwise static chassis colour' }
         @{ Path = 'reference\presets\WE parity (fluid).ini'; Look = 'fluid'; Base = ''; Delay = 60; Tier = 'fast'
            Note = 'tray fluid preset; same keys as we-look-live, md5 must equal the parity md5' }
     )

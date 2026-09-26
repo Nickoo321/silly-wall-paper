@@ -13,3 +13,4 @@ Format: time local | chat | meter before -> after | what | other chat running?
 2026-09-26 09:40-09:50 | implementation | 3% -> ~5% | BW report + merge 58fb8b5, live relaunch, BX resumed | creative idle
 2026-09-26 09:48-09:49 | creative | 6% -> 6% (meter may lag; re-check at 10:50) | request 5: 5 sheets viewed, verdicts Q1-Q4 | implementation running (BX), shared
 2026-09-26 09:50-09:56 | implementation | ~5% -> ~8% | request 5 batch, swap to 58fb8b5 + cycle on + pause, verdict log | creative 09:50 block
+2026-09-26 09:56-12:58 | implementation | ~8% -> 40% (window resets 14:40) | BX proving (one executor), gamut switch, cover 0.04, live relaunch saga, user A/Bs | creative 09:50 block only

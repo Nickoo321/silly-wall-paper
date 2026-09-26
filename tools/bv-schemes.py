@@ -21,7 +21,7 @@ EQ, SHARE3 = 0.75, 0.75   # A/B: equal_load 0.5 -> +29%, 1 -> -37% frame meanY v
 # (< 0.32: 10% mean at 0 -> 1% at 0.12), so the 3-/4-colour tiers take 0.04 with
 # film_hue3_share 1: bias 0.04 + share 1 is the same third-colour share as bias 0 + share
 # 0.75 had (0-180 s mean 5.7%, max 19%), with a larger second colour.
-COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.08, 0.04, 1.0
+COVER_PAIR, COVER_LOW, SHARE3_COVER = 0.04, 0.04, 1.0
 PAIR_COVER_PATTERNS = ('Magenta Mint', 'Magenta Cyan', 'Blue Coral')
 # brief BW (swing, solved STATICALLY): the home pairs' patch size and bias picked from the
 # multi-seed CPU coverage distribution (--cover-sweep b@scale --cover-seeds 12, Magenta/Mint's
@@ -102,10 +102,10 @@ def preset_text(fname, h2, h3, sh, grade, names):
     L.append('; (film_hue3_share: 0.75 ~ 13% at cover 0; with cover 0.04 it is 1, see below).')
     if h2 is not None:
         cov = COVER_PAIR if fname in PAIR_COVER_PATTERNS else COVER_LOW
-        if cov == COVER_PAIR:
-            L.append('; FINAL-CYCLE C + brief BW: film_hue2_cover %g with film_hue2_scale %.2f (was 0.08 at 0.40:' % (cov, SCALE_PAIR))
-            L.append('; mean ~37% but a big random swing: 12-seed P95 65-68%, max 91%); now the same mean with P95')
-            L.append('; ~59%, max 65%, 3 patches (the biggest ~3/4 of the colour): multi-seed CPU distribution, BW report.')
+        if fname in PAIR_COVER_PATTERNS:
+            L.append('; FINAL-CYCLE C + brief BW: film_hue2_cover %g with film_hue2_scale %.2f (BW shipped 0.08 at 0.25:' % (cov, SCALE_PAIR))
+            L.append('; mean ~36%, P95 58%, max 82%, 3 patches; the user saw a 50/50 split live on 2026-09-26 and asked for')
+            L.append('; less second colour -> 0.04 (CPU logger at scale 0.40: 0.04 -> ~18%, 0.08 -> ~30%); re-measure pending.')
         else:
             L.append('; FINAL-CYCLE C: film_hue2_cover %g lifts the second colour a little (a warm or third colour stays small).' % cov)
         L.append('; brief BW: film_hue2_seam %g (one thin seam line); film_equal_load_patches %g (%s).' % (

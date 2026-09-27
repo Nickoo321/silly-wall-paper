@@ -200,3 +200,127 @@ add values look wrong on the sheet; 4. anything that looked like a pop.
 - Tail adds are guesses; the sheet in §5.4 is what decides them, then the user on the panel.
 - The angular anchor weighting for film_hue2 uses the same proven anchor list as hue_anchor_weight
   (fluid.cpp ANIM_PALETTE); confirm the offsets are relative to the palette hue, not absolute.
+
+## AUDITOR PRE-FLIGHT (2026-09-27, main 97c3852) — binding
+
+Read-only; no src change between 97c3852 and e4bc274. Where these items and the brief disagree, these items win.
+### A. Architecture (replaces the §4 refactor)
+1. NO "director writes s_base + one copy pass". `s_base` already exists as the int overlay stage (cycle.cpp:71).
+   Writers OUTSIDE CycleTick would be overwritten every frame: BeginSwitch via CycleNext/Prev/Jump/SetEnabled (tray,
+   --cycle-next-at: cycle.cpp:925,936,938,941-942), CycleRevertStage 1673, ApplyPreset main.cpp:2195, and the UI
+   sliders, which point into renderer.Config() (main.cpp:2969; ui_model.cpp:409-411,623-663,803). ApplyStage,
+   FinishLerp, SchemeSwap, SoftPoint and FlipDiscrete read live right after writing it (cycle.cpp:493-498,787,908,994,
+   381), and CycleTick returns early in OFF and WARMUP (1155, 1311). Writers in the tick: LerpLook 1257 (45 floats,
+   312-356), FlipDiscrete 1259, SetAmts 1235-1236, SchemeSwap 1245, FinishLerp 1265, SoftPoint 1217, ApplyStage 1218,
+   journey StartLeg (journey.cpp:187-190). fluid.cpp writes m_cfg only at init and SetResolutions (125, 2609).
+2. BINDING: ADOPT-ON-CHANGE. clocks.cpp keeps {base, lastOut} per clocked key. `ClocksTick(r, dt)` runs right after
+   CycleTick in both loops (main.cpp:3103, 3812), gated `enabled && (g_cycleActive || forced)`. Per key: if live !=
+   lastOut, base = live; then live = lastOut = f(base). With enabled=0 it returns before touching anything, so it is
+   bit-identical. The order CycleTick -> ClocksTick -> SimOnlyStep -> Frame means the warm-up sims factored, at black.
+3. Every snapshot takes the BASE (`ClocksBaseCopy`), or the factors compound: s_from cycle.cpp:758 (else a (F-1)*base
+   pop at lerp start), s_amtFrom 883, s_preOverlay 985/978, the UI TakeSnapshot, and SaveCurrentAsPreset/
+   PersistFullConfigNow main.cpp:2219,2223,2238. Safe as is: ApplyPreset's merge over live, and suspend 3467->3486.
+4. GoOff (cycle.cpp:733) restores base synchronously: ApplyPreset calls CycleManualOverride (main.cpp:2174) before it
+   reads Config (2187).
+5. At F==1, j==1 and offset==0, write base VERBATIM (no multiply, clamp or wrap), so the hold gives live==base exactly.
+   UiDirty compares live to the composed base (ui_model.cpp:530-534); Save writes live (ui_presets.cpp:208,261).
+6. Floats only: build the table from the keys.inc floatPtr rows (ReadAt, ui_model.cpp:317). Never touch the 20 intPtr
+   rows or the bools.
+### B. UI, hold, transitions
+7. No director function knows the Settings window is open, so add `ClocksHold(bool)`: true at create
+   (ui_window.cpp:1902) and on the input re-arm (1496), false ONLY in WM_DESTROY (1537). Not CyclePaused(): that
+   auto-releases at 600 s (cycle.cpp:1768), and "Let it run" (1060,1346) releases it with the window open.
+   Open Q1: hold.
+8. During the hold glide, a `ClocksSettling()` test in UiRowAnimLocked (ui_model.cpp:912) keeps the clocked rows out
+   of dirty and Save-as-partial (532; ui_presets.cpp:261).
+9. Journeys own hue_center, hue_range and dark_floor (ui_model.cpp:931-934), so hold the colour group while
+   JourneyActive(). The BeginLerp bridge aims at s_target.hueCenter (cycle.cpp:763): add the colour offset or log the
+   miss.
+10. Append ANIM_CLOCKS after ANIM_CYCLE (animators.h:41): slots 0-3 keep fluid.h's kAnimClocks=4 arrays (1723-1841)
+    and the ApplyFreezeToRenderer range (cycle.cpp:1023). Add AnimatorName 1750, --shot-freeze (main.cpp:~2847) and
+    the UA_ map (ui_cycle.cpp:248). Give it its own time accumulator; comment the kAnimClocks name clash.
+### C. Key table: every key named here is EXCLUDED unless marked
+11. Ints placed in groups: hueshift_burst_steps (keys.inc:112), sweep_count (198), idle_amount (118), drops.spatter
+    (552). wanderer_scale is read only in ReinitWanderers (fluid.cpp:2626). The inventory's "hot-swap: Yes" column is
+    unreliable.
+12. PHASE-SNAPPING the brief missed (key x absolute time): film_grain_speed (shaders.h:4640), film_hue2_drift
+    (fluid.cpp:3511), rise_speed (shaders.h:2071 via fluid.cpp:5926; 2920), cellulose_drift (shaders.h:2920).
+    Durations: droplet_life (4235), idle_interval (1913), dart_interval (2685), wanderer_resume_delay (1900),
+    drops.tail_sec. Snapping grows with uptime: no 60 s shot or dryrun sees it.
+13. Lattice keys that re-lay out every frame: swarm_scale_drops/holes (shaders.h:2779-2810), film_hue2_seed_rows.
+14. Per-step decays near 1: density/velocity_diffusion and decay_fast. x0.87 clears the dye in ~1 s; x1.2 never
+    decays. Phase 2: vary the half-life.
+15. Positions: light_x/y/z, camera_axis_x/y, camera_focus, dye_depth, focus_tilt_angle, mirror.center_x/y,
+    tone_balance.
+16. NOT excluded but conditional: the sentinels (keys.inc `neg:`, -1 = inherit/complement) dye_droplet_hue/sat/lum and
+    shadow/highlight_tone_hue vary only while base >= 0.
+17. Also excluded: the governor setpoints dark_floor, dark_level, surv_dark_floor, contrast_req (they feed the
+    dark-screen trigger, cycle.cpp:1197-1203); pixel_shift_px (OLED net), dither, band_min; KF_SUPERSEDED dye_masses
+    and dye_droplets (keys.inc:448,450); hue_anchor_weight (FireBurst inverts the warp, cycle.cpp:831-837); vorticity,
+    saturation_restore and bloom by name. Key the table by section.key (there are two `density` keys).
+18. hi = slider max for every key whose max <= 1, and for hue_range. Many are clamped at upload anyway
+    (fluid.cpp:1053), so 1.5x would be inert. lo = slider min.
+19. DIRECTION. Flip: focus_band_px (keys.inc:676), corner_warp_r (670), seam_lo (246), ink.edge_lo (512), ink_levels
+    (186). Do NOT flip halation_threshold (730, "Higher lowers the knee" = more; the brief is wrong), film_level (ABL
+    list only), oil_edge_frac or the size biases. Flip as F' = exp(-sigma*z - sigma^2/2), not 1/F
+    (E[1/F] = 1.094 at sigma 0.30).
+### D. Angles
+20. All degrees. hue_center, post_hue and dye_hue run 0..360; film_hue2/3 run -180..180 (wrap in that convention);
+    oil_penumbra_hue and dye_thick_hue are ±90 signed offsets (multiplicative is fine). There are no ink hue keys.
+    The "exact 0 is never varied" rule is for multiplicative keys only (hue_center 0 = red).
+21. WheelHue subtracts the commanded angle whatever hue_center is (fluid.cpp:2535). The AGENTS invariant holds if the
+    clocks never write m_hueAngle, never call CommandHueShift and never touch hueshift_*.
+22. hue_range >= 179 is the full wheel: hue_center is ignored (fluid.cpp:2536) and the shift cycler runs. Below 179 the
+    rotation glides home a full turn (2766-2782). So never vary hue_range when base >= 179, cap it at 178.9, and never
+    vary post_hue while hue_range < 179 (2768). we-look-live and WE parity have hue_range=180, so "hue_center 0 red
+    home" is INERT on them. "1-2 colours is the norm" needs banded hue_range means: a content call for Fable/user.
+23. film_hue2 is an OFFSET applied after the palette rotation (fluid.cpp:5858-5861). The hue_anchor_weight anchors
+    {325,215,355,275} are ABSOLUTE hues (5323-5338, cycle.cpp:48), so they cannot anchor it. Use the Scheme presets'
+    offsets {180,160,150,125,-40,-45,-105,-120,-140,-145,-160}. angle_max 180 = unbounded.
+### E. Seeding, dryrun, logs, proof
+24. Seed: shots pass --cycle-seed, else --seed (1234), to CycleOverride (main.cpp:2916); live passes 0 (3385), meaning
+    the [cycle] seed, where 0 = wall clock (cycle.cpp:146-148). Expose it. Use your own splitmix stream: never
+    NextRand, never rand().
+25. --clocks-dryrun goes beside --cycle-draw-test (main.cpp:2918-2922): before CycleBoot (2923) and InitOffscreen
+    (2935, the device), return 0. It needs `--shot x.png` (2879). ShotLog appends to a %TEMP% log shared by every
+    concurrent shot (2335-2350): parse your own redirected stdout, and do not pass --console.
+26. Proof fixes. (a) The fast tier has no cycle row (manifest 36-40 are Tier full), and with the cycle off CycleTick
+    returns at 1155: add `-Presets` cycle-final/first/lerp-test plus one ini with `[clocks] enabled=0`. (b) Mean
+    1.00 +- 0.03 over 24 h is ~1.4 SE (~90% chance some group fails): run a 240 h dryrun. (c) 0.02/s contradicts the
+    20 s tail and hold glides (~0.09/s): bound the body only. (d) Calm <= 0.5 tails/h is impossible with tail_gap_max
+    75 (forced >= 0.78/h): Calm gets >= 150; say which groups are active. (e) The "15-min real-time run" would mean a
+    second live instance: use a headless `--shot --cycle --shot-delay 900` plus an in-process max |delta|/frame
+    tracker logged at the [state] site (main.cpp:3154). (f) --clocks-force must tick with the cycle off.
+27. Commands: `tools\preset-identity.ps1 -Exe <wt exe> -Baseline <main file> [-Presets ..]`; `python tools\dxbc-cmp.py
+    <main>\src\shaders.h <wt>\src\shaders.h <wt>\src\acid_slots.h`; slot-check; `keymeta-check -Root <wt>`, which
+    greps key strings only in main.cpp and cycle.cpp, so there are no keys.inc rows for [clocks] in phase 1.
+### F. BX
+28. Branch from today's main and merge BX later: safe. BX touches cycle.cpp only in WantsScheme (+4, ~865), plus
+    fluid.h (+3 floats), main.cpp ini load/save (+3 each), keys.inc (+8), ui_window.cpp (+3 at 1242), the shaders,
+    cycle-final.ini and the manifest. None of that overlaps the CLOCKS touch points listed above. Add the
+    lamp_grey_heart keys to the rig table after the merge (compile dependency), and re-save the identity baseline.
+### G. Brief errors and the cut
+29. §1 "base = CycleStageBase()" is WRONG. It recomposes from DISK on every call, returns the TARGET mid-lerp, has no
+    journey legs and composes an overlay alone (cycle.cpp:1652-1660): never call it per frame. The stage [clocks]
+    blocks and the Clocks tray presets are ignored (Compose and ApplyPreset skip unknown sections, cycle.cpp:385-416,
+    main.cpp:2187), and identity would render a [clocks]-only preset as the defaults: phase 2. `enabled` is global.
+    j_key needs a segment length. group_<name> scales sigma AND the tail weight (counts twice). EXECUTOR-CARD's file
+    map is stale (settings.cpp and moods.cpp are gone; the keys live in src\ui\keys.inc).
+30. Too big for one executor. PHASE 1: items 1-19 and 24-27; multiplicative grain, film (+adds), lens (+adds), lid,
+    rig (strength keys), the splittone and hue2 AMOUNTS, dye (non-sentinel); governor; hold and settling lock;
+    ANIM_CLOCKS; [clocks] from settings.ini or --ini only; dryrun; proofs 1, 2, 3(e) and 5; one sheet
+    (monotone-post-0924, HDR on AND off, F=1 / mode / tail per group). PHASE 2: angular walks and film_hue2
+    anchors, the fluid colour group and the hue_range decision, the fluidsim/oilsim/droplets/ink/mirror groups,
+    per-stage shapes, the Calm/Wild presets, the UI Clocks row, the position/half-life variants, and the
+    we-look-live sheets.
+
+## FABLE DECISIONS on the pre-flight (2026-09-27 00:15) — binding
+- Phase split ACCEPTED as item 30: this executor delivers PHASE 1 only. Phase 2 (angular walks, fluid colour
+  group, sim groups, per-stage shapes, Calm/Wild, UI row, we-look-live sheets) gets its own brief after the
+  hue_range content decision (creative chat + user: banded hue_range means per fluid stage; item 22).
+- Open Q1 (hold): ClocksHold(bool) as item 7, released only in WM_DESTROY. The hold glide is fade_min_s.
+- group_<name> scales sigma only; tail candidate weight is a separate `tailw_<name>` (default 1). Fixes item 29.
+- j_key segment = the group's segment length with its own phase offset (item 29).
+- Proof per item 26: 240 h dryrun, body-only slope bound (tail/hold glides bounded by fade_min_s instead),
+  Calm tail_gap_max 150 (Calm/Wild themselves are phase 2; the dryrun runs the shapes from an --ini).
+- [clocks] read from settings.ini or the --ini file only in phase 1 (item 29); the three Clocks presets are phase 2.

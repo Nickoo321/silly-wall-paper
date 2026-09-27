@@ -13,10 +13,15 @@ Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECI
 - [x] M1 build OK 04:30 (lock won only after BX's queue ended). Dry runs (pre mean-fix, f64e6e5): Base 240 h
       all PASS (1.083 tails/h, min gap 20.2, 0 repeats, body 0.0093/s); Calm-like 0.775/h; Wild-like mean F
       0.94-0.96 FAIL -> fd0da15 solves mu per group so the CLAMPED body has E[F]=1. Re-run dry runs on the rebuilt exe.
-- [~] M2 identity (batch1, running; the clocks side rebuilds first): fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
+- [~] M2 identity: main side DONE (build2\shots\clocks\identity-main-5d9c39b.txt, parity MATCH, clocks-off-test == cycle-final); clocks side queued after 3e: fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
       (C:\Users\abg77\fw-wt\build2, == main src) vs clocks exe; parity; dxbc-cmp; slot/keymeta-check
-- [ ] M3 proof 3e: 900 s headless on clocks-mono-cycle.ini (+ hold / freeze windows)
-- [ ] M4 sheet groups-mono-{hdr,sdr}.png + mean_lum per column
+- [~] M3 proof 3e (running from 07:43, rebuilt exe): 900 s headless on clocks-mono-cycle.ini (+ hold / freeze windows)
+- [x] M4 sheet: main repo build2\shots\live\clocks\groups-mono-{hdr,sdr}.png (+ groups-mono-meanlum.txt).
+      Rendered on the f64e6e5 exe (force columns; mean fix only moves mode F 0.874->0.877). F=1 column md5 ==
+      main's monotone md5 A060338C (verbatim proven). No tail column > 1.25x; hue2 tail inert on monotone
+      (amounts 0, bit-identical); grain tail = blocky macro grain (size keys x2.2) -> recommend dropping
+      grain_scale / film_grain_size / film_noise_size from the tail.
+- [x] Dry runs on the final exe (fd0da15): Base PASS 1.075/h; Calm-like 0.817/h; Wild-like 2.80/h, means PASS.
 - [ ] M5 report
 
 ## Scratch

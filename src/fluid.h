@@ -2089,6 +2089,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPost;
     // brief BN: kPostSrc with BN_OPTICS, built on demand when a BN key is live
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPostBN;
+    // brief BX: kPostSrc with BN_OPTICS + BX_HEART, built on demand when the grey heart is on
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPostHeart;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_postTex;
     D3D12_RESOURCE_STATES m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     D3D12_GPU_DESCRIPTOR_HANDLE m_postSrv = {};

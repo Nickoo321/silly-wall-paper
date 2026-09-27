@@ -748,11 +748,11 @@ float3 DarkSat(float3 c, float lvl) {
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
-// ---- brief BU / BX: LAMP GREY, one Y-flat desaturation, two masks --------
+// ---- brief BU: LAMP GREY (the far corner), one Y-flat desaturation -------
 // The corner (lamp_grey, BU) calls it on the composite right after the film
-// is laid down, with a cool white balance; the centred grey heart
-// (lamp_grey_heart, BX) calls it right before the final trim, neutral, so
-// every rim / halo / lens / glow term on top greys with the film.
+// is laid down, with a cool white balance. (The centred grey heart, BX,
+// used it too until the 2026-09-27 fix round; it now has its own OKLab
+// HeartGrey on the finished colour. liftMul stays: the corner passes 1.0.)
 // gk = desaturation weight 0..1, gkCool = share of the Y-normalised cool
 // white balance, liftMul = linear-light multiplier on the result (1 = none,
 // a literal that folds away at the corner's call).
@@ -809,6 +809,40 @@ float BubLum(float3 x) {
                    dot(float3(-0.01964, -0.07868,  1.09832), x));
     }
     return dot(max(y, 0.0), float3(0.2126, 0.7152, 0.0722));
+}
+
+// ---- brief BX (fix round 2026-09-27): the GREY HEART's own desaturation ---
+// Runs on the FINISHED linear colour, after the post_chroma trim and the
+// gamut stretch (the old site, before the final trim, was re-saturated by
+// both: post_chroma 1.2 scaled the residual chroma while the saturated
+// original clamps at 0, and the stretch's clamp did the same), and in OKLab
+// instead of about linear Y: a Y-flat mix keeps a HUE-DEPENDENT share of the
+// perceived chroma (0.20 yellow .. 0.35 blue at 0.75), OKLab a/b x (1 - g)
+// keeps exactly 1 - g on every hue. The cube root is signed so a stretched
+// colour's negative channels (wide gamut, shown by the QD-OLED and counted by
+// mean_lum) are carried, and g = 0 is the identity. Then a luminance hold on
+// the pixel's own Rec.709 Y of this scRGB value (what the panel emits and
+// what mean_lum sums, negatives included), times the lift.
+float3 HeartGrey(float3 lin, float g, float liftMul) {
+    const float3 W = float3(0.2126, 0.7152, 0.0722);
+    float  yT  = dot(lin, W) * liftMul;
+    float3 lms = float3(dot(float3(0.4122214708, 0.5363325363, 0.0514459929), lin),
+                        dot(float3(0.2119034982, 0.6806995451, 0.1073969566), lin),
+                        dot(float3(0.0883024619, 0.2817188376, 0.6299787005), lin));
+    lms = sign(lms) * pow(abs(lms), 1.0 / 3.0);
+    float3 lab = float3(dot(float3(0.2104542553,  0.7936177850, -0.0040720468), lms),
+                        dot(float3(1.9779984951, -2.4285922050,  0.4505937099), lms),
+                        dot(float3(0.0259040371,  0.7827717009, -0.8086757660), lms));
+    lab.yz *= 1.0 - g;
+    lms = float3(lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z,
+                 lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z,
+                 lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
+    lms = lms * lms * lms;
+    float3 o = float3(dot(float3( 4.0767416621, -3.3077115913,  0.2309699292), lms),
+                      dot(float3(-1.2684380046,  2.6097574011, -0.3413193965), lms),
+                      dot(float3(-0.0041960863, -0.7034186147,  1.7076147010), lms));
+    float  y = dot(o, W);
+    return (abs(y) > 1e-8) ? o * (yT / y) : o;
 }
 
 // ---- the 20x12 hue2 MIX FIELD, one bilinear fetch (brief AE / AJ) --------
@@ -3133,30 +3167,7 @@ R"hlsl(
         float  toeL   = dot(col, float3(0.2126, 0.7152, 0.0722));
         col += inkHue * (0.12 * saturate(LA_TOE_TINT) * (1.0 - smoothstep(0.0, 0.22, toeL)));
     }
-    // ---- brief BX: GREY HEART (lamp_grey_heart) -------------------------
-    // The user: "have a true colour and make it look grayscale in the
-    // middle". The frame keeps its true stage colours; the lamp grey's
-    // Y-flat desaturation (LampGreyY, neutral: no cool) with a CENTRED
-    // elliptical mask hm = 1 - smoothstep(0.3 S, S, r), one long ramp with no
-    // visible core edge, r in half-frame units (x and y each -1..1 over the
-    // frame: edge midpoints r 1, corners r 1.41), from the RAW screen
-    // interpolant i.uv, never the folded uv, so a mirror fold does not move
-    // it. Fitted to the user's own Lightroom radial edit (spec update
-    // 2026-09-25, measured per r bin, OKLab C and linear Y on film): the
-    // lift follows hm itself (x1.45 plateau at lift 0.45, gone at S), the
-    // grey follows sqrt(hm) -- the edit's colour comes back more slowly than
-    // its brightness falls; plain hm left the ramp 0.1-0.15 too colourful.
-    // HERE, after every rim / halo / lens / glow / shadow / toe term, so the
-    // whole centre greys (a B&W print framed by the stage's own colour); the
-    // post_chroma the hold targets is the very next step, and the grain
-    // after it is a scalar. The lift is times alpha (film), so the masses
-    // (and their split tone) never lift. Amount 0 = skipped.
-    [branch] if (LA_HEART_K > 0.0) {
-        float2 hq = i.uv * 2.0 - 1.0;
-        float  hm = 1.0 - smoothstep(0.3 * LA_HEART_SIZE, LA_HEART_SIZE, length(hq));
-        [branch] if (hm > 0.0)
-            col = LampGreyY(col, LA_HEART_K * sqrt(hm), 0.0, 1.0 + LA_HEART_LIFT * hm * alpha);
-    }
+    // (brief BX: the grey heart runs after the gamut stretch below, HeartGrey)
     // ---- final trim: post_chroma / post_lift -----------------------------
     // A transparent film costs perceptual chroma (10-20%) and a little
     // lightness against the same look opaque, measured in OKLab over the
@@ -3299,6 +3310,30 @@ R"hlsl(
             dot(float3(-0.04206,  1.04206,  0.0),     lin),
             dot(float3(-0.01964, -0.07868,  1.09832), lin));
     }
+#ifdef LIQUID_ACID
+    // ---- brief BX: GREY HEART (lamp_grey_heart) ----------------------------
+    // The user: "have a true colour and make it look grayscale in the
+    // middle". A CENTRED elliptical mask hm = 1 - smoothstep(0.3 S, S, r),
+    // r = length(i.uv * 2 - 1) in half-frame units (edge midpoints 1, corners
+    // 1.41), from the RAW screen interpolant (a mirror fold never moves it);
+    // the grey follows sqrt(hm) (fitted to the user's Lightroom radial edit:
+    // its colour returns more slowly than its brightness falls), the lift hm
+    // x alpha (film only: masses never lift). HERE, on the finished linear
+    // colour after the stretch, so nothing downstream in this pass
+    // re-saturates it (HeartGrey). When the [post] pass runs, its bloom /
+    // halation / glow / grain / stock would put colour back into the grey, so
+    // the DESATURATION moves to the end of that pass (kPostSrc, BX_HEART) and
+    // the CPU writes HEART_K = -amount: here only the film lift. 0 = skipped.
+    [branch] if (LA_HEART_K != 0.0) {
+        float2 hq = i.uv * 2.0 - 1.0;
+        float  hm = 1.0 - smoothstep(0.3 * LA_HEART_SIZE, LA_HEART_SIZE, length(hq));
+        [branch] if (hm > 0.0) {
+            float liftMul = 1.0 + LA_HEART_LIFT * hm * alpha;
+            [branch] if (LA_HEART_K > 0.0) lin = HeartGrey(lin, LA_HEART_K * sqrt(hm), liftMul);
+            else                           lin *= liftMul;
+        }
+    }
+#endif
 
     // True HDR ("parity-plus"): the SDR-parity colour above is complete and
     // already clamped, so this gain scales ALL channels together in linear
@@ -3477,6 +3512,32 @@ float3 LidU8(float v) {
     float b = floor(r * (1.0 / 256.0));
     return float3(a, b, r - b * 256.0) * (1.0 / 255.0);
 }
+#ifdef BX_HEART
+// brief BX (fix round): the grey heart's OKLab desaturation, the same maths
+// as the display pass's HeartGrey (no lift here: the display pass lifted the
+// film already), run on this pass's finished colour.
+float3 HeartGreyP(float3 lin, float g) {
+    const float3 W = float3(0.2126, 0.7152, 0.0722);
+    float  yT  = dot(lin, W);
+    float3 lms = float3(dot(float3(0.4122214708, 0.5363325363, 0.0514459929), lin),
+                        dot(float3(0.2119034982, 0.6806995451, 0.1073969566), lin),
+                        dot(float3(0.0883024619, 0.2817188376, 0.6299787005), lin));
+    lms = sign(lms) * pow(abs(lms), 1.0 / 3.0);
+    float3 lab = float3(dot(float3(0.2104542553,  0.7936177850, -0.0040720468), lms),
+                        dot(float3(1.9779984951, -2.4285922050,  0.4505937099), lms),
+                        dot(float3(0.0259040371,  0.7827717009, -0.8086757660), lms));
+    lab.yz *= 1.0 - g;
+    lms = float3(lab.x + 0.3963377774 * lab.y + 0.2158037573 * lab.z,
+                 lab.x - 0.1055613458 * lab.y - 0.0638541728 * lab.z,
+                 lab.x - 0.0894841775 * lab.y - 1.2914855480 * lab.z);
+    lms = lms * lms * lms;
+    float3 o = float3(dot(float3( 4.0767416621, -3.3077115913,  0.2309699292), lms),
+                      dot(float3(-1.2684380046,  2.6097574011, -0.3413193965), lms),
+                      dot(float3(-0.0041960863, -0.7034186147,  1.7076147010), lms));
+    float  y = dot(o, W);
+    return (abs(y) > 1e-8) ? o * (yT / y) : o;
+}
+#endif
 // brief BD's four 6-bit fields, most significant first:
 // grainChroma | grainDensity | fogMassGate | aberrCoc.
 float4 BDU6(float v) {
@@ -4720,6 +4781,21 @@ R"hlsl(
         float  gain = clamp(dot(base, W) / max(dot(l0, W), 1e-4), 1.0, 16.0);
         d = max(d + (l2 - l0) * gain * sdrS, min(d, 0.0));
     }
+#ifdef BX_HEART
+    // ---- brief BX: GREY HEART, the desaturation (fix round) --------------
+    // The last colour op of the frame (only the dither follows), so nothing
+    // re-saturates the grey: rg1.y fields 3/4 = amount, (size - 0.8) / 1.4.
+    // Same mask as the display pass (which lifted the film already).
+    {
+        const float4 hxK = BDU6(rg1.y);
+        [branch] if (hxK.z > 0.0) {
+            float  hS = 0.8 + 1.4 * hxK.w;
+            float2 hq = i.pos.xy * pp0.xy * 2.0 - 1.0;
+            float  hm = 1.0 - smoothstep(0.3 * hS, hS, length(hq));
+            [branch] if (hm > 0.0) d = HeartGreyP(d, hxK.z * sqrt(hm));
+        }
+    }
+#endif
     // ---- OUTPUT DITHER (item V0) -----------------------------------------
     // The frame leaves here as FP16, but the panel quantises it to 10 bits in
     // a perceptual domain, and on a big saturated flat -- which is most of

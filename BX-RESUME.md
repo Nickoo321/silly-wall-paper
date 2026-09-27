@@ -31,3 +31,22 @@
 - Findings: mean_lum at lift 0 is -3..-4.5% (target 1%: fails; 709 hold vs gamut-2 clamp bonus); magenta (hue 325) preset keeps 0.50 chroma / x1.22
   in the centre vs the edit's 0.25 / x1.43 (yellow monotone at size 1.3 matches the table within ~0.05).
 - [x] 10:42 redo done (bc-k75 069226..., mc-k75 834676...); sheets rebuilt into live\bx (6 sheets); FEATURES rows final; committing.
+- [ ] 2026-09-27 10:45 FIX ROUND (Fable): heart moved AFTER the gamut stretch as an OKLab a/b x (1-g) desaturation
+      (HeartGrey, shaders.h) + hold on the scRGB 709 Y (what mean_lum sums) x lift. LampGreyY (corner) untouched.
+      Cause found: Y-flat linear desat keeps a hue-dependent OKLab share (CPU: 0.20 yellow / 0.32 magenta / 0.35 blue at 0.75),
+      then post_chroma 1.2 (shaders.h final trim) and the gamut-2 stretch + clamp add ~+0.07 more.
+      slot-check PASS, dxbc fluid/ink IDENTICAL. v1 outputs of the 18 re-rendered jobs moved to bx\r_v1\.
+      fix-queue.ps1 launched 10:48 (detached, log bx\fix.log): build under lock (waiting on CLOCKS' lock), 18 renders
+      (jobs-fix.txt), then identity bx vs identity-main-8881adb.txt -> id-bx2.log. Corner proof: mono-off md5 before
+      a060338c929af4ec409df324ad4cc49d (r_v1\mono-off.png) must equal the new r\mono-off.png.
+- [!] 12:43 v2 (display-pass OKLab heart after the stretch) built + rendered: corner/heart-0 mono-off md5 A060338C... UNCHANGED,
+      but plateau kept 0.342 (lift 0) / 0.389 (preset) on yellow; amount 1 residual 0.071; lift-0 mean_lum -1.3/-1.8%.
+      Cause: the [post] pass (bloom warmth, halation warmth, glow, grain chroma, film stock) re-adds colour + luminance.
+- [x] v3 (13:18 exe): desaturation moved to the END of kPostSrc (BX_HEART variant = BN_OPTICS + BX_HEART PSO, on demand,
+      fields 3/4 of rg1.y = amount, (size-0.8)/1.4); display pass does only the film lift when [post] runs
+      (HEART_K written negative), the full OKLab heart when it does not. dxbc: display fluid/ink IDENTICAL, post base and
+      BN PSOs IDENTICAL to main, heart variant compiles. slot-check PASS. v2 outputs in bx\r_v2\.
+      Incident: the v2 queue's identity step failed to create its scratch dir (my stop trick) and would have sat 20 min/row
+      holding the lock; I built v3 during that idle wait and turned id-bx2 into a dir, so that identity run now renders
+      the 14 rows with the v3 exe (parity row = TIMEOUT; parity re-rendered as job parity-v3 in fix-queue3).
+      fix-queue3.ps1 (render-only, jobs-fix3.txt, log fix.log) waits for that identity to release the lock.

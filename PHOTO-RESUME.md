@@ -23,9 +23,14 @@ sheets -> MAIN repo build2\shots\live\photo\.
 - [x] M2 identity (18:19): photo exe ad2b421-build vs main bc4c6ef exe: 19/19 UNCHANGED (parity + 14 fast rows +
       cycle-final/first/lerp-test + clocks-off-test), parity MATCH 835AECBD; cycle-photo-test NEW 5147ADA1FDD3DDA8B15E75485F4C477E;
       dxbc IDENTICAL x3, slot-check PASS, keymeta-check OK (M0).
-- [ ] M3 photo sheets HDR on/off + numbers.txt (item 33)
-- [ ] M4 empty-folder skip + re-scan; notjpeg + 30 MB JPEG + max frame; alternation draw test
-- [ ] M5 report
+- [x] M3 sheets (18:19-18:34): cycle-photo-test 2560x1440, HDR on AND off: 7/7 PASS each (max_scRGB 3.000 / 1.000,
+      above_sdr_white 0.00 %, bar/ramp centres |d| <= 1, box bytes 0, fill seam row 911 (912 expected, Fant edge),
+      grey16 2560 pq levels vs grey8 256). MAIN repo build2\shots\live\photo\sheet-{hdr,sdr}.png + numbers.txt.
+- [x] M4 p4: empty folder -> skip line, ink -> WE with a normal fade; a file dropped mid-run is shown at the next
+      visit (no restart). p5: notjpeg.jpg skipped (0x88982F50) -> fallback to WE at black; big-30mb.jpg 4500x3000 ->
+      2160x1440 decode 229 ms upload 3.9 ms; max frame in its load window 1.80 ms vs 0.98 ms baseline.
+      p6 draw test: WE-alternation breaks 0, overlay-after-photo 0, photo-after-photo 0 (20000 draws).
+- [x] M5 report handed back.
 
 ## Queue (background, BelowNormal, --shot-yield 30)
 - job-main-identity.ps1: fw-wt checkout bc4c6ef + build + identity (parity + fast rows + cycle-final/

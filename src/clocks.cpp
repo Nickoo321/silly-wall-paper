@@ -48,20 +48,22 @@ enum : unsigned {
     K_REEL1 = 4,    // slot-gated by a hash < amount per film REEL: commit only when the reel
     K_REEL3 = 8,    //   re-rolls (hairs: film_artefact_rate, scratches x3, leak x5), so an
     K_REEL5 = 16,   //   amount change never pops a hair / scratch / leak in mid-life
+    K_NOTAIL = 32,  // a SIZE / reach key, not a strength (Fable 2026-09-27): wanders with its group's
+                    //   BODY but holds its body value through the group's tail excursion
 };
 struct Spec { const char* sec; const char* key; int group; unsigned flags; };
 const Spec kSpec[] = {
     // grain (10). Out: dither (pre-flight 17), film_grain_fps + film_grain_speed (phase-snapping, 12).
     { "liquid_acid", "grain",               GR_GRAIN, 0 },
-    { "liquid_acid", "grain_scale",         GR_GRAIN, 0 },
+    { "liquid_acid", "grain_scale",         GR_GRAIN, K_NOTAIL },
     { "liquid_acid", "grain_shadow_weight", GR_GRAIN, 0 },
     { "post", "film_grain",                 GR_GRAIN, 0 },
     { "post", "film_grain_chroma",          GR_GRAIN, 0 },
     { "post", "film_grain_color",           GR_GRAIN, 0 },
     { "post", "film_grain_density",         GR_GRAIN, 0 },
-    { "post", "film_grain_size",            GR_GRAIN, 0 },
+    { "post", "film_grain_size",            GR_GRAIN, K_NOTAIL },
     { "post", "film_noise",                 GR_GRAIN, 0 },
-    { "post", "film_noise_size",            GR_GRAIN, 0 },
+    { "post", "film_noise_size",            GR_GRAIN, K_NOTAIL },
     // film (9). Out: film_artefact_rate (phase-snapping), lid_scratch_corner (a placement),
     // lid_scratch_density + lid_scratch_len (a STATIC hash < amount population on the lid:
     // every step pops a fixed scratch / a 300-1000 px gouge in or out, forever).
@@ -91,17 +93,17 @@ const Spec kSpec[] = {
     { "post", "corner_warp_r",              GR_LENS, K_FLIP },
     { "post", "fog",                        GR_LENS, 0 },
     { "post", "fog_mass_gate",              GR_LENS, 0 },
-    { "post", "fog_px",                     GR_LENS, 0 },
+    { "post", "fog_px",                     GR_LENS, K_NOTAIL },
     { "post", "halation",                   GR_LENS, K_ABL },
-    { "post", "halation_px",                GR_LENS, 0 },
+    { "post", "halation_px",                GR_LENS, K_NOTAIL },
     { "post", "halation_threshold",         GR_LENS, K_ABL },
     { "post", "halation_warmth",            GR_LENS, 0 },
     { "post", "halo",                       GR_LENS, 0 },
-    { "post", "halo_px",                    GR_LENS, 0 },
+    { "post", "halo_px",                    GR_LENS, K_NOTAIL },
     { "post", "post_blur_px",               GR_LENS, 0 },
     { "post", "post_glow",                  GR_LENS, 0 },
     { "post", "post_glow_dark",             GR_LENS, 0 },
-    { "post", "post_glow_px",               GR_LENS, 0 },
+    { "post", "post_glow_px",               GR_LENS, K_NOTAIL },
     { "post", "shimmer",                    GR_LENS, 0 },
     { "post", "shimmer_px",                 GR_LENS, 0 },
     { "post", "softness",                   GR_LENS, 0 },
@@ -116,7 +118,7 @@ const Spec kSpec[] = {
     { "post", "lid_refract_px",             GR_LID, 0 },
     { "post", "lid_rings",                  GR_LID, 0 },
     { "post", "lid_sheen",                  GR_LID, 0 },
-    { "post", "lid_sheen_px",               GR_LID, 0 },
+    { "post", "lid_sheen_px",               GR_LID, K_NOTAIL },
     // rig: STRENGTH keys only (15). Out: the positions light_x/y/z, camera_axis_x/y,
     // camera_focus, focus_tilt_angle (pre-flight 15); the times focus_tilt_move_s,
     // focus_tilt_period; the extents lamp_grey_size, oil_fluor_reach, oil_penumbra_px,
@@ -306,6 +308,7 @@ struct GroupState {
     float  fFrom = 1.0f, fTo = 1.0f, gFrom = 1.0f, gTo = 1.0f;
     float  tailF = 1.0f, tailG = 1.0f;
     float  F = 1.0f, G = 1.0f, E = 0.0f;
+    float  bF = 1.0f, bG = 1.0f;          // the BODY value (K_NOTAIL keys): held through a tail
     bool   active = true;                 // the look reads it: tails + adds allowed
     long   draws = 0, tails = 0;
 };
@@ -501,6 +504,14 @@ struct Sched {
                 break;
             }
             }
+            // K_NOTAIL keys follow the body only: frozen at the tail's start value during the
+            // tail, gliding to the out target with the tail's exit, i.e. the body never jumps
+            if (s.phase == PH_BODY) { s.bF = s.F; s.bG = s.G; }
+            else if (s.phase == PH_TAIL_OUT) {
+                const float u = Smooth((float)(s.t / p.fadeS));
+                s.bF = Lerp(s.fFrom, s.fTo, u);
+                s.bG = Lerp(s.gFrom, s.gTo, u);
+            } else { s.bF = s.fFrom; s.bG = s.gFrom; }
         }
     }
 };
@@ -549,6 +560,7 @@ double      s_holdAt = 0.0;              // s_clock when the current hold began
 bool        s_forced = false;
 bool        s_forceGroup[GR_COUNT] = {};
 float       s_forceF[GR_COUNT], s_forceG[GR_COUNT], s_forceE[GR_COUNT];
+bool        s_forceTail[GR_COUNT] = {};   // forced "tail": K_NOTAIL keys stay at the body (F = 1)
 
 float* At(FluidConfig& c, ptrdiff_t off) { return reinterpret_cast<float*>(reinterpret_cast<char*>(&c) + off); }
 
@@ -636,18 +648,19 @@ void Build() {
         const float amt = TailAdd(s_ini, k.spec->key, 0.0f);
         if (amt != 0.0f) { k.addGroup = k.spec->group; k.add = amt; }
     }
-    int per[GR_COUNT] = {}, adds = 0, flips = 0, abl = 0, reels = 0;
+    int per[GR_COUNT] = {}, adds = 0, flips = 0, abl = 0, reels = 0, notail = 0;
     for (const Key& k : s_keys) {
         per[k.spec->group]++;
         if (k.addGroup >= 0 && k.add != 0.0f) adds++;
         if (k.spec->flags & K_FLIP) flips++;
         if (k.spec->flags & K_ABL) abl++;
         if (k.reelMul) reels++;
+        if (k.spec->flags & K_NOTAIL) notail++;
     }
     Log("[clocks] table: %d keys (grain %d, film %d, lens %d, lid %d, rig %d, splittone %d, hue2 %d, dye %d); "
-        "%d flipped, %d ABL-capped, %d reel-quantised, %d tail adds%s\n",
+        "%d flipped, %d ABL-capped, %d reel-quantised, %d body-only (no tail), %d tail adds%s\n",
         (int)s_keys.size(), per[GR_GRAIN], per[GR_FILM], per[GR_LENS], per[GR_LID], per[GR_RIG],
-        per[GR_SPLITTONE], per[GR_HUE2], per[GR_DYE], flips, abl, reels, adds, bad ? " -- TABLE ERRORS above" : "");
+        per[GR_SPLITTONE], per[GR_HUE2], per[GR_DYE], flips, abl, reels, notail, adds, bad ? " -- TABLE ERRORS above" : "");
     s_buildOk = bad == 0;
 }
 
@@ -789,6 +802,7 @@ bool ClocksForce(const wchar_t* spec) {
             }
             s_forceGroup[g] = true;
             s_forceF[g] = F; s_forceG[g] = G; s_forceE[g] = E;
+            s_forceTail[g] = !_wcsicmp(val.c_str(), L"tail") || F > s_p.tailAt;
             Log("[clocks] --clocks-force %s F=%.4f G=%.4f adds=%.0f%%\n", kGroupName[g], F, G, E * 100.0f);
         }
     }
@@ -852,12 +866,14 @@ void ClocksTick(FluidRenderer& r, float dt) {
         const GroupState& gs = s_sched.g[gi];
         float Fk, jk, Ek;
         if (s_forced) {
-            if (s_forceGroup[gi]) Fk = (k.spec->flags & K_FLIP) ? s_forceG[gi] : s_forceF[gi];
+            if (s_forceGroup[gi] && (k.spec->flags & K_NOTAIL) && s_forceTail[gi]) Fk = 1.0f;
+            else if (s_forceGroup[gi]) Fk = (k.spec->flags & K_FLIP) ? s_forceG[gi] : s_forceF[gi];
             else Fk = 1.0f;
             jk = 1.0f;
             Ek = (k.addGroup >= 0 && s_forceGroup[k.addGroup]) ? s_forceE[k.addGroup] : 0.0f;
         } else {
-            Fk = (k.spec->flags & K_FLIP) ? gs.G : gs.F;
+            if (k.spec->flags & K_NOTAIL) Fk = (k.spec->flags & K_FLIP) ? gs.bG : gs.bF;
+            else                          Fk = (k.spec->flags & K_FLIP) ? gs.G : gs.F;
             jk = k.j;
             Ek = k.addGroup >= 0 ? s_sched.g[k.addGroup].E : 0.0f;
         }

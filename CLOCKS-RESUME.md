@@ -15,7 +15,10 @@ Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECI
       0.94-0.96 FAIL -> fd0da15 solves mu per group so the CLAMPED body has E[F]=1. Re-run dry runs on the rebuilt exe.
 - [~] M2 identity: main side DONE (build2\shots\clocks\identity-main-5d9c39b.txt, parity MATCH, clocks-off-test == cycle-final); clocks side queued after 3e: fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
       (C:\Users\abg77\fw-wt\build2, == main src) vs clocks exe; parity; dxbc-cmp; slot/keymeta-check
-- [~] M3 proof 3e (running from 07:43, rebuilt exe): 900 s headless on clocks-mono-cycle.ini (+ hold / freeze windows)
+- [x] M3 proof 3e (build2/shots/clocks/p3e/mono900.log, 900 s, 1280x720, seed 1234): 2 forced tails (hue2 inert on
+      monotone, lens F 2.70 + adds), shortest glide 20.0 s; max per frame body 2.7e-5 x base (0.0040/s),
+      tail 0.172/s and hold glide 0.174/s (post_blur_px, bounded by fade_min 20 s), reel steps only at re-rolls.
+      Hold 600 s -> settled 31.2 s later (reel keys wait for their reel); release 700; freeze/unfreeze 760/820 logged.: 900 s headless on clocks-mono-cycle.ini (+ hold / freeze windows)
 - [x] M4 sheet: main repo build2\shots\live\clocks\groups-mono-{hdr,sdr}.png (+ groups-mono-meanlum.txt).
       Rendered on the f64e6e5 exe (force columns; mean fix only moves mode F 0.874->0.877). F=1 column md5 ==
       main's monotone md5 A060338C (verbatim proven). No tail column > 1.25x; hue2 tail inert on monotone

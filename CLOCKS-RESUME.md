@@ -13,7 +13,7 @@ Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECI
 - [x] M1 build OK 04:30 (lock won only after BX's queue ended). Dry runs (pre mean-fix, f64e6e5): Base 240 h
       all PASS (1.083 tails/h, min gap 20.2, 0 repeats, body 0.0093/s); Calm-like 0.775/h; Wild-like mean F
       0.94-0.96 FAIL -> fd0da15 solves mu per group so the CLAMPED body has E[F]=1. Re-run dry runs on the rebuilt exe.
-- [~] M2 identity: main side DONE (build2\shots\clocks\identity-main-5d9c39b.txt, parity MATCH, clocks-off-test == cycle-final); clocks side queued after 3e: fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
+- [x] M2 identity: 19/19 UNCHANGED (clocks exe fd0da15 build vs main exe); main side (build2\shots\clocks\identity-main-5d9c39b.txt, parity MATCH, clocks-off-test == cycle-final); parity MATCH 835AECBD on both; dxbc IDENTICAL x3, slot-check + keymeta-check PASS: fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
       (C:\Users\abg77\fw-wt\build2, == main src) vs clocks exe; parity; dxbc-cmp; slot/keymeta-check
 - [x] M3 proof 3e (build2/shots/clocks/p3e/mono900.log, 900 s, 1280x720, seed 1234): 2 forced tails (hue2 inert on
       monotone, lens F 2.70 + adds), shortest glide 20.0 s; max per frame body 2.7e-5 x base (0.0040/s),
@@ -25,7 +25,7 @@ Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECI
       (amounts 0, bit-identical); grain tail = blocky macro grain (size keys x2.2) -> recommend dropping
       grain_scale / film_grain_size / film_noise_size from the tail.
 - [x] Dry runs on the final exe (fd0da15): Base PASS 1.075/h; Calm-like 0.817/h; Wild-like 2.80/h, means PASS.
-- [ ] M5 report
+- [x] M5 report handed back. UI-side hold wiring (window create/input/WM_DESTROY) untested headless: ui-dump has no renderer.
 
 ## Scratch
 - scripts + logs: %TEMP%\claude\...\scratchpad\clocks\ (gpujob.ps1 = one command under the lock)

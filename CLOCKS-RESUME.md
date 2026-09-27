@@ -40,3 +40,11 @@ Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECI
   (population), film_equal_load(_patches), hue2 layout/rate keys, rig extents/times.
 - Reel-quantised: film_hairs / film_scratches / film_leak commit only at their reel re-roll
   (shader gates each slot by hash < amount per reel -> a ramp would pop a hair in mid-life).
+
+## Fable change 2026-09-27 10:35 (done, 8c6b999)
+- K_NOTAIL: grain_scale, film_grain_size, film_noise_size + the lens/lid reach keys fog_px, halation_px,
+  halo_px, post_glow_px, lid_sheen_px follow the group BODY only (hold their body value through a tail).
+- 240 h dryrun (defaults, seed 1234): summary byte-identical to before (1.075 tails/h, RESULT PASS).
+- Sheet: grain, lens, lid tail columns re-rendered (HDR on/off) and recomposed; grain tail mean_lum
+  0.7418 HDR / 0.2473 SDR (1.006x F=1), lens 0.879x, lid 1.003x.
+- Identity vs main: 19/19 UNCHANGED, parity MATCH.

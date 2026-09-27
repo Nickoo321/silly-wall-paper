@@ -79,6 +79,7 @@ foreach ($s in $Seeds) {
     try {
         $p = Start-Process -FilePath $Exe -ArgumentList $argStr -PassThru -NoNewWindow `
                            -RedirectStandardOutput $log -RedirectStandardError "$stem.err"
+        $null = $p.Handle   # cache the handle, or ExitCode reads empty after WaitForExit
         try { $p.PriorityClass = 'BelowNormal' } catch {}
         $p.WaitForExit()
     } finally {

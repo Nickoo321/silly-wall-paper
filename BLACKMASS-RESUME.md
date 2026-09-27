@@ -28,7 +28,9 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
     first, the preset-identity composition) + tools\black-share.ps1 (BelowNormal, lock per seed, 1280x720,
     series 31:10 from T0 30, yield 30, png-only, per-seed mean/min/max + mean of means, summary.txt).
   - dxbc-cmp vs main 14b01aa shaders.h: IDENTICAL x6 (shaders.h untouched); slot-check PASS; keymeta-check OK.
-- [ ] M1 build (lock) + smoke; main exe rebuilt at 14b01aa
+- [x] M1 19:49 build OK (lock), fw-wt moved to 14b01aa + rebuilt; smoke monotone 1280x720 seed 1234 t=10/15/20:
+      black 4.0/9.2/6.5 %, 34 ms/frame at yield 30 (a 330 s series = ~27 min/seed). Black masses render ~14/255
+      (counted); kind-0 droplet interiors ~35-50 (partly above 40, so droplets are undercounted by the metric).
 - [ ] M2 MEASURE FIRST: monotone-post-0924 + acid-rise-12 black % (300 s, 3 seeds, HDR on; HDR off once)
 - [ ] M3 turnover: two-run md5 at 90; the range sheet
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
@@ -43,3 +45,8 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
   half a turnover period ago). Reason: a fresh grow-in parks under the bottom edge fully grown (spawn_grow_s 4 vs a
   ~25 s climb into view), is "clear of the frame" and would be retired before ever being seen, so the standing
   population would never turn over. Among the seeded cohort (all born 0) the pre-flight order holds exactly.
+
+## Queue (scratchm\q3.ps1, running from 19:53)
+M2 (monotone on x3, acid-rise-12 on x3, monotone off x1) -> M3 det (t90 a/b + t0, blob_count 80, 150 s) ->
+screening round 1 (seed 1234): FG1-3 (blob_count 80, turnover 90, 3-5 big holes, T0 90), LR1-3 (threshold/support),
+SF1-3 (thin film threshold, droplets up, ink_frac down). Log scratchm\q3.log.

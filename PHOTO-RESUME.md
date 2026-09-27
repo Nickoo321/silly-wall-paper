@@ -15,7 +15,11 @@ sheets -> MAIN repo build2\shots\live\photo\.
       --photos, shot logger/sync, frame timing), app_state.h, CMakeLists.txt; test images +
       tools\photo-stage-images.py; reference\configs\photo-stage.ini, cycle-photo-test.ini,
       photo-test\*.ini; manifest rows; FEATURES.md rows.
-- [ ] M1 build + smoke (cycle-photo-test 1280x720)
+- [x] M1 build OK 16:11 (e694e60); smoke cycle-photo-test 1280x720 t=19/33: bars-16x9 + bars-4x3 shown,
+      max_scRGB 3.000, above_sdr_white 0.00%, pillarbox correct; decode 9-11 ms; first load window max frame
+      16.6 ms = the one-time lazy kPhotoSrc compile (16 ms, at black), second window 0.87 ms vs 0.55 baseline.
+- [x] main-side identity (fw-wt rebuilt on bc4c6ef): scratch\identity-main-bc4c6ef.txt, parity MATCH.
+- [x] proof 6 draw test (no GPU): tier mode 20000 draws, WE-alternation breaks 0, overlay-after-photo 0.
 - [ ] M2 identity: main exe (fw-wt rebuilt on bc4c6ef) vs photo exe, parity, dxbc, slot/keymeta
 - [ ] M3 photo sheets HDR on/off + numbers.txt (item 33)
 - [ ] M4 empty-folder skip + re-scan; notjpeg + 30 MB JPEG + max frame; alternation draw test

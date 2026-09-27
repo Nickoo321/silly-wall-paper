@@ -60,7 +60,7 @@ def main():
         with open(os.path.join(d, 'notjpeg.jpg'), 'w') as f:
             f.write('this is not a JPEG: a text file with a .jpg name (brief BY proof 5)\n')
         rng = np.random.default_rng(1234)
-        w, h = 6000, 4000                         # ~30 MB of incompressible noise at q95
+        w, h = 4500, 3000                         # ~31 MB of incompressible noise at q95 (4:4:4)
         a = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
         p = os.path.join(d, 'big-30mb.jpg')
         Image.fromarray(a).save(p, quality=95, subsampling=0)

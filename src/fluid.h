@@ -878,19 +878,18 @@ struct LiquidAcidConfig {
     float lampGrey      = 0.0f;     // 0..1, 0 = today            lamp_grey
     float lampGreySize  = 0.40f;    // 0.25..0.6 screen heights   lamp_grey_size
     float lampGreyCool  = 0.20f;    // 0..1                       lamp_grey_cool
-    // --- brief BX: GREY HEART (display pass, acid PSO only) ----------------
-    // The same Y-flat desaturation (shared LampGreyY) with a CENTRED
-    // elliptical mask hm = 1 - smoothstep(0.3 x size, size, r), r in
-    // half-frame units (x and y each -1..1 over the frame; edge midpoints 1,
-    // corners 1.41): one long ramp, no visible core edge. The grey weight is
-    // amount x sqrt(hm), the lift weight hm (fitted per r bin to the user's
-    // Lightroom radial edit: its colour returns more slowly than its
-    // brightness falls). Applied right before the final trim, neutral (no
-    // cool), so the middle reads greyscale and the stage's true colour
-    // survives around it. Lift: the greyed FILM's linear luminance x
-    // (1 + lift x hm x alpha), independent of the amount (0.45 = x1.45 in the
-    // middle, the edit's plateau); masses never lift. Size/lift defaults =
-    // the user's edit scaled 1.3x (spec update). Amount 0 = today (skipped).
+    // --- brief BX: GREY HEART (acid look) ---------------------------------
+    // An OKLab desaturation (a/b x (1 - g), luminance held on the scRGB Y)
+    // with a CENTRED elliptical mask hm = 1 - smoothstep(0.3 x size, size, r),
+    // r in half-frame units (edge midpoints 1, corners 1.41): one long ramp,
+    // no visible core edge; g = amount x sqrt(hm) (fitted per r bin to the
+    // user's Lightroom radial edit). The LAST colour op of the frame: at the
+    // end of the [post] pass when it runs (BX_HEART post PSO), else in the
+    // display pass after the gamut stretch; so the kept chroma is the same on
+    // every hue. Lift (display pass): the FILM's luminance x (1 + lift x hm x
+    // alpha), independent of the amount (0.45 = x1.45 in the middle, the
+    // edit's plateau); masses never lift. Size/lift defaults = the user's edit
+    // scaled 1.3x (spec update). Amount 0 = today (skipped).
     float lampGreyHeart     = 0.0f;   // 0..1, 0 = today          lamp_grey_heart
     float lampGreyHeartSize = 1.7f;   // 0.8..2.2 half-frames     lamp_grey_heart_size
     float lampGreyHeartLift = 0.45f;  // 0..0.8                   lamp_grey_heart_lift

@@ -50,3 +50,16 @@
       holding the lock; I built v3 during that idle wait and turned id-bx2 into a dir, so that identity run now renders
       the 14 rows with the v3 exe (parity row = TIMEOUT; parity re-rendered as job parity-v3 in fix-queue3).
       fix-queue3.ps1 (render-only, jobs-fix3.txt, log fix.log) waits for that identity to release the lock.
+- [x] 14:39 identity with the v3 exe (id-bx2.log): 14 unchanged vs identity-main-8881adb.txt incl. monotone-post-0924
+      (= mono-off, corner lamp_grey 0.6 on: A060338C929AF4EC409DF324AD4CC49D, same as before the fix) and WE parity (fluid)
+      preset 835AECBD...; the we-look-live row TIMEOUT (scratch-dir incident) -> job parity-v3 re-renders it.
+      fix3 queue waiting: lock taken by "PHOTO main-identity" at 14:39.
+- [x] v3 renders so far (fix.log): parity-v3 835AECBD... MATCH; mono-off A060338C... UNCHANGED (corner proof);
+      mono-k75 plateau kept 0.286 (pq) / 0.284 (png); bc-k75 0.279 / 0.287; mono amount 1 lift 0 C 0.0002;
+      mono lift 0 mean_lum +0.00% (0.75 and 1). 16:43 PHOTO took the lock between my renders; queue resumes after.
+- [x] 19:49 FIX ROUND DONE (v3 exe 13:18): acceptance met. Plateau kept at the preset 0.75/1.7/0.45 (OKLab C from -pq.png,
+      flat film r<0.51): mono 0.286, Blue Coral 0.279, magenta 325 0.271 (png .284/.287/.273); amount 1 lift 0: C 0.0002 on all
+      three; lift-0 mean_lum mono +0.00% (0.75 and 1), Blue Coral -0.03% (0.75 and 1), magenta +0.00% (1). parity-v3 835AECBD MATCH;
+      mono-off A060338C unchanged; identity (v3) 14 unchanged. Preset mean_lum now +35.5 / +35.2 / +34.2%.
+      Sheets regenerated: live\bx\heart-vs-user.png, heart-home-4.png, ab-lamp_grey_heart.png. STALE (v1 renders):
+      ab-lamp_grey_heart_lift.png, ab-lamp_grey_heart_size.png, heart-sdr.png. FEATURES rows + fluid.h comment updated.

@@ -47,6 +47,24 @@
            Note = 'brief CLOCKS --clocks-dryrun shape: Calm-like governor, tail_gap_max 150 ([clocks] only, never rendered)' }
         @{ Path = 'reference\configs\clocks-dryrun-wild.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
            Note = 'brief CLOCKS --clocks-dryrun shape: Wild-like, sigma 0.42 / tail_at 1.6 / tail_gap_min 10 ([clocks] only, never rendered)' }
+        @{ Path = 'reference\configs\cycle-photo-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'fast'
+           Note = 'brief BY PHOTO-STAGE proof cycle (order=fixed, jitter 0): we-look-live 5 s, then one photo stage per reference\photos-stage case at 10 s; the 60 s frame is the grey16 photo mid-dwell (decode joined at black under --shot, so frame-deterministic)' }
+        @{ Path = 'reference\configs\photo-stage.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: THE photo stage file ([photo] folder= empty = default photos folder); only meaningful as a [cycle] stage -- under --ini it renders the default fluid look, so no identity' }
+        @{ Path = 'reference\configs\photo-test\bars-16x9.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\bars-21x9.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\bars-4x3.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\fill-4x3.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\grey16.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\grey8.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
+        @{ Path = 'reference\configs\photo-test\offsize.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief BY: a cycle-photo-test.ini photo stage ([photo] only); its identity is cycle-photo-test' }
         @{ Path = 'reference\configs\cycle-lerp-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'proof config for the fluid->fluid LERP + journey stage type (order=fixed, 3 x 20 s stages: we-look-live, WE journey - Aurora over stage_2_base=we-look-live.ini, acid-rise-12); the 60 s frame lands just into stage 3' }
         @{ Path = 'reference\configs\eyes-diff015.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'

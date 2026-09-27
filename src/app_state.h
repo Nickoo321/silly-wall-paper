@@ -21,6 +21,7 @@ void ApplyPresetPath(const std::wstring& path);
 void LoadConfigFromFile(const wchar_t* ini, FluidConfig& cfg);  // partial overlay load
 void SaveCurrentAsPresetFile();     // auto-named snapshot
 void GetPresetsDirectory(wchar_t out[MAX_PATH]);
+void GetPhotosDirectory(wchar_t out[MAX_PATH]);    // brief BY: dirname(settings.ini)\photos
 void PersistShellSettings();        // pauses/HDR/cycle keys -> settings.ini
 void PersistFullConfigNow();        // full live config -> settings.ini
 // full-config ini writer (main.cpp). includeShell=false skips the machine/

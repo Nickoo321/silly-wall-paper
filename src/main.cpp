@@ -54,6 +54,11 @@
 //                      An entry b@s also sets that field's film_hue2_scale s.
 //   --cover-seeds N    run every --cover-sweep entry over N noise seeds (the
 //                      value-noise lattice; seed 0 = the live field's noise)
+//   --photos <dir>     brief BY: the folder an EMPTY [photo] folder= means in
+//                      this shot run (without it a --shot run has no default
+//                      photos folder, so identity never depends on the user's
+//                      photos). A photo stage's decode is JOINED at the black
+//                      point under --shot (frame-deterministic).
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -80,6 +85,7 @@
 #include "app_state.h"
 #include "cycle.h"
 #include "clocks.h"
+#include "photo.h"
 #include "animators.h"
 #include "ui/ui_model.h"
 
@@ -1062,6 +1068,7 @@ enum TrayCmd : UINT {
     // stays the toggle, because that is what the tray menu item wants.
     CMD_PAUSE_ON = 8, CMD_PAUSE_OFF = 9,
     CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
+    CMD_PHOTO_FOLDER = 32,    // brief BY: "Open photos folder" (33/34 stay retired)
     CMD_PRESET_BASE = 2000,   // up to kMaxTrayPresets entries (no 50 cap any more)
     // Cycle director. All non-toggling except the tray's On/Off item (a
     // checkbox, like CMD_PAUSE): scripts and --cycle-next use ON/OFF/NEXT/PREV
@@ -1079,6 +1086,7 @@ static NOTIFYICONDATAW g_nid = {};
 // presets (implementations further down; the menu needs them declared)
 static std::vector<std::wstring> g_presetPaths;
 static void GetPresetsDir(wchar_t out[MAX_PATH]);
+static void GetPhotosDir(wchar_t out[MAX_PATH]);
 static void ApplyPreset(const std::wstring& path);
 static void SaveCurrentAsPreset();
 static void ShowTrayMenuBody(HWND hwnd, HMENU presets);
@@ -1185,6 +1193,7 @@ static void ShowTrayMenu(HWND hwnd) {
         AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(presets, MF_STRING, CMD_PRESET_SAVE, L"Save current as new preset");
         AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open presets folder");
+        AppendMenuW(presets, MF_STRING, CMD_PHOTO_FOLDER, L"Open photos folder");
     }
     ShowTrayMenuBody(hwnd, presets);
 }
@@ -1387,6 +1396,13 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
             break;
         }
+        case CMD_PHOTO_FOLDER: {             // brief BY: the photo stage's default folder
+            wchar_t dir[MAX_PATH];
+            GetPhotosDir(dir);
+            CreateDirectoryW(dir, nullptr);
+            ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        }
         default:
             if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + kMaxTrayPresets &&
                 LOWORD(wp) - CMD_PRESET_BASE < g_presetPaths.size()) {
@@ -1475,6 +1491,15 @@ static void GetPresetsDir(wchar_t out[MAX_PATH]) {
     wcscat_s(out, MAX_PATH, L"\\presets");
 }
 
+// brief BY pre-flight 21: the photo stage's default folder, the same
+// derivation as the presets folder: dirname(settings.ini)\photos.
+static void GetPhotosDir(wchar_t out[MAX_PATH]) {
+    wcscpy_s(out, MAX_PATH, g_iniPath);
+    wchar_t* slash = wcsrchr(out, L'\\');
+    if (slash) *slash = 0;
+    wcscat_s(out, MAX_PATH, L"\\photos");
+}
+
 static void WriteTextFileUtf16(const wchar_t* path, const wchar_t* text) {
     HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -1558,6 +1583,10 @@ L"idle_amount=3\r\nidle_interval=8\r\ncolor_cycle_period=40\r\n";
 static void EnsureBuiltinPresets() {
     if (!g_iniPath[0] || g_configReadOnly) return;
     wchar_t dir[MAX_PATH];
+    // brief BY: the (empty) photos folder next to presets\, so the user can
+    // find it; read-only runs (--shot) never create it
+    GetPhotosDir(dir);
+    CreateDirectoryW(dir, nullptr);
     GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
 
@@ -2242,6 +2271,7 @@ static void SaveCurrentAsPreset() {
 void ApplyPresetPath(const std::wstring& path) { ApplyPreset(path); }
 void SaveCurrentAsPresetFile() { SaveCurrentAsPreset(); }
 void GetPresetsDirectory(wchar_t out[MAX_PATH]) { GetPresetsDir(out); }
+void GetPhotosDirectory(wchar_t out[MAX_PATH]) { GetPhotosDir(out); }
 void PersistShellSettings() { SaveSettings(); }
 void PersistFullConfigNow() {
     if (!g_renderer) return;
@@ -2350,6 +2380,8 @@ struct ShotOpts {
     // --cover-seeds N replicates every entry over N noise seeds (0..N-1).
     std::vector<float> coverScale;
     int      coverSeeds = 1;
+    // brief BY: --photos <dir> (what an empty [photo] folder= means here)
+    std::wstring photosDir;
 };
 static bool g_shotPngOnly = false;
 
@@ -2877,6 +2909,8 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
+            } else if (wcscmp(argv[i], L"--photos") == 0 && i + 1 < argc) {
+                o.photosDir = argv[++i];
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
                 o.fixedFade = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--cover-seeds") == 0 && i + 1 < argc) {
@@ -2941,6 +2975,10 @@ static int RunShotMode() {
     // Cycle director: [cycle] from the --ini file. Off (the default) = not a
     // single call below changes the render path.
     CycleSetLogger([](const char* s) { ShotLog("%s", s); });
+    // brief BY photo stage: its log, --photos, and the black-point join
+    PhotoSetLogger([](const char* s) { ShotLog("%s", s); });
+    PhotoSetCliDir(o.photosDir.c_str());
+    PhotoSetSynchronous(true);
     CycleLoad(g_configIniPath);
     CycleOverride(o.cycleDwell, o.cycleOrder, o.cycleSeed ? o.cycleSeed : o.seed,
                   o.cycleStage, o.cycleForce, o.cycleJitter);
@@ -3043,6 +3081,20 @@ static int RunShotMode() {
     if (stem.size() > 4 && _wcsicmp(stem.c_str() + stem.size() - 4, L".png") == 0)
         stem.resize(stem.size() - 4);
 
+    // brief BY pre-flight 34: QPC time of CycleTick..Frame (the Sleep excluded)
+    // per frame; the max over each photo LOAD window (request .. upload
+    // recorded) against the max over the 5 s of frames before it. Reported at
+    // the [state] site. Nothing is timed-dependent: the image is unchanged.
+    LARGE_INTEGER qpcF;
+    QueryPerformanceFrequency(&qpcF);
+    std::vector<float> ftRing(144 * 5, 0.0f);   // the last 5 s of frame times
+    size_t ftPos = 0, ftFill = 0;
+    bool   ftLoading = false;
+    float  ftBase = 0.0f, ftLoad = 0.0f;
+    long long ftLoadFrames = 0;
+    double ftLoadT0 = 0.0;
+    std::vector<std::string> ftReports;
+
     std::vector<float> pixels;
     for (int s = 0; s < o.seriesCount; s++) {
         const double target = o.delaySec + (double)s * o.seriesInterval;
@@ -3140,6 +3192,8 @@ static int RunShotMode() {
             }
             // The director's frame: fade / black / warm-up sub-steps. With the
             // cycle off this is fade 1.0, no black, no steps -- today's frame.
+            LARGE_INTEGER qpc0;
+            QueryPerformanceCounter(&qpc0);
             const CycleFrame cf = CycleTick(renderer, dt);
             {
                 const float tNow = frames / 144.0f;
@@ -3161,6 +3215,31 @@ static int RunShotMode() {
             renderer.SetFade(o.fixedFade >= 0.0f ? o.fixedFade : cf.fade);
             renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
+            {   // brief BY pre-flight 34 (see ftRing above)
+                LARGE_INTEGER qpc1;
+                QueryPerformanceCounter(&qpc1);
+                const float ms = (float)(1000.0 * (double)(qpc1.QuadPart - qpc0.QuadPart) / (double)qpcF.QuadPart);
+                const bool loading = renderer.PhotoLoading();
+                if (loading && !ftLoading) {
+                    ftBase = 0.0f;
+                    for (size_t k = 0; k < ftFill; k++) ftBase = fmaxf(ftBase, ftRing[k]);
+                    ftLoad = 0.0f;
+                    ftLoadFrames = 0;
+                    ftLoadT0 = frames / 144.0;
+                }
+                if (loading || ftLoading) { ftLoad = fmaxf(ftLoad, ms); ftLoadFrames++; }
+                if (!loading && ftLoading) {
+                    char b[256];
+                    _snprintf_s(b, _TRUNCATE, "[photo] max frame %.2f ms over the load window (%lld frames, "
+                                "t %.3f..%.3f) vs %.2f ms over the preceding 5 s baseline (%zu frames)\n",
+                                ftLoad, ftLoadFrames, ftLoadT0, (frames + 1) / 144.0, ftBase, ftFill);
+                    ftReports.push_back(b);
+                }
+                ftLoading = loading;
+                ftRing[ftPos] = ms;
+                ftPos = (ftPos + 1) % ftRing.size();
+                if (ftFill < ftRing.size()) ftFill++;
+            }
             frames++;
             // Leave the GPU some air: an unthrottled full-res sim starves the
             // compositor and Wallpaper Engine (the OLED went grey once when
@@ -3216,6 +3295,8 @@ static int RunShotMode() {
                     renderer.Hue2Deg(), renderer.Fade(), renderer.BlackOut() ? 1 : 0);
         }
         if (ClocksActive()) ClocksReport();  // brief CLOCKS proof 3e: max |delta| per frame
+        for (const std::string& r : ftReports) ShotLog("%s", r.c_str());   // brief BY pre-flight 34
+        ftReports.clear();
         // Where the camera rig is at this instant. Every [post] effect hangs
         // off these, and all of them are supposed to be moving, so a series of
         // shots at different t is the only honest test of the motion.

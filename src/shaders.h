@@ -4809,3 +4809,50 @@ float4 PSMain(float4 pos : SV_Position) : SV_Target {
     return float4(c * brightness, 1.0);
 }
 )hlsl";
+
+// ===========================================================================
+// brief BY PHOTO-STAGE: the photo stage's display pass -- a FOURTH PSO in its
+// own literal (pre-flight 9), so kDisplaySrc and the three look PSOs built
+// from it are untouched (dxbc-cmp IDENTICAL by construction). Bound with the
+// graphics root signature as it is: b0 = param 0's 32 root constants, t0 =
+// the photo's SRV through param 1's table, s0 = the static linear clamp
+// sampler; params 2-8 are left unbound (pre-flight 10).
+// No gamut matrix (pre-flight 14): scRGB is linear BT.709, the sRGB primaries,
+// so a JPEG's colours are already in the output space; the display pass's
+// matrices EXPAND colour on purpose and would push sRGB red out of gamut.
+// HDR off is this same shader with sdrScale 1 (pre-flight 15): SDR white of
+// the file lands exactly on SDR white, never above it (no peak gain).
+// Output = SRGBToLinear(texel) * alpha * sdrScale*fade inside the rect, and
+// exactly 0 outside it (letterbox / pillarbox).
+// ===========================================================================
+static const char* kPhotoSrc = R"hlsl(
+cbuffer PhotoCB : register(b0) {
+    float4 ph0;   // x rect x0 (px)  y rect y0 (px)  z 1/rect width  w 1/rect height
+    float4 ph1;   // x sdrScale*fade  y 1 = composite the file's alpha over black
+                  // z 1 = the rect is the texture 1:1 (Load, no filtering)  w unused
+};
+Texture2D<float4> Photo : register(t0);
+SamplerState Samp : register(s0);
+
+float4 VSMain(uint id : SV_VertexID) : SV_Position {
+    float2 uv = float2((id << 1) & 2, id & 2);
+    return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+
+// the piecewise sRGB decode, as kDisplaySrc's SRGBToLinear
+float3 SRGBToLinear(float3 c) {
+    float3 lo = c / 12.92;
+    float3 hi = pow((c + 0.055) / 1.055, 2.4);
+    return lerp(lo, hi, step(0.04045, c));
+}
+
+float4 PSMain(float4 pos : SV_Position) : SV_Target {
+    float2 uv = (pos.xy - ph0.xy) * ph0.zw;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0) return float4(0.0, 0.0, 0.0, 1.0);
+    float4 t;
+    if (ph1.z > 0.5) t = Photo.Load(int3(int2(pos.xy - ph0.xy), 0));
+    else             t = Photo.SampleLevel(Samp, uv, 0.0);
+    float a = ph1.y > 0.5 ? saturate(t.a) : 1.0;
+    return float4(SRGBToLinear(saturate(t.rgb)) * (a * ph1.x), 1.0);
+}
+)hlsl";

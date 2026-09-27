@@ -7,6 +7,7 @@
 #include "animators.h"
 #include "app_state.h"
 #include "journey.h"
+#include "clocks.h"
 #include <cstdio>
 #include <cstdarg>
 #include <cmath>
@@ -738,6 +739,9 @@ void GoOff(const char* why) {
     g_cycleActive = false;
     if (g_renderer) g_renderer->SetCoverageWanted(false);
     Log("[cycle] off (%s)\n", why);
+    // CLOCKS pre-flight 4: the base goes back into the live config NOW --
+    // ApplyPreset reads Config right after CycleManualOverride returns
+    if (g_renderer) ClocksRestoreBase(g_renderer->Config(), "cycle off");
 }
 
 // Does cur -> target lerp (both fluid, not forced to fade/cut)?
@@ -756,6 +760,7 @@ void BeginLerp(FluidRenderer& r, int target) {
     float peak;
     int gamut;
     s_from = r.Config();
+    ClocksBaseCopy(s_from);              // CLOCKS pre-flight 3: lerp FROM the base, not base x F
     Compose(target, s_from, s_target, peak, gamut);
     r.SetCoverageWanted(true);           // the bridge angle needs a fresh field hue
     const float dyeHue = r.FieldAvgHueDeg();
@@ -880,7 +885,11 @@ bool WantsScheme(int target) {
 }
 
 void BeginScheme(FluidRenderer& r, int target) {
-    GetAmts(r.Config().acid, s_amtFrom);
+    {
+        FluidConfig b = r.Config();          // CLOCKS pre-flight 3: ramp the BASE amounts
+        ClocksBaseCopy(b);
+        GetAmts(b.acid, s_amtFrom);
+    }
     s_next = target;
     s_phase = CYCLE_SCHEME;
     s_schemeSub = 0;
@@ -983,6 +992,7 @@ void SoftPoint(FluidRenderer& r) {
     }
     if (IsOverlay(target)) {
         s_preOverlay = c;
+        ClocksBaseCopy(s_preOverlay);        // CLOCKS pre-flight 3: restore the base later
         s_prePeak = g_hdrPeakNits;
         s_preGamut = g_gamutMode;
         const FluidConfig shell = c;
@@ -1029,6 +1039,7 @@ void ApplyFreezeToRenderer(int a, bool on) {
 // ---------------------------------------------------------------------------
 
 void CycleSetLogger(void (*fn)(const char*)) { s_logger = fn; }
+unsigned CycleSeed() { return s_seedOverride ? s_seedOverride : s_cfg.seed; }
 
 void CycleLoad(const wchar_t* ini) {
     s_cfg = CycleConfig{};
@@ -1755,6 +1766,7 @@ const wchar_t* AnimatorName(Animator a) {
     case ANIM_HUE_SHIFT:  return L"Fluid hue-shift bursts";
     case ANIM_TRANSITION: return L"Stage transition + journey";
     case ANIM_CYCLE:      return L"Cycle dwell timer";
+    case ANIM_CLOCKS:     return L"Slow key clocks";
     default:              return L"?";
     }
 }

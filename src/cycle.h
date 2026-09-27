@@ -168,6 +168,10 @@ float* CycleUiDwellPtr();
 float* CycleUiLerpPtr();
 float* CycleUiJitterPtr();
 void CycleSetLogger(void (*fn)(const char*));
+// The seed the director draws with (CLOCKS pre-flight 24): --cycle-seed, else
+// --seed under --shot, else [cycle] seed; 0 = wall clock. The clocks seed their
+// own splitmix streams from it.
+unsigned CycleSeed();
 void CycleDescribe(char* out, size_t cap);   // one status line for the shot log
 // A preset picked by hand while cycling: the director lets go (session only).
 void CycleManualOverride(const char* why);

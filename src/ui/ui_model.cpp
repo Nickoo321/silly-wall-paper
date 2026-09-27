@@ -393,6 +393,7 @@ bool s_pending = false;
 Snapshot TakeSnapshot() {
     Snapshot s;
     s.cfg = std::make_shared<FluidConfig>(*s_cfg);
+    UiClocksBaseCopy(*s.cfg);            // brief CLOCKS pre-flight 3: undo restores the base
     s.peak = g_hdrPeakNits; s.gamut = g_gamutMode;
     s.preset = s_activePreset; s.overlays = s_overlays;
     return s;
@@ -912,6 +913,14 @@ void UiModelTick() {
 bool UiRowAnimLocked(int i, std::string* why, float* target) {
     const KeyRow& r = s_rows[i];
     if (r.off < 0 || (r.flags & (KF_MACHINE | KF_SHELL))) return false;
+    {   // brief CLOCKS pre-flight 8: a clocked key still gliding to its base (window just opened)
+        float b = 0.0f;
+        if (UiClocksRowSettling(r.sec, r.key, &b)) {
+            if (why) *why = "animating: the slow clocks are gliding back to the preset value";
+            if (target) *target = b;
+            return true;
+        }
+    }
     const UiCycleStatusView cs = UiCycleStatus();
     if (cs.on && cs.lerp && Differs(r, UiValue(i), ReadAt(s_target, r))) {
         if (why) {

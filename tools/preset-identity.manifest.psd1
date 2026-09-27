@@ -37,6 +37,16 @@
            Note = 'THE shipped cycle ([cycle] enabled=1, stage files relative to reference\configs): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
         @{ Path = 'reference\configs\cycle-first.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'CYCLE-DIRECTOR.md section 5 first draft ([cycle] enabled=1, interleaves WE/oil/ink/mirror stages, order=alternate_random): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
+        @{ Path = 'reference\configs\clocks-off-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
+           Note = 'brief CLOCKS proof 1: cycle-final.ini + a [clocks] block with enabled=0 (and a non-default shape): must render exactly as on main (the clocks pass returns before touching anything)' }
+        @{ Path = 'reference\configs\clocks-mono-cycle.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief CLOCKS proof 3e: the cycle on one monotone stage with [clocks] enabled=1 (governor gaps 1..3 min); a 900 s headless run, not an identity row' }
+        @{ Path = 'reference\configs\clocks-dryrun-base.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief CLOCKS --clocks-dryrun shape: the defaults ([clocks] only, never rendered)' }
+        @{ Path = 'reference\configs\clocks-dryrun-calm.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief CLOCKS --clocks-dryrun shape: Calm-like governor, tail_gap_max 150 ([clocks] only, never rendered)' }
+        @{ Path = 'reference\configs\clocks-dryrun-wild.ini'; Look = 'test'; Base = ''; Delay = 60; Tier = 'skip'
+           Note = 'brief CLOCKS --clocks-dryrun shape: Wild-like, sigma 0.42 / tail_at 1.6 / tail_gap_min 10 ([clocks] only, never rendered)' }
         @{ Path = 'reference\configs\cycle-lerp-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'proof config for the fluid->fluid LERP + journey stage type (order=fixed, 3 x 20 s stages: we-look-live, WE journey - Aurora over stage_2_base=we-look-live.ini, acid-rise-12); the 60 s frame lands just into stage 3' }
         @{ Path = 'reference\configs\eyes-diff015.ini'; Look = 'test'; Base = ''; Delay = 15; Tier = 'skip'

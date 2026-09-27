@@ -42,7 +42,11 @@
 //   --cycle-seed N (default --seed) / --cycle-stage N (1-based start)
 //   --cycle-next-at T[,T..]  Next stage at wallpaper time T (the tray's call)
 //   --cycle-pause-at T1,T2   CyclePause at T1, CycleResume at T2 (animators.h)
-//   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition)
+//   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition|clocks)
+//   --clocks-dryrun HOURS    brief CLOCKS: the clock scheduler alone (CPU, 10 Hz
+//                      virtual time), one line per draw + a summary, then exit
+//   --clocks-force G=F|mode|tail[,..]  pin clock groups (all = every group)
+//   --clocks-hold-at T1,T2   ClocksHold(true) at T1, (false) at T2 (the Settings window's calls)
 //   --shot-fade F      hold the display fade at F (fade-scaling proof)
 //   --cover-sweep a,b,.. also step a CPU-only shadow hue2 mix field per listed
 //                      film_hue2_cover bias and log its [cover] line (every 5 s
@@ -75,6 +79,7 @@
 #include "fluid.h"
 #include "app_state.h"
 #include "cycle.h"
+#include "clocks.h"
 #include "animators.h"
 #include "ui/ui_model.h"
 
@@ -2216,11 +2221,14 @@ static void SaveCurrentAsPreset() {
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
-    if (g_renderer) SaveFullConfig(g_renderer->Config());   // ini = live state
+    // CLOCKS pre-flight 3: a snapshot takes the BASE, never base x F
+    FluidConfig snap;
+    if (g_renderer) { snap = g_renderer->Config(); ClocksBaseCopy(snap); }
+    if (g_renderer) SaveFullConfig(snap);   // ini = live state (the clocks' base)
     for (int n = 1; n < 100; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
         if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            if (g_renderer) WriteConfigToIni(path, g_renderer->Config(), false);
+            if (g_renderer) WriteConfigToIni(path, snap, false);
             if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
             wchar_t msg[128];
             swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
@@ -2235,7 +2243,12 @@ void ApplyPresetPath(const std::wstring& path) { ApplyPreset(path); }
 void SaveCurrentAsPresetFile() { SaveCurrentAsPreset(); }
 void GetPresetsDirectory(wchar_t out[MAX_PATH]) { GetPresetsDir(out); }
 void PersistShellSettings() { SaveSettings(); }
-void PersistFullConfigNow() { if (g_renderer) SaveFullConfig(g_renderer->Config()); }
+void PersistFullConfigNow() {
+    if (!g_renderer) return;
+    FluidConfig snap = g_renderer->Config();   // CLOCKS pre-flight 3: the base, never base x F
+    ClocksBaseCopy(snap);
+    SaveFullConfig(snap);
+}
 
 // ---------------------------------------------------------------------------
 // --shot: headless deterministic capture
@@ -2313,6 +2326,14 @@ struct ShotOpts {
     float    pauseAt = -1.0f, resumeAt = -1.0f;
     int      freezeAnim = -1;
     float    freezeAt = -1.0f, unfreezeAt = -1.0f;
+    // brief CLOCKS: --clocks-dryrun HOURS (the scheduler alone on the CPU, no
+    // renderer, then exit) and --clocks-force <group>=<F>|mode|tail[,...] (pins
+    // groups for a proof render; ticks with the cycle off).
+    double   clocksDryrun = 0.0;
+    std::wstring clocksForce;
+    // --clocks-hold-at T1,T2: ClocksHold(true) at T1, ClocksHold(false) at T2 -- the
+    // Settings window's calls, headless (proof 5: glide to 1, settle, release)
+    float    clocksHoldAt = -1.0f, clocksReleaseAt = -1.0f;
     // --shot-png-only: write <out>.png only (stats still logged). Saves ~35 MB
     // per capture on a long series; the md5 file is the same .png as always.
     bool     pngOnly = false;
@@ -2835,6 +2856,13 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--cycle-draw-test") == 0 && i + 1 < argc) {
                 o.cycleDrawTest = _wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--clocks-dryrun") == 0 && i + 1 < argc) {
+                o.clocksDryrun = _wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--clocks-hold-at") == 0 && i + 1 < argc) {
+                swscanf_s(argv[++i], L"%f,%f", &o.clocksHoldAt, &o.clocksReleaseAt);
+            } else if (wcscmp(argv[i], L"--clocks-force") == 0 && i + 1 < argc) {
+                if (!o.clocksForce.empty()) o.clocksForce += L",";
+                o.clocksForce += argv[++i];
             } else if (wcscmp(argv[i], L"--cycle-pause-at") == 0 && i + 1 < argc) {
                 swscanf_s(argv[++i], L"%f,%f", &o.pauseAt, &o.resumeAt);
             } else if (wcscmp(argv[i], L"--shot-freeze") == 0 && i + 1 < argc) {
@@ -2845,6 +2873,7 @@ static int RunShotMode() {
                     else if (_wcsicmp(name, L"rig") == 0)        o.freezeAnim = ANIM_RIG;
                     else if (_wcsicmp(name, L"hueshift") == 0)   o.freezeAnim = ANIM_HUE_SHIFT;
                     else if (_wcsicmp(name, L"transition") == 0) o.freezeAnim = ANIM_TRANSITION;
+                    else if (_wcsicmp(name, L"clocks") == 0)     o.freezeAnim = ANIM_CLOCKS;
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
@@ -2920,6 +2949,17 @@ static int RunShotMode() {
         CoUninitialize();
         return 0;
     }
+    // brief CLOCKS: [clocks] from the --ini file; the director's seed (pre-flight 24)
+    ClocksSetLogger([](const char* s) { ShotLog("%s", s); });
+    ClocksLoad(g_configIniPath);
+    ClocksSeed(CycleSeed());
+    if (o.clocksDryrun > 0.0) {              // scheduler only: no renderer, no GPU (pre-flight 25)
+        ClocksDryRun(o.clocksDryrun);
+        CoUninitialize();
+        return 0;
+    }
+    if (!o.clocksForce.empty() && !ClocksForce(o.clocksForce.c_str()))
+        ShotLog("[clocks] --clocks-force: could not parse all of '%ls'\n", o.clocksForce.c_str());
     const bool cycling = CycleBoot(cfg);
 
     // HDR state exactly as the shell would resolve it, without querying the
@@ -3101,6 +3141,20 @@ static int RunShotMode() {
             // The director's frame: fade / black / warm-up sub-steps. With the
             // cycle off this is fade 1.0, no black, no steps -- today's frame.
             const CycleFrame cf = CycleTick(renderer, dt);
+            {
+                const float tNow = frames / 144.0f;
+                if (o.clocksHoldAt >= 0.0f && tNow >= o.clocksHoldAt) {
+                    ShotLog("[clocks] --clocks-hold-at %.2f: hold (the Settings window's call)\n", tNow);
+                    ClocksHold(true);
+                    o.clocksHoldAt = -1.0f;
+                }
+                if (o.clocksReleaseAt >= 0.0f && tNow >= o.clocksReleaseAt) {
+                    ShotLog("[clocks] --clocks-hold-at %.2f: release (WM_DESTROY's call)\n", tNow);
+                    ClocksHold(false);
+                    o.clocksReleaseAt = -1.0f;
+                }
+            }
+            ClocksTick(renderer, dt);        // brief CLOCKS: after the director, before the sim
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
             renderer.SetHdrOptions(peak, g_gamutMode);
             for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);
@@ -3161,6 +3215,7 @@ static int RunShotMode() {
                     fmodf(renderer.PaletteBaseHueDeg() + renderer.PaletteHueDeg(), 360.0f),
                     renderer.Hue2Deg(), renderer.Fade(), renderer.BlackOut() ? 1 : 0);
         }
+        if (ClocksActive()) ClocksReport();  // brief CLOCKS proof 3e: max |delta| per frame
         // Where the camera rig is at this instant. Every [post] effect hangs
         // off these, and all of them are supposed to be moving, so a series of
         // shots at different t is the only honest test of the motion.
@@ -3384,6 +3439,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     CycleLoad(g_configIniPath);
     CycleOverride(-1.0f, -1, 0, cycleStartStage, false);
     CycleBoot(cfg);
+    ClocksLoad(g_configIniPath);             // brief CLOCKS: [clocks] from settings.ini
+    ClocksSeed(CycleSeed());
 
     printf("FluidWallpaper - fluid simulation behind desktop icons\n");
 
@@ -3810,6 +3867,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         // per shown frame while the target is cleared to black. Off: fade
         // 1.0, no black, no steps, i.e. exactly today's frame.
         const CycleFrame cf = CycleTick(renderer, simDt);
+        ClocksTick(renderer, simDt);         // brief CLOCKS: after the director, before the sim
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
         renderer.SetHdrOptions(peak, g_gamutMode);
         for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);

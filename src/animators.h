@@ -39,6 +39,12 @@ enum Animator {
     ANIM_TRANSITION,     // the director's fluid->fluid lerp + journey legs (a hold)
     ANIM_CONDUCTOR = ANIM_TRANSITION,   // old name (the conductor was absorbed)
     ANIM_CYCLE,          // the director's DWELL timer (same as CyclePause)
+    ANIM_CLOCKS,         // brief CLOCKS: the per-group slow clocks (src/clocks.cpp) -- a hold of
+                         // every group's phase, factors frozen where they are. Appended AFTER
+                         // ANIM_CYCLE so slots 0-3 stay the renderer's derived clocks: NOTE the
+                         // name clash, FluidRenderer::kAnimClocks (fluid.h) counts only those
+                         // four derived animator clocks and has nothing to do with this one,
+                         // which keeps its own time accumulator in clocks.cpp.
     ANIM_COUNT
 };
 

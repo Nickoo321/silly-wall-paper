@@ -15,6 +15,7 @@
 #include "../cycle.h"
 #include "../animators.h"
 #include "../journey.h"
+#include "../clocks.h"
 #include "../app_state.h"
 
 bool*  UiCycleEnabledPtr()    { return CycleUiEnabledPtr(); }
@@ -197,6 +198,11 @@ void UiCycleResumeEditing() {
     if (CyclePaused()) CycleResume();
 }
 bool UiJourneyActive() { return !s_scripted && g_renderer && JourneyActive(); }
+void UiClocksHold(bool on) { if (!s_scripted && g_renderer) ClocksHold(on); }
+bool UiClocksRowSettling(const std::string& sec, const std::string& key, float* base) {
+    return !s_scripted && g_renderer && ClocksRowSettling(sec.c_str(), key.c_str(), base);
+}
+void UiClocksBaseCopy(FluidConfig& cfg) { if (g_renderer) ClocksBaseCopy(cfg); }
 
 void  UiFreeze(int a) { if (a >= 0 && a < UA_COUNT) Freeze((Animator)a, 900.0f); }
 void  UiUnfreeze(int a) { if (a >= 0 && a < UA_COUNT) Unfreeze((Animator)a); }
@@ -246,7 +252,7 @@ std::string UiCycleScript(const std::string& cmdIn, FluidConfig& cfg) {
     auto animOf = [](const std::string& s) {
         return s == "palette" ? UA_PALETTE : s == "hue2" ? UA_HUE2 : s == "rig" ? UA_RIG
              : s == "hueshift" ? UA_HUE_SHIFT : s == "transition" ? UA_TRANSITION
-             : s == "cycle" ? UA_CYCLE : -1;
+             : s == "cycle" ? UA_CYCLE : s == "clocks" ? UA_CLOCKS : -1;
     };
     if (c0 == "cycle") {
         std::string a = n > 1 ? w[1] : "";

@@ -920,7 +920,8 @@ void FluidRenderer::RenderDisplay() {
     rtv.ptr += (SIZE_T)i * m_rtvStride;
     // [post]: the display pass goes to m_postTex first and the camera pass
     // brings it to the back buffer; without it, straight to the back buffer.
-    const bool post = PostActive();
+    // A photo (brief BY) never runs the post pass.
+    const bool post = !m_photoMode && PostActive();
     D3D12_CPU_DESCRIPTOR_HANDLE target = post ? BeginPostTarget() : rtv;
     m_cmd->OMSetRenderTargets(1, &target, FALSE, nullptr);
     D3D12_VIEWPORT vp = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
@@ -928,6 +929,9 @@ void FluidRenderer::RenderDisplay() {
     m_cmd->RSSetViewports(1, &vp);
     m_cmd->RSSetScissorRects(1, &sc);
 
+    if (m_photoMode) {                     // brief BY: the photo stage's PSO
+        DrawPhoto(m_width, m_height, m_sdrScale);
+    } else {
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
@@ -941,6 +945,7 @@ void FluidRenderer::RenderDisplay() {
     m_postGrainDeferred = false;
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
+    }
     if (post) RunPostPass(rtv);
 
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
@@ -1286,7 +1291,7 @@ void FluidRenderer::RenderDisplayOffscreen() {
     }
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    const bool post = PostActive();
+    const bool post = !m_photoMode && PostActive();   // a photo never runs the post pass
     D3D12_CPU_DESCRIPTOR_HANDLE target = post ? BeginPostTarget() : rtv;
     m_cmd->OMSetRenderTargets(1, &target, FALSE, nullptr);
     D3D12_VIEWPORT vp = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
@@ -1294,6 +1299,9 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_cmd->RSSetViewports(1, &vp);
     m_cmd->RSSetScissorRects(1, &sc);
 
+    if (m_photoMode) {                     // brief BY: the photo stage's PSO
+        DrawPhoto(m_width, m_height, m_sdrScale);
+    } else {
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
@@ -1307,6 +1315,7 @@ void FluidRenderer::RenderDisplayOffscreen() {
     m_postGrainDeferred = false;
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
+    }
     if (post) RunPostPass(rtv);
 }
 
@@ -1709,6 +1718,9 @@ void FluidRenderer::RenderMirror() {
     m_cmd->RSSetViewports(1, &vp);
     m_cmd->RSSetScissorRects(1, &sc);
 
+    if (m_photoMode) {                     // brief BY: the photo, fitted to this monitor
+        DrawPhoto(m_mirrorW, m_mirrorH, m_mirrorSdrScale);
+    } else {
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
@@ -1720,6 +1732,7 @@ void FluidRenderer::RenderMirror() {
     BindMirrorFold(m_mirrorW, m_mirrorH);
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
+    }
 
     b.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
     b.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
@@ -1822,15 +1835,25 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
         return;
     }
 
-    FrameSim(dt, input);
+    // brief BY photo stage: retired photo objects go once their fence is
+    // done; in photo mode a decoded photo is uploaded in this (black) frame's
+    // list and the sim is NOT stepped (pre-flight 6). All of it is skipped
+    // without a photo stage: the recorded commands are today's.
+    if (!m_photoRetire.empty()) ReleaseRetiredPhotos();
+    if (m_photoMode) {
+        PhotoPump();
+        if (m_photoHavePending && m_photoAccept) RecordPhotoUpload();
+    } else {
+        FrameSim(dt, input);
+    }
 
-    if (m_blackOut) {
+    if (m_blackOut || (m_photoMode && (!m_photoShown || !m_psoPhoto))) {
         ClearTargetBlack();
     } else {
         if (m_headless) RenderDisplayOffscreen();
         else            RenderDisplay();
         if (m_mirrorChain && !m_mirrorBroken) RenderMirror();
-        if (m_anaEnabled) MaybeRenderAnalyzer();
+        if (m_anaEnabled && !m_photoMode) MaybeRenderAnalyzer();
     }
     EndFrameAndPresent();
 
@@ -1999,6 +2022,7 @@ void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
 
 void FluidRenderer::SimOnlyStep(float dt) {
     if (!m_device || m_cfg.gradientMode || m_cfg.calibratePage > 0) return;
+    if (m_photoMode) return;                // brief BY: no sim under a photo
     m_time += dt;
     AccumFrozen(dt);
     BeginFrame();
@@ -2103,6 +2127,207 @@ double FluidRenderer::PrecompilePostPsos() {
     const double ms = 1000.0 * (double)(q1.QuadPart - q0.QuadPart) / (double)qf.QuadPart;
     printf("post: BN_OPTICS PSO precompiled at the cycle black point (%.0f ms)\n", ms);
     return ms;
+}
+
+// ===========================================================================
+// brief BY PHOTO-STAGE (phase 1): the fourth display PSO. See fluid.h for the
+// call contract and photo.h for the worker; cycle.cpp decides when.
+// ===========================================================================
+static double PhotoNowMs() {
+    static LARGE_INTEGER f = {};
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return 1000.0 * (double)t.QuadPart / (double)f.QuadPart;
+}
+
+// kPhotoSrc, compiled lazily at the first photo black point, off the GPU
+// timeline the same way EnsureLookResources does (pre-flight 9).
+void FluidRenderer::EnsurePhotoPso() {
+    if (m_psoPhoto || !m_device) return;
+    const double t0 = PhotoNowMs();
+    WaitForGpuIdle();
+    MakeGraphicsPso(kPhotoSrc, m_psoPhoto);
+    PhotoLog("[photo] kPhotoSrc PSO compiled on demand (%.0f ms)\n", PhotoNowMs() - t0);
+}
+
+void FluidRenderer::RetirePhotoTex() {
+    if (!m_photoTex) return;
+    // m_nextFence is signalled at the end of the NEXT submitted frame, so it
+    // is at or past the last frame that drew this texture
+    m_photoRetire.push_back({ m_photoTex, m_nextFence, false, PhotoNowMs() });
+    m_photoTex.Reset();
+    m_photoShown = false;
+}
+
+void FluidRenderer::ReleaseRetiredPhotos() {
+    if (!m_fence) return;
+    const UINT64 done = m_fence->GetCompletedValue();
+    for (size_t k = 0; k < m_photoRetire.size();) {
+        if (done >= m_photoRetire[k].fence) {
+            if (m_photoRetire[k].upload)
+                PhotoLog("[photo] upload done: the GPU copy has completed, upload buffer released "
+                         "%.1f ms after the record\n", PhotoNowMs() - m_photoRetire[k].t0);
+            m_photoRetire.erase(m_photoRetire.begin() + k);
+        } else {
+            k++;
+        }
+    }
+}
+
+void FluidRenderer::PhotoRequest(const std::wstring& path, bool fill) {
+    if (m_photoJob) { PhotoWorkerCancel(m_photoJob); m_photoJob = 0; }
+    m_photoPending = PhotoResult{};            // never on the GPU: just drop it
+    m_photoHavePending = false;
+    m_photoFailed = false;
+    m_photoWhy.clear();
+    m_photoReqPath = path;
+    m_photoReqFill = fill;
+    m_photoAccept = false;                     // the shown photo stays until PhotoEnter
+    if (m_device) m_photoJob = PhotoWorkerSubmit(path, m_device.Get(), m_width, m_height, fill);
+}
+
+void FluidRenderer::PhotoCancel() {
+    if (m_photoJob) { PhotoWorkerCancel(m_photoJob); m_photoJob = 0; }
+    m_photoPending = PhotoResult{};
+    m_photoHavePending = false;
+    m_photoFailed = false;
+    m_photoReqPath = m_photoShown ? m_photoShowPath : std::wstring();
+}
+
+void FluidRenderer::PhotoEnter() {
+    EnsurePhotoPso();
+    RetirePhotoTex();                          // the previous photo, if any
+    m_photoMode = true;
+    m_photoAccept = true;
+}
+
+void FluidRenderer::PhotoLeave() {
+    if (!m_photoMode && !m_photoJob && !m_photoHavePending && !m_photoTex) return;
+    if (m_photoJob) { PhotoWorkerCancel(m_photoJob); m_photoJob = 0; }
+    m_photoPending = PhotoResult{};
+    m_photoHavePending = false;
+    RetirePhotoTex();
+    m_photoMode = false;
+    m_photoAccept = false;
+    m_photoFailed = false;
+    m_photoReqPath.clear();
+}
+
+// Take a finished job; after a device re-init (fullscreen suspend) re-send
+// the request, so the photo comes back without the director noticing.
+void FluidRenderer::PhotoPump() {
+    if (m_photoJob) {
+        PhotoResult r;
+        if (PhotoWorkerTake(m_photoJob, r)) {
+            m_photoJob = 0;
+            if (r.ok) {
+                m_photoPending = std::move(r);
+                m_photoHavePending = true;
+            } else {
+                m_photoFailed = true;
+                m_photoWhy = r.why;
+            }
+        }
+    } else if (m_photoMode && m_photoAccept && !m_photoShown && !m_photoHavePending && !m_photoFailed &&
+               !m_photoReqPath.empty() && m_device) {
+        PhotoLog("[photo] re-requesting %ls (renderer re-initialised)\n", PhotoNameOf(m_photoReqPath));
+        m_photoJob = PhotoWorkerSubmit(m_photoReqPath, m_device.Get(), m_width, m_height, m_photoReqFill);
+    }
+}
+
+int FluidRenderer::PhotoStatus() {
+    PhotoPump();
+    if (m_photoFailed) return PHOTO_FAILED;
+    if (m_photoShown) return PHOTO_SHOWN;
+    if (m_photoJob || m_photoHavePending) return PHOTO_LOADING;
+    return PHOTO_NONE;
+}
+
+double FluidRenderer::PhotoJoin() {
+    return m_photoJob ? PhotoWorkerWait(m_photoJob) : 0.0;
+}
+
+// Pre-flight 20: the worker made the texture (COPY_DEST) and filled the
+// upload buffer; here, in the black frame's list on m_cmd/m_queue: the copy,
+// the barrier to PIXEL_SHADER_RESOURCE and the SRV into the heap slot NOT
+// being drawn (ping-pong 22 / 24). The upload buffer is released once this
+// frame's fence (m_nextFence, as the analyzer does) completes.
+void FluidRenderer::RecordPhotoUpload() {
+    const double t0 = PhotoNowMs();
+    RetirePhotoTex();
+    PhotoResult& r = m_photoPending;
+    D3D12_TEXTURE_COPY_LOCATION dst = {}, src = {};
+    dst.pResource = r.tex.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    dst.SubresourceIndex = 0;
+    src.pResource = r.upload.Get();
+    src.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    src.PlacedFootprint = r.fp;
+    m_cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    D3D12_RESOURCE_BARRIER b = {};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = r.tex.Get();
+    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    b.Transition.StateAfter = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_cmd->ResourceBarrier(1, &b);
+
+    m_photoSlot ^= 1;
+    const UINT srvSlot = (UINT)(11 + m_photoSlot) * 2;     // heap 22 or 24
+    D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
+    sv.Format = r.fmt;
+    sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sv.Texture2D.MipLevels = 1;
+    D3D12_CPU_DESCRIPTOR_HANDLE sc = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+    sc.ptr += (SIZE_T)srvSlot * m_srvStride;
+    m_device->CreateShaderResourceView(r.tex.Get(), &sv, sc);
+    m_photoSrv = m_srvHeap->GetGPUDescriptorHandleForHeapStart();
+    m_photoSrv.ptr += (SIZE_T)srvSlot * m_srvStride;
+
+    m_photoTex = r.tex;
+    m_photoTexW = r.texW;
+    m_photoTexH = r.texH;
+    m_photoFill = r.fill;
+    m_photoRetire.push_back({ r.upload, m_nextFence, true, t0 });
+    m_photoInfo = r;
+    m_photoInfo.tex.Reset();
+    m_photoInfo.upload.Reset();
+    m_photoShowPath = r.path;
+    m_photoReqPath = r.path;
+    m_photoShown = true;
+    m_photoPending = PhotoResult{};
+    m_photoHavePending = false;
+    m_photoRecordMs = PhotoNowMs() - t0;
+}
+
+// The photo on the bound target (w x h): its fit (or cover) rect, 1:1 on the
+// output it was decoded for. b0 = {x0, y0, 1/rw, 1/rh | sdrScale*fade, alpha,
+// exact}; t0 = its SRV through param 1; params 2-8 untouched (pre-flight 10).
+void FluidRenderer::DrawPhoto(int w, int h, float sdrScale) {
+    const int tw = m_photoTexW > 0 ? m_photoTexW : 1, th = m_photoTexH > 0 ? m_photoTexH : 1;
+    const double sx = (double)w / tw, sy = (double)h / th;
+    const double s = m_photoFill ? (sx > sy ? sx : sy) : (sx < sy ? sx : sy);
+    int rw = (int)llround(tw * s), rh = (int)llround(th * s);
+    if (!m_photoFill) { if (rw > w) rw = w; if (rh > h) rh = h; }
+    if (rw < 1) rw = 1;
+    if (rh < 1) rh = 1;
+    const int x0 = (int)floor((w - rw) * 0.5), y0 = (int)floor((h - rh) * 0.5);
+    float c[32] = {};
+    c[0] = (float)x0;
+    c[1] = (float)y0;
+    c[2] = 1.0f / (float)rw;
+    c[3] = 1.0f / (float)rh;
+    c[4] = sdrScale * m_fade;                  // the same product as the display pass
+    c[5] = m_photoInfo.alpha ? 1.0f : 0.0f;
+    c[6] = (rw == tw && rh == th) ? 1.0f : 0.0f;   // 1:1: Load, no filtering
+    m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
+    m_cmd->SetPipelineState(m_psoPhoto.Get());
+    m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
+    m_cmd->SetGraphicsRootDescriptorTable(1, m_photoSrv);
+    m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_cmd->DrawInstanced(3, 1, 0, 0);
 }
 
 int FluidRenderer::AcidBlobCount() const {
@@ -2402,6 +2627,19 @@ void FluidRenderer::WaitForGpuIdle() {
 void FluidRenderer::Shutdown() {
     if (!m_device) return;   // never initialized, or already shut down
     WaitForGpuIdle();
+
+    // brief BY photo stage: join the WIC worker BEFORE the device goes
+    // (pre-flight 17), then drop every photo GPU object. Photo mode and the
+    // requested file survive, so a resume re-requests the photo (PhotoPump).
+    PhotoWorkerStop();
+    m_photoJob = 0;
+    m_photoPending = PhotoResult{};
+    m_photoHavePending = false;
+    m_photoTex.Reset();
+    m_photoRetire.clear();
+    m_photoShown = false;
+    m_photoFailed = false;
+    m_psoPhoto.Reset();
 
     // Release EVERYTHING Init/CreateDevice/CreateSimResources (and the lazy
     // mirror/analyzer paths) created, so all RAM/VRAM is actually handed back

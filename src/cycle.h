@@ -72,13 +72,30 @@
 //   over scheme_ramp s, the rest is swapped as a PLAIN SET, then they ramp
 //   back (CYCLE_SCHEME).
 //   A stage file's own [meta] base= is its base when stage_K_base is empty.
+//
+// PHOTO stage (brief BY PHOTO-STAGE phase 1, reference/briefs/PHOTO-STAGE.md +
+// its binding pre-flight): a stage whose FILE has a [photo] section (or whose
+// entry carries stage_K_photo=1, persisted so a Modes-page save keeps the
+// kind) shows ONE still from a folder (src/photo.cpp) for its dwell:
+//   [photo] folder=<abs, or relative to the stage file; empty = the default
+//           photos folder next to presets\ (under --shot: --photos <dir>, else
+//           none)>  fit=fit|fill  -- read by cycle.cpp only, no keys.inc rows.
+// Entered and left through black like a look change: no Compose, no Config /
+// peak / gamut write, no ResetLookState, the sim does NOT tick under it, its
+// black WARMUP waits for the texture (live: up to 5 s, then the file is marked
+// failed and another stage is applied in place; --shot joins the decode). It
+// counts as "the other look" in the WE alternation; no overlay ever lands on
+// it, no burst, never a boot stage. A photo stage whose folder has no usable
+// file is removed from every draw BEFORE the RNG is touched, so the director's
+// walk is the same as without it ("[cycle] photo stage skipped: ...").
 #pragma once
 #include <windows.h>
 #include <string>
 #include <vector>
 #include "fluid.h"
 
-enum CycleLook       { CYCLE_LOOK_FLUID = 0, CYCLE_LOOK_ACID = 1, CYCLE_LOOK_INK = 2 };
+enum CycleLook       { CYCLE_LOOK_FLUID = 0, CYCLE_LOOK_ACID = 1, CYCLE_LOOK_INK = 2,
+                       CYCLE_LOOK_PHOTO = 3 };   // brief BY: a [photo] stage (no Config)
 enum CycleTransition { CYCLE_TR_DEFAULT = -1, CYCLE_TR_CUT = 0, CYCLE_TR_FADE = 1, CYCLE_TR_LERP = 2 };
 enum CycleOrder      { CYCLE_ORDER_FIXED = 0, CYCLE_ORDER_ALT_RANDOM = 1 };
 enum CyclePhase      { CYCLE_OFF = 0, CYCLE_DWELL, CYCLE_FADE_OUT, CYCLE_WARMUP, CYCLE_FADE_IN,
@@ -92,6 +109,7 @@ struct CycleStage {
     std::wstring base;             // optional declared base; empty = FluidConfig{} defaults
     float dwellSec   = -1.0f;      // -1 = [cycle] dwell; every dwell is clamped to 240 s
     bool  overlay    = false;      // stage_N_overlay=1: partial ini ON TOP of the running look
+    bool  photo      = false;      // stage_N_photo=1, or the file has [photo] (brief BY)
     int   transition = CYCLE_TR_DEFAULT;
     float fadeOutSec = -1.0f;      // -1 = [cycle] fade_out
     float fadeInSec  = -1.0f;      // -1 = [cycle] fade_in

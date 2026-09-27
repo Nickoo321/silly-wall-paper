@@ -265,6 +265,37 @@ struct Rng {
     }
 };
 
+// ---- the log-normal shape, mean-corrected for the governor's clamp ---------------
+// The brief's F = exp(s z - s^2/2) has E[F] = 1 only UNclamped. A body draw above
+// tail_at is clamped (z -> zc), which pulls the mean down (-0.4% at s 0.30 /
+// tail_at 1.8, -5% at s 0.42 / 1.6: measured in the dry run). So the location is
+// solved per group instead: F = exp(mu + s z) with mu such that the CLAMPED body has
+// E[F] = 1 exactly (mean = preset); tails (z > zc) sit on the same curve. The
+// flipped factor F' = exp(nu - s z) uses the same clamped z, nu solved the same way.
+// Mode of F = exp(mu - s^2) < 1 (0.872 at the defaults, vs 0.874 unclamped).
+double Phi(double x) { return 0.5 * erfc(-x / 1.4142135623730951); }
+struct Shape { double mu = 0.0, nu = 0.0, zc = 1e9; };
+Shape ShapeOf(float s, float tailAt) {
+    Shape h;
+    if (!(s > 0.0f)) return h;
+    const double lc = log((double)tailAt), S = s;
+    auto meanF = [&](double mu) {                // E[min(exp(mu + S z), tail_at)]
+        const double zc = (lc - mu) / S;
+        return exp(mu + 0.5 * S * S) * Phi(zc - S) + (double)tailAt * (1.0 - Phi(zc));
+    };
+    double lo = -0.5 * S * S - 2.0, hi = -0.5 * S * S + 2.0;
+    for (int i = 0; i < 80; i++) {
+        const double m = 0.5 * (lo + hi);
+        if (meanF(m) < 1.0) lo = m; else hi = m;
+    }
+    h.mu = 0.5 * (lo + hi);
+    h.zc = (lc - h.mu) / S;
+    // E[exp(-S min(z, zc))] = e^{S^2/2} Phi(zc + S) + e^{-S zc} (1 - Phi(zc))
+    const double eg = exp(0.5 * S * S) * Phi(h.zc + S) + exp(-S * h.zc) * (1.0 - Phi(h.zc));
+    h.nu = -log(eg);
+    return h;
+}
+
 // ---- the scheduler (shared by the live tick and the dry run) --------------------
 enum Phase { PH_BODY = 0, PH_TAIL_IN, PH_TAIL_HOLD, PH_TAIL_OUT };
 const char* const kPhaseName[] = { "body", "tail_in", "tail_hold", "tail_out" };
@@ -294,9 +325,10 @@ struct Sched {
     bool   verbose = true;
 
     float Sig(int k) const { return p.sigma * p.w[k]; }
-    float Fz(double z, float s) const { return (float)exp(s * z - 0.5 * s * s); }
-    float Gz(double z, float s) const { return (float)exp(-s * z - 0.5 * s * s); }
-    double Zc(float s) const { return (log((double)p.tailAt) + 0.5 * s * s) / s; }
+    Shape  sh[GR_COUNT];                  // per group (sigma x group_<name>), set in Init
+    float Fz(double z, int k) const { return (float)exp(sh[k].mu + Sig(k) * z); }
+    float Gz(double z, int k) const { return (float)exp(sh[k].nu - Sig(k) * z); }
+    double Zc(int k) const { return sh[k].zc; }
 
     void Glide(double len, const char* kind) {
         if (len < minGlide) { minGlide = len; minGlideKind = kind; }
@@ -311,6 +343,7 @@ struct Sched {
         tails = forced = natural = repeats = refused = 0;
         minGap = 1e30; sumGap = 0.0; maxGap = 0.0;
         minGlide = 1e30; minGlideKind = "";
+        for (int k = 0; k < GR_COUNT; k++) sh[k] = ShapeOf(Sig(k), p.tailAt);
         for (int k = 0; k < GR_COUNT; k++) {
             GroupState& s = g[k];
             s = GroupState();
@@ -340,8 +373,8 @@ struct Sched {
     void StartTail(int k, double z, bool isForced) {
         GroupState& s = g[k];
         const float sg = Sig(k);
-        s.tailF = Fz(z, sg);
-        s.tailG = Gz(z, sg);
+        s.tailF = Fz(z, k);
+        s.tailG = Gz(z, k);
         s.fFrom = s.F;
         s.gFrom = s.G;
         s.phase = PH_TAIL_IN;
@@ -382,15 +415,15 @@ struct Sched {
             return;
         }
         double z = rng.N();
-        const double zc = Zc(sg);
+        const double zc = Zc(k);
         bool clamped = false;
         if (z > zc) {
             if (tryTail && Admit(k)) { StartTail(k, z, false); return; }
             z = zc;
             clamped = true;
         }
-        s.fTo = Fz(z, sg);
-        s.gTo = Gz(z, sg);
+        s.fTo = Fz(z, k);
+        s.gTo = Gz(z, k);
         Glide(s.len, "body");
         DrawLine(k, false, clamped ? " (tail refused by the governor: clamped at tail_at)" : "");
     }
@@ -410,7 +443,7 @@ struct Sched {
             if (u < acc) break;
         }
         if (pick < 0) { lastEnd = T; return; }
-        StartTail(pick, rng.TailN(Zc(Sig(pick))), true);
+        StartTail(pick, rng.TailN(Zc(pick)), true);
     }
 
     void Step(double dt) {
@@ -443,10 +476,10 @@ struct Sched {
                     // out: to a fresh BODY draw (clamped at tail_at), over fade_min_s
                     const float sg = Sig(k);
                     double z = rng.N();
-                    const double zc = Zc(sg);
+                    const double zc = Zc(k);
                     if (z > zc) z = zc;
-                    s.fTo = Fz(z, sg);
-                    s.gTo = Gz(z, sg);
+                    s.fTo = Fz(z, k);
+                    s.gTo = Gz(z, k);
                     s.phase = PH_TAIL_OUT;
                     s.t = 0.0;
                     s.len = p.fadeS;
@@ -738,18 +771,21 @@ bool ClocksForce(const wchar_t* spec) {
         for (int g = g0; g <= g1; g++) {
             // sigma per group as the ini sets it; the flipped factor from the same z
             const float sg = s_p.sigma * s_p.w[g];
+            const Shape h = ShapeOf(sg, s_p.tailAt);
+            // F' from the same z as F: z = (ln F - mu) / s, F' = exp(nu - s z)
+            auto flip = [&](double F) { return sg > 0.0f ? (float)exp(h.nu - (log(F) - h.mu)) : 1.0f; };
             float F = 1.0f, G = 1.0f, E = 0.0f;
             if (!_wcsicmp(val.c_str(), L"mode")) {            // z = -sigma: F at its mode
-                F = (float)exp(-1.5 * sg * sg);
-                G = (float)exp(0.5 * sg * sg);
+                F = (float)exp(h.mu - (double)sg * sg);
+                G = flip(F);
             } else if (!_wcsicmp(val.c_str(), L"tail")) {     // F = 2.2 + the adds at full
                 F = 2.2f;
-                G = (float)(exp(-(double)sg * sg) / 2.2);
+                G = flip(F);
                 E = 1.0f;
             } else {
                 F = (float)_wtof(val.c_str());
                 if (!(F > 0.0f)) { ok = false; continue; }
-                G = (F == 1.0f) ? 1.0f : (float)(exp(-(double)sg * sg) / F);   // F = 1: the base, verbatim
+                G = (F == 1.0f) ? 1.0f : flip(F);             // F = 1: the base, verbatim
             }
             s_forceGroup[g] = true;
             s_forceF[g] = F; s_forceG[g] = G; s_forceE[g] = E;
@@ -989,6 +1025,10 @@ void ClocksDryRun(double hours) {
     void (*saved)(const char*) = s_logger;
     s_logger = nullptr;                      // per-draw lines to this process's stdout only
     S.Init(seed);
+    for (int g = 0; g < GR_COUNT; g++)
+        printf("[clocks-dryrun] shape %-9s sigma %.3f mu %+.5f (unclamped %+.5f) nu %+.5f zc %.3f mode F %.3f\n",
+               kGroupName[g], S.Sig(g), S.sh[g].mu, -0.5 * S.Sig(g) * S.Sig(g), S.sh[g].nu, S.sh[g].zc,
+               exp(S.sh[g].mu - (double)S.Sig(g) * S.Sig(g)));
     printf("[clocks-dryrun] %.0f h at 10 Hz, seed=%u, sigma=%.2f tail_at=%.2f tail_len=%.0f s gap=%.0f..%.0f min "
            "draw=%.0f..%.0f s fade=%.0f s; groups active: all %d (as on an oil stage)\n",
            hours, seed, S.p.sigma, S.p.tailAt, S.p.tailLenS, S.p.gapMinS / 60.0, S.p.gapMaxS / 60.0,
@@ -998,6 +1038,7 @@ void ClocksDryRun(double hours) {
     const int NB = 100;                       // histogram of F, bins of 0.05 over 0..5
     std::vector<long long> hist(GR_COUNT * NB, 0);
     double sumF[GR_COUNT] = {}, sumG[GR_COUNT] = {}, maxBody[GR_COUNT] = {}, maxTail[GR_COUNT] = {};
+    double maxBodyG[GR_COUNT] = {};
     long long above[GR_COUNT] = {};
     float prevF[GR_COUNT], prevG[GR_COUNT];
     int prevPh[GR_COUNT];
@@ -1015,10 +1056,10 @@ void ClocksDryRun(double hours) {
             if (b >= NB) b = NB - 1;
             hist[g * NB + b]++;
             // slope: a step that stayed in the BODY both ends counts for the body bound
-            const double sl = fmax(fabs(s.F - prevF[g]), fabs(s.G - prevG[g])) / dt;
+            const double sl = fabs(s.F - prevF[g]) / dt, slg = fabs(s.G - prevG[g]) / dt;
             const bool body = s.phase == PH_BODY && prevPh[g] == PH_BODY;
-            if (body) { if (sl > maxBody[g]) maxBody[g] = sl; }
-            else if (sl > maxTail[g]) maxTail[g] = sl;
+            if (body) { if (sl > maxBody[g]) maxBody[g] = sl; if (slg > maxBodyG[g]) maxBodyG[g] = slg; }
+            else if (fmax(sl, slg) > maxTail[g]) maxTail[g] = fmax(sl, slg);
             prevF[g] = s.F; prevG[g] = s.G; prevPh[g] = s.phase;
         }
     }
@@ -1036,9 +1077,9 @@ void ClocksDryRun(double hours) {
         if (!okMean || !okMode) pass = false;
         if (maxBody[g] > worstBody) worstBody = maxBody[g];
         printf("[clocks-dryrun] %-9s mean F %.4f  mean F' %.4f %s  mode bin %.3f %s  time above tail_at %.2f%%  "
-               "draws %ld  tails %ld  max|dF/dt| body %.5f/s  tail %.4f/s\n",
+               "draws %ld  tails %ld  max|dF/dt| body %.5f/s (F' %.5f/s)  tail %.4f/s\n",
                kGroupName[g], mF, mG, okMean ? "PASS" : "FAIL", mode, okMode ? "PASS" : "FAIL",
-               100.0 * above[g] / (double)steps, S.g[g].draws, S.g[g].tails, maxBody[g], maxTail[g]);
+               100.0 * above[g] / (double)steps, S.g[g].draws, S.g[g].tails, maxBody[g], maxBodyG[g], maxTail[g]);
     }
     const double rate = S.tails / H;
     const double gapMin = S.minGap < 1e29 ? S.minGap / 60.0 : 0.0;

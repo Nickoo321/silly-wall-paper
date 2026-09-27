@@ -1492,6 +1492,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_RBUTTONDOWN: case WM_RBUTTONUP:
     case WM_MOUSEWHEEL: case WM_KEYDOWN: case WM_KEYUP: case WM_CHAR: case WM_SETFOCUS: case WM_KILLFOCUS:
         s_lastInput = GetTickCount64();
+        UiClocksHold(true);              // brief CLOCKS pre-flight 7: re-armed on input (never a timeout)
         // window open => the cycle's dwell timer waits; each input re-arms the 10-minute
         // auto-resume (a forgotten window must not stop the cycle forever)
         if (!s_view.noEditPause && s_lastInput - s_view.lastPauseArm > 5000) {
@@ -1539,6 +1540,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, kTimerId);
         UiCycleResumeEditing();          // closing resumes the cycle ...
         UiUnfreezeAll();                 // ... and lets every held animator go
+        UiClocksHold(false);             // brief CLOCKS pre-flight 7: the ONLY release
         ReleaseThumbs();
         if (s_imgui) {
             ImGui::SetCurrentContext(s_imgui);
@@ -1903,6 +1905,7 @@ void ShowSettingsWindow() {
     s_view.noEditPause = false;
     s_view.lastPauseArm = GetTickCount64();
     UiCyclePauseForEditing();            // D3: window open => the dwell timer pauses
+    UiClocksHold(true);                  // brief CLOCKS pre-flight 7: the clocks glide to 1
     SetTimer(s_wnd, kTimerId, 33, nullptr);
     ShowWindow(s_wnd, SW_SHOW);
     SetForegroundWindow(s_wnd);

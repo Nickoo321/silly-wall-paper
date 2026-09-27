@@ -7,6 +7,8 @@
 #include "animators.h"
 #include "app_state.h"
 #include "journey.h"
+#include "clocks.h"
+#include "photo.h"
 #include <cstdio>
 #include <cstdarg>
 #include <cmath>
@@ -99,6 +101,16 @@ bool  s_burstDone = false;
 bool  s_burstWatch = false;          // a burst is landing: log where it lands
 float s_burstAnchor = 0.0f;
 bool  s_entryDrop = false;           // ink stage: one drop at the start of the warm-up
+// brief BY photo stage: the director tick serial (one folder scan per tick),
+// the stage a draw must skip (the fallback at black), the load in flight and
+// the per-stage "skipped" log serial (one line per draw)
+unsigned s_tickSerial = 1;
+int   s_excludeStage = -1;
+int   s_photoLoadStage = -1;             // the photo stage whose file is loading / shown
+std::wstring s_photoFile;                // its file ("" = nothing drawable)
+bool  s_photoFill = false;
+ULONGLONG s_photoWaitStart = 0;          // black point (live: 5 s cap)
+std::vector<unsigned> s_skipLogged;
 // the oil -> oil scheme change (CYCLE_SCHEME)
 int   s_schemeSub = 0;               // 0 = ramping down, 1 = ramping back up
 float s_amtFrom[4] = {}, s_amtTo[4] = {};
@@ -120,7 +132,8 @@ void Log(const char* fmt, ...) {
 }
 
 const char* LookName(int look) {
-    return look == CYCLE_LOOK_ACID ? "liquid_acid" : (look == CYCLE_LOOK_INK ? "ink" : "fluid");
+    return look == CYCLE_LOOK_ACID ? "liquid_acid"
+         : (look == CYCLE_LOOK_INK ? "ink" : (look == CYCLE_LOOK_PHOTO ? "photo" : "fluid"));
 }
 const char* PhaseName(int p) {
     switch (p) {
@@ -147,6 +160,7 @@ void SeedRng() {
     s_rng = seed ? (uint64_t)seed * 0x2545F4914F6CDD1Dull
                  : (GetTickCount64() ^ ((uint64_t)GetCurrentProcessId() << 32));
     s_rngSeeded = true;
+    PhotoBagSeed(seed);                  // brief BY: the bag's OWN stream (never NextRand)
     Log("[cycle] order=%s seed=%u%s\n",
         s_cfg.order == CYCLE_ORDER_FIXED ? "fixed" : "alternate_random",
         seed, seed ? "" : " (wall clock)");
@@ -190,6 +204,17 @@ std::wstring Stem(const std::wstring& path) {
 bool Exists(const std::wstring& p) {
     return !p.empty() && GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES;
 }
+// Does the ini have a [name] section (even an empty one)?
+bool HasSection(const std::wstring& ini, const wchar_t* name) {
+    if (!Exists(ini)) return false;
+    std::vector<wchar_t> buf(8192, 0);
+    const DWORD n = GetPrivateProfileSectionNamesW(buf.data(), (DWORD)buf.size(), ini.c_str());
+    for (DWORD i = 0; i < n && buf[i];) {
+        if (_wcsicmp(&buf[i], name) == 0) return true;
+        i += (DWORD)wcslen(&buf[i]) + 1;
+    }
+    return false;
+}
 
 // The look a stage lands on, from [look] alone (the same rules as
 // LoadConfigFromIni: base first, the file over it) -- no full config load.
@@ -213,6 +238,18 @@ int LookOf(const CycleStage& st) {
 
 void ResolveStage(CycleStage& st, const std::wstring& ini) {
     st.path = Resolve(st.file, ini);
+    // brief BY pre-flight 1: the kind comes from the FILE ([photo] section),
+    // or from the persisted stage_K_photo=1. A photo stage composes nothing.
+    if (HasSection(st.path, L"photo")) st.photo = true;
+    if (st.photo) {
+        st.basePath.clear();
+        st.name = Stem(st.file);
+        st.ok = Exists(st.path);
+        st.overlay = false;
+        st.look = CYCLE_LOOK_PHOTO;
+        st.burstOk = false;
+        return;
+    }
     st.basePath = Resolve(st.base, ini);
     // no stage_N_base: the file's own [meta] base= (a partial "Save as", or a
     // variant such as acid-rise-12-tone-half.ini), relative to the FILE's folder
@@ -244,6 +281,7 @@ int OkCount() {
 }
 bool Valid(int i) { return i >= 0 && i < (int)s_cfg.stages.size() && s_cfg.stages[i].ok; }
 bool IsOverlay(int i) { return Valid(i) && s_cfg.stages[i].overlay; }
+bool IsPhoto(int i) { return Valid(i) && s_cfg.stages[i].photo; }     // brief BY
 bool IsFluid(int i) { return Valid(i) && !s_cfg.stages[i].overlay && s_cfg.stages[i].look == CYCLE_LOOK_FLUID; }
 // an oil or ink LOOK stage (the "other" side of the WE alternation)
 bool IsOtherLook(int i) { return Valid(i) && !s_cfg.stages[i].overlay && s_cfg.stages[i].look != CYCLE_LOOK_FLUID; }
@@ -257,6 +295,37 @@ int TierOf(int j) {                      // tier mode: an untiered stage counts 
 }
 // the look stage actually running (an overlay's base)
 int LookStage(int i) { return IsOverlay(i) ? s_base : i; }
+
+// ---- brief BY photo stage: folder, emptiness, the draw filter ---------------
+// [photo] folder= (relative to the stage file, like Resolve) and fit=, read
+// from the stage file at scan time (pre-flight 29); empty folder = the default
+// photos folder (live), --photos or none (--shot, pre-flight 22).
+std::wstring PhotoFolderOf(int i, bool* fill) {
+    const CycleStage& st = s_cfg.stages[i];
+    const std::wstring f = IniStr(L"photo", L"folder", st.path.c_str());
+    if (fill) *fill = _wcsicmp(IniStr(L"photo", L"fit", st.path.c_str()).c_str(), L"fill") == 0;
+    return f.empty() ? PhotoDefaultFolder() : Resolve(f, st.path);
+}
+// A photo stage with no usable file: out of every draw BEFORE any NextUnit()
+// (pre-flight 24), one log line per stage per draw.
+bool PhotoEmpty(int j) {
+    const std::wstring folder = PhotoFolderOf(j, nullptr);
+    if (PhotoCount(folder, s_tickSerial) > 0) return false;
+    if (s_skipLogged.size() < s_cfg.stages.size()) s_skipLogged.resize(s_cfg.stages.size(), 0);
+    if (s_skipLogged[j] != s_tickSerial) {
+        s_skipLogged[j] = s_tickSerial;
+        Log("[cycle] photo stage skipped: no photos in %ls\n",
+            folder.empty() ? L"(no folder: --shot without --photos)" : folder.c_str());
+    }
+    return true;
+}
+// Valid, not the stage being fallen back from, and (a photo stage) not empty.
+bool Drawable(int j) {
+    if (!Valid(j) || j == s_excludeStage) return false;
+    return !(s_cfg.stages[j].photo && PhotoEmpty(j));
+}
+// pre-flight 4: never an overlay over a photo
+bool OverlayBlocked(int j) { return IsOverlay(j) && IsPhoto(LookStage(s_cur)); }
 
 float DwellOf(int i) {
     float v = s_dwellOverride > 0.0f ? s_dwellOverride
@@ -295,6 +364,7 @@ float LerpOf(int i) {
 float WarmupOf(int i) {
     if (!Valid(i)) return kWarmupDefault[0];
     const CycleStage& st = s_cfg.stages[i];
+    if (st.photo || st.look < 0 || st.look > CYCLE_LOOK_INK) return 0.0f;   // pre-flight 2
     return st.warmupSec >= 0.0f ? st.warmupSec : kWarmupDefault[st.look];
 }
 
@@ -482,7 +552,61 @@ void EnterDwell(FluidRenderer& r, int i) {
         s_journeyWasActive ? " with a journey" : "");
 }
 
+// brief BY: draw a file from the stage's bag and start its decode now (the
+// photo stage became the target: pre-flight 26).
+void StartPhotoLoad(FluidRenderer& r, int i) {
+    bool fill = false;
+    const std::wstring folder = PhotoFolderOf(i, &fill);
+    s_photoLoadStage = i;
+    s_photoFill = fill;
+    std::wstring file;
+    if (!PhotoDraw(folder, s_tickSerial, file)) {
+        s_photoFile.clear();
+        r.PhotoCancel();
+        Log("[cycle] photo stage %d: nothing to draw in %ls\n", i + 1, folder.c_str());
+        return;
+    }
+    s_photoFile = file;
+    r.PhotoRequest(file, fill);
+    Log("[photo] load %ls for stage %d (%s) started on the worker\n", PhotoNameOf(file), i + 1,
+        fill ? "fill" : "fit");
+}
+void CancelPhotoLoad(FluidRenderer& r) {
+    if (s_photoLoadStage < 0) return;
+    r.PhotoCancel();                     // the shown photo (if any) stays until the black point
+    Log("[photo] load for stage %d cancelled (the target moved)\n", s_photoLoadStage + 1);
+    s_photoLoadStage = -1;
+    s_photoFile.clear();
+}
+
+// pre-flight 5: a photo stage at the black point. No Compose, no Config /
+// peak / gamut write, no EnsureLookResources, no ResetLookState, no
+// ApplyPaletteStart; the live Config stays the previous look's (the sim does
+// not tick under the photo, pre-flight 6).
+void ApplyPhotoStage(FluidRenderer& r, int i) {
+    if (s_photoLoadStage != i || s_photoFile.empty()) StartPhotoLoad(r, i);
+    r.PhotoEnter();
+    double joinMs = -1.0;
+    if (PhotoSynchronous()) joinMs = r.PhotoJoin();   // --shot: frame-deterministic (pre-flight 27)
+    s_base = -1;
+    s_entryDrop = false;
+    PushHistory(s_cur, i);
+    s_cur = i;
+    s_next = -1;
+    PersistCurrent();
+    s_photoWaitStart = GetTickCount64();
+    Log("[cycle] stage %d/%d %ls (photo) applied at black: no compose, no warm-up, sim paused; "
+        "file %ls%s\n", i + 1, (int)s_cfg.stages.size(), s_cfg.stages[i].name.c_str(),
+        s_photoFile.empty() ? L"(none)" : PhotoNameOf(s_photoFile),
+        joinMs >= 0.0 ? "" : " (live: black holds up to 5 s)");
+    if (joinMs >= 0.0) Log("[photo] --shot: joined the worker at the black point (waited %.1f ms)\n", joinMs);
+}
+
 void ApplyStage(FluidRenderer& r, int i) {
+    if (IsPhoto(i)) { ApplyPhotoStage(r, i); return; }
+    r.PhotoLeave();                      // no-op unless a photo was up (brief BY)
+    s_photoLoadStage = -1;
+    s_photoFile.clear();
     FluidConfig c;
     float peak;
     int gamut;
@@ -524,7 +648,7 @@ int DrawTiered(bool allowBurst, bool allowOverlays, const char* why) {
     std::vector<int> mem[3];
     float tot[3] = {};
     for (int j = 0; j < n; j++) {
-        if (!Valid(j) || IsFluid(j)) continue;
+        if (IsFluid(j) || !Drawable(j)) continue;   // brief BY: empty photo stages out, before NextUnit
         if (s_cfg.stages[j].overlay && !allowOverlays) continue;
         const float w = fmaxf(s_cfg.stages[j].weight, 0.0f);
         if (w <= 0.0f) continue;
@@ -611,7 +735,7 @@ int DrawFluid() {
 int TakeQueued(bool allowOverlay) {
     const int q = s_queued;
     s_queued = -1;
-    if (!Valid(q) || IsFluid(q) || (IsOverlay(q) && !allowOverlay)) return -1;
+    if (!Drawable(q) || IsFluid(q) || (IsOverlay(q) && !allowOverlay) || OverlayBlocked(q)) return -1;
     return q;
 }
 
@@ -633,8 +757,9 @@ int PickTier() {
         return DrawFluid();
     }
     if (IsFluid(s_cur) || !haveFluid) {
-        const int q = TakeQueued(true);
-        return q >= 0 ? q : DrawTiered(false, true, "after WE");
+        const bool ovOk = !IsPhoto(s_cur);   // pre-flight 4: never an overlay over a photo
+        const int q = TakeQueued(ovOk);
+        return q >= 0 ? q : DrawTiered(false, ovOk, "after WE");
     }
     // oil / ink: the WE interlude; its successor is drawn now if the midpoint
     // draw has not queued one (or it was the burst)
@@ -652,13 +777,13 @@ int PickNext() {
     if (s_cfg.order == CYCLE_ORDER_FIXED) {
         if (s_cur >= 0 && !s_cfg.loop) {
             bool anyAfter = false;       // no loop: stop on the last valid stage
-            for (int j = s_cur + 1; j < n; j++) if (Valid(j)) { anyAfter = true; break; }
+            for (int j = s_cur + 1; j < n; j++) if (Drawable(j) && !OverlayBlocked(j)) { anyAfter = true; break; }
             if (!anyAfter) return -1;
         }
         for (int k = 1; k <= n; k++) {
             int j = ((s_cur < 0 ? -1 : s_cur) + k) % n;
             if (j < 0) j += n;
-            if (Valid(j)) return j;
+            if (Drawable(j) && !OverlayBlocked(j)) return j;   // brief BY: pass over an empty photo stage
         }
         return -1;
     }
@@ -674,14 +799,15 @@ int PickNext() {
     auto samePath = [&](int j) { return _wcsicmp(s_cfg.stages[j].path.c_str(), curPath.c_str()) == 0; };
     std::vector<int> cands;
     for (int j = 0; j < n; j++) {
-        if (!Valid(j) || j == s_cur || samePath(j)) continue;
+        if (j == s_cur || !Drawable(j) || samePath(j)) continue;
         const bool ov = s_cfg.stages[j].overlay;
+        if (ov && IsPhoto(s_cur)) continue;          // pre-flight 4
         if (onOverlay) { if (!ov && s_cfg.stages[j].look != curLook) cands.push_back(j); }
         else if (Valid(s_cur) ? (ov || s_cfg.stages[j].look != curLook) : !ov) cands.push_back(j);
     }
     if (cands.empty())
         for (int j = 0; j < n; j++)
-            if (Valid(j) && j != s_cur && !samePath(j) && !s_cfg.stages[j].overlay)
+            if (j != s_cur && Drawable(j) && !samePath(j) && !s_cfg.stages[j].overlay)
                 cands.push_back(j);
     if (cands.empty()) return -1;
     // weighted draw (stage_N_weight, default 1); logged so a seeded run shows it
@@ -718,14 +844,14 @@ int PickPrev() {
         while (!s_history.empty()) {
             int j = s_history.back();
             s_history.pop_back();
-            if (Valid(j) && j != s_cur) return j;
+            if (j != s_cur && Drawable(j) && !OverlayBlocked(j)) return j;
         }
         return PickNext();
     }
     for (int k = 1; k <= n; k++) {
         int j = ((s_cur < 0 ? 0 : s_cur) - k) % n;
         if (j < 0) j += n;
-        if (Valid(j)) return j;
+        if (Drawable(j) && !OverlayBlocked(j)) return j;
     }
     return -1;
 }
@@ -737,7 +863,13 @@ void GoOff(const char* why) {
     s_stopAfter = false;
     g_cycleActive = false;
     if (g_renderer) g_renderer->SetCoverageWanted(false);
+    if (g_renderer) g_renderer->PhotoLeave();    // brief BY: the look under a photo comes back
+    s_photoLoadStage = -1;
+    s_photoFile.clear();
     Log("[cycle] off (%s)\n", why);
+    // CLOCKS pre-flight 4: the base goes back into the live config NOW --
+    // ApplyPreset reads Config right after CycleManualOverride returns
+    if (g_renderer) ClocksRestoreBase(g_renderer->Config(), "cycle off");
 }
 
 // Does cur -> target lerp (both fluid, not forced to fade/cut)?
@@ -756,6 +888,7 @@ void BeginLerp(FluidRenderer& r, int target) {
     float peak;
     int gamut;
     s_from = r.Config();
+    ClocksBaseCopy(s_from);              // CLOCKS pre-flight 3: lerp FROM the base, not base x F
     Compose(target, s_from, s_target, peak, gamut);
     r.SetCoverageWanted(true);           // the bridge angle needs a fresh field hue
     const float dyeHue = r.FieldAvgHueDeg();
@@ -884,7 +1017,11 @@ bool WantsScheme(int target) {
 }
 
 void BeginScheme(FluidRenderer& r, int target) {
-    GetAmts(r.Config().acid, s_amtFrom);
+    {
+        FluidConfig b = r.Config();          // CLOCKS pre-flight 3: ramp the BASE amounts
+        ClocksBaseCopy(b);
+        GetAmts(b.acid, s_amtFrom);
+    }
     s_next = target;
     s_phase = CYCLE_SCHEME;
     s_schemeSub = 0;
@@ -922,6 +1059,10 @@ void SchemeSwap(FluidRenderer& r) {
 
 void BeginSwitch(FluidRenderer& r, int target) {
     if (!Valid(target)) return;
+    if (OverlayBlocked(target)) {        // pre-flight 4: never an overlay over a photo
+        Log("[cycle] overlay %d refused: no overlay over a photo stage\n", target + 1);
+        return;
+    }
     // an overlay can only go on over a formed look: not mid black / hard fade
     if (IsOverlay(target) && (s_phase == CYCLE_WARMUP || (s_phase == CYCLE_FADE_OUT && !s_soft))) return;
     if (s_phase == CYCLE_FADE_OUT && s_soft) return;   // a soft switch is 0.6 s: let it land
@@ -934,6 +1075,8 @@ void BeginSwitch(FluidRenderer& r, int target) {
     }
     if (s_phase == CYCLE_FADE_OUT) {        // already on the way to black
         s_next = target;
+        if (IsPhoto(target)) { if (s_photoLoadStage != target) StartPhotoLoad(r, target); }   // pre-flight 26
+        else CancelPhotoLoad(r);
         return;
     }
     if (s_phase == CYCLE_LERP) {            // land the lerp first, then go on
@@ -966,6 +1109,9 @@ void BeginSwitch(FluidRenderer& r, int target) {
     s_next = target;
     s_phase = CYCLE_FADE_OUT;
     s_phaseT = 0.0f;
+    // brief BY: the decode runs during the fade-out, so the texture is ready at black
+    if (IsPhoto(target)) StartPhotoLoad(r, target);
+    else if (s_photoLoadStage >= 0 && s_photoLoadStage != s_cur) CancelPhotoLoad(r);
     JourneyDetach();                        // nothing drives keys during the fade;
     s_journeyWasActive = false;             // the hue is released at the black point
     Log("[cycle] switching %ls -> %ls (fade out %.2f s)\n",
@@ -987,6 +1133,7 @@ void SoftPoint(FluidRenderer& r) {
     }
     if (IsOverlay(target)) {
         s_preOverlay = c;
+        ClocksBaseCopy(s_preOverlay);        // CLOCKS pre-flight 3: restore the base later
         s_prePeak = g_hdrPeakNits;
         s_preGamut = g_gamutMode;
         const FluidConfig shell = c;
@@ -1012,6 +1159,67 @@ void SoftPoint(FluidRenderer& r) {
     s_phaseT = 0.0f;
 }
 
+// brief BY pre-flight 27: the photo could not be shown (decode failed, 5 s
+// timeout, nothing drawable). Mark the file failed and FALL BACK: PickNext with
+// this stage excluded, applied in place at black with a normal warm-up.
+void PhotoFallback(FluidRenderer& r, const char* why) {
+    const int ph = s_cur;
+    if (!s_photoFile.empty()) PhotoMarkFailed(s_photoFile, why);
+    r.PhotoCancel();
+    s_photoLoadStage = -1;
+    s_photoFile.clear();
+    s_excludeStage = ph;
+    int n = PickNext();
+    s_excludeStage = -1;
+    if (!Valid(n) || n == ph || IsOverlay(n)) {
+        n = -1;
+        for (int j = 0; j < (int)s_cfg.stages.size(); j++)
+            if (j != ph && Valid(j) && !IsOverlay(j) && !IsPhoto(j)) { n = j; break; }
+    }
+    if (n < 0) {
+        Log("[cycle] photo stage %d: %s, and no look stage to fall back to\n", ph + 1, why);
+        GoOff("no look stage after a failed photo");
+        return;
+    }
+    Log("[cycle] photo stage %d %ls: %s -> falling back to stage %d %ls at black\n", ph + 1,
+        s_cfg.stages[ph].name.c_str(), why, n + 1, s_cfg.stages[n].name.c_str());
+    ApplyStage(r, n);
+    r.ReleaseHueShift(false);
+    s_phaseT = 0.0f;
+    s_warmSim = 0.0f;
+}
+
+void PhotoWarmup(FluidRenderer& r) {
+    const int ps = s_photoFile.empty() ? PHOTO_FAILED : r.PhotoStatus();
+    if (ps == PHOTO_SHOWN) {
+        const PhotoResult& in = r.PhotoShownInfo();
+        PhotoMarkShown(s_photoFile);         // shown = its fade-in starts (pre-flight 25)
+        Log("[photo] show %ls %dx%d -> %dx%d decode %.0f ms upload %.1f ms (%s %d bits/ch -> %s, "
+            "orientation %d%s%s%s)\n", PhotoNameOf(in.path), in.srcW, in.srcH, in.texW, in.texH,
+            in.decodeMs, in.createMs + r.PhotoUploadRecordMs(), in.fill ? "fill" : "fit", in.bpc,
+            in.fmt == DXGI_FORMAT_R16G16B16A16_UNORM ? "RGBA16" : "BGRA8", in.orient,
+            in.scaled ? ", Fant-scaled" : ", 1:1", in.alpha ? ", alpha" : "",
+            in.icc ? ", embedded ICC profile treated as sRGB" : "");
+        Log("[cycle] photo ready %.0f ms after the black point -> fade in %.2f s\n",
+            (double)(GetTickCount64() - s_photoWaitStart), FadeInOf(s_cur));
+        s_phase = CYCLE_FADE_IN;             // this frame is still black
+        s_phaseT = 0.0f;
+        return;
+    }
+    if (ps == PHOTO_NONE) {                  // lost (renderer re-init mid-wait): ask again
+        r.PhotoRequest(s_photoFile, s_photoFill);
+        r.PhotoEnter();
+        return;
+    }
+    const bool timeout = !PhotoSynchronous() && GetTickCount64() - s_photoWaitStart > 5000;
+    if (ps == PHOTO_FAILED || timeout) {
+        std::string why = s_photoFile.empty() ? std::string("no usable file")
+                        : timeout ? std::string("not decoded within 5 s of the black point")
+                                  : r.PhotoFailReason();
+        PhotoFallback(r, why.c_str());
+    }
+}
+
 void BlackPoint(FluidRenderer& r) {
     const int target = Valid(s_next) ? s_next : s_cur;
     ApplyStage(r, target);
@@ -1033,6 +1241,7 @@ void ApplyFreezeToRenderer(int a, bool on) {
 // ---------------------------------------------------------------------------
 
 void CycleSetLogger(void (*fn)(const char*)) { s_logger = fn; }
+unsigned CycleSeed() { return s_seedOverride ? s_seedOverride : s_cfg.seed; }
 
 void CycleLoad(const wchar_t* ini) {
     s_cfg = CycleConfig{};
@@ -1079,6 +1288,7 @@ void CycleLoad(const wchar_t* ini) {
             st.dwellSec = kMaxDwellSec;
         }
         st.overlay = GetPrivateProfileIntW(S, K(L"overlay"), 0, I) != 0;
+        st.photo = GetPrivateProfileIntW(S, K(L"photo"), 0, I) != 0;   // brief BY (also from [photo])
         std::wstring tr = IniStr(S, K(L"transition"), I);
         if (_wcsicmp(tr.c_str(), L"cut") == 0)       st.transition = CYCLE_TR_CUT;
         else if (_wcsicmp(tr.c_str(), L"fade") == 0) st.transition = CYCLE_TR_FADE;
@@ -1123,10 +1333,15 @@ bool CycleBoot(FluidConfig& cfg) {
     if (Valid(s_startStage)) start = s_startStage;
     else if (Valid(s_saved)) start = s_saved;
     else start = PickNext();                 // s_cur = -1: fixed -> first, random -> a look
-    // an overlay needs a look under it: boot on the next look stage instead
-    for (int k = 0; k < (int)s_cfg.stages.size() && IsOverlay(start); k++)
+    // an overlay needs a look under it: boot on the next look stage instead.
+    // brief BY pre-flight 7: never boot on a photo stage either (there is no
+    // renderer yet) -- also for current= resume and --cycle-stage
+    for (int k = 0; k < (int)s_cfg.stages.size() && (IsOverlay(start) || IsPhoto(start)); k++)
         start = (start + 1) % (int)s_cfg.stages.size();
-    if (!Valid(start) || IsOverlay(start)) return false;
+    if (!Valid(start) || IsOverlay(start) || IsPhoto(start)) {
+        Log("[cycle] no look stage to boot on (overlays and photo stages need a look first): cycle off\n");
+        return false;
+    }
     FluidConfig c;
     float peak;
     int gamut;
@@ -1155,6 +1370,7 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
     f.stepDt = 1.0f / s_cfg.warmupStepHz;
     if (dt < 0.0f) dt = 0.0f;
     s_clock += dt;
+    s_tickSerial++;                          // brief BY: one photo-folder scan per tick
     AnimatorsTick();
     if (s_phase == CYCLE_OFF) { s_fade = 1.0f; return f; }
     if (s_burstWatch && !r.AnimatorKicking(ANIM_PALETTE)) {   // the burst has landed
@@ -1282,6 +1498,13 @@ CycleFrame CycleTick(FluidRenderer& r, float dt) {
     }
     case CYCLE_WARMUP: {
         s_fade = 0.0f;
+        if (IsPhoto(s_cur)) {                // brief BY: the gate is "texture ready" (pre-flight 26)
+            f.extraSteps = 0;                // pre-flight 6: no sim, no hue wait
+            PhotoWarmup(r);
+            f.fade = 0.0f;
+            f.black = true;
+            return f;
+        }
         if (s_entryDrop) {                   // FINAL-CYCLE B.1: ink opens on a drop
             s_entryDrop = false;
             const DropConfig& d = r.Config().drops;
@@ -1359,6 +1582,14 @@ void CyclePrev() {
 
 void CycleJump(int stage) {
     if (!g_renderer || !Valid(stage)) return;
+    if (IsPhoto(stage) && !Drawable(stage)) {             // brief BY pre-flight 24
+        Log("[cycle] jump -> %d refused: the photo stage has nothing to show\n", stage + 1);
+        return;
+    }
+    if (s_phase != CYCLE_OFF && OverlayBlocked(stage)) {   // pre-flight 4
+        Log("[cycle] jump -> %d refused: no overlay over a photo stage\n", stage + 1);
+        return;
+    }
     if (s_phase == CYCLE_OFF) {
         CycleSetEnabled(true, false);
         if (s_phase == CYCLE_OFF) return;
@@ -1405,7 +1636,7 @@ std::wstring CycleStageLabel(int i) {
     const CycleStage& st = s_cfg.stages[i];
     wchar_t buf[512];
     _snwprintf_s(buf, _TRUNCATE, L"%d. %s (%s)%s", i + 1, st.name.c_str(),
-               st.overlay ? L"overlay"
+               st.photo ? L"photo" : st.overlay ? L"overlay"
                           : (st.look == CYCLE_LOOK_ACID ? L"oil" : (st.look == CYCLE_LOOK_INK ? L"ink" : L"WE fluid")),
                st.ok ? L"" : L" [missing]");
     return buf;
@@ -1469,6 +1700,7 @@ void CycleSet(const CycleConfig& c) {
             if (!st.base.empty()) putS(K(L"base"), st.base.c_str());
             if (st.dwellSec > 0.0f) putF(K(L"dwell"), fminf(st.dwellSec, kMaxDwellSec));
             if (st.overlay) putS(K(L"overlay"), L"1");
+            if (st.photo) putS(K(L"photo"), L"1");       // brief BY pre-flight 1: the kind survives a save
             if (st.transition != CYCLE_TR_DEFAULT)
                 putS(K(L"transition"), st.transition == CYCLE_TR_CUT ? L"cut"
                                      : (st.transition == CYCLE_TR_LERP ? L"lerp" : L"fade"));
@@ -1531,7 +1763,7 @@ int CycleTierFromName(const wchar_t* s) {
 }
 
 bool CycleBurst() {
-    if (!g_renderer || s_phase != CYCLE_DWELL || !IsOtherLook(s_cur)) {
+    if (!g_renderer || s_phase != CYCLE_DWELL || !IsOtherLook(s_cur) || IsPhoto(s_cur)) {
         Log("[cycle] burst refused: not dwelling on an oil stage\n");
         return false;
     }
@@ -1563,12 +1795,16 @@ void CycleDrawTest(int draws) {
     for (int j = 0; j < n; j++) if (IsFluid(j)) { s_cur = j; break; }
     if (s_cur < 0) s_cur = PickNext();
     long visits = 0, breaks = 0, overlays = 0, weVisits = 0;
+    long photoVisits = 0, overlayOnPhoto = 0, photoAfterPhoto = 0;   // brief BY
+    bool anyPhoto = false;
+    for (int j = 0; j < n; j++) if (IsPhoto(j)) anyPhoto = true;
     int lastLook = -1;                       // last LOOK stage's look (overlays are transparent)
     std::vector<long> visitCount(n, 0);
     while (Valid(s_cur) && s_statDraws < draws && visits < (long)draws * 20) {
         visits++;
         visitCount[s_cur]++;
         if (IsFluid(s_cur)) weVisits++;
+        if (IsPhoto(s_cur)) photoVisits++;
         if (IsOverlay(s_cur)) overlays++;
         else {
             const int lk = s_cfg.stages[s_cur].look;
@@ -1584,6 +1820,8 @@ void CycleDrawTest(int draws) {
         }
         const int nx = PickNext();
         if (!Valid(nx)) break;
+        if (IsPhoto(s_cur) && IsOverlay(nx)) overlayOnPhoto++;
+        if (IsPhoto(s_cur) && IsPhoto(nx)) photoAfterPhoto++;
         if (IsOverlay(nx)) { if (!IsOverlay(s_cur)) s_base = s_cur; }
         else s_base = -1;
         s_cur = nx;
@@ -1595,6 +1833,9 @@ void CycleDrawTest(int draws) {
         s_cfg.order == CYCLE_ORDER_FIXED ? "fixed" : "alternate_random",
         s_seedOverride ? s_seedOverride : s_cfg.seed, s_statDraws, visits, weVisits, overlays,
         s_statBurst, s_statRedraw, breaks);
+    if (anyPhoto)
+        Log("[drawtest] photo: visits=%ld overlay-after-photo=%ld photo-after-photo=%ld\n",
+            photoVisits, overlayOnPhoto, photoAfterPhoto);
     Log("[drawtest] tier shares: proven %.2f%%  moderate %.2f%%  wild %.2f%%  (target 70 / 20 / 10)\n",
         100.0 * s_statTier[0] / D, 100.0 * s_statTier[1] / D, 100.0 * s_statTier[2] / D);
     // nominal shares: tier weight x multiplier / tier total (all members allowed;
@@ -1656,7 +1897,7 @@ float CyclePauseRemainingSec() { return s_paused ? (float)(s_pauseUntil - s_cloc
 bool CycleStageBase(FluidConfig& out) {
     if (s_phase == CYCLE_OFF || !g_renderer) return false;
     const int i = (s_phase == CYCLE_LERP && Valid(s_next)) ? s_next : s_cur;
-    if (!Valid(i)) return false;
+    if (!Valid(i) || IsPhoto(i)) return false;   // brief BY: a photo composes nothing
     float peak;
     int gamut;
     Compose(i, g_renderer->Config(), out, peak, gamut);
@@ -1664,12 +1905,14 @@ bool CycleStageBase(FluidConfig& out) {
 }
 
 std::wstring CycleStageFile() {
-    if (s_phase == CYCLE_OFF || !Valid(s_cur)) return L"";
+    // brief BY pre-flight 8: "" on a photo stage, so the UI never saves live
+    // Config into the photo ini
+    if (s_phase == CYCLE_OFF || !Valid(s_cur) || IsPhoto(s_cur)) return L"";
     return s_cfg.stages[s_cur].path;
 }
 
 void CycleRevertStage() {
-    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur)) return;
+    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur) || IsPhoto(s_cur)) return;
     FluidConfig c;
     float peak;
     int gamut;
@@ -1700,9 +1943,11 @@ void CycleSetStageIncluded(const std::wstring& file, bool included, float dwellS
             CycleStage st;
             st.file = file;
             st.dwellSec = fminf(dwellSec, kMaxDwellSec);
-            // a preset without [look] (the Mirror overlays) is an overlay stage
+            // a preset without [look] (the Mirror overlays) is an overlay stage --
+            // unless it is a [photo] stage file (brief BY pre-flight 8)
             wchar_t sec[64] = {};
-            st.overlay = GetPrivateProfileSectionW(L"look", sec, 64, abs.c_str()) == 0;
+            st.photo = HasSection(abs, L"photo");
+            st.overlay = !st.photo && GetPrivateProfileSectionW(L"look", sec, 64, abs.c_str()) == 0;
             c.stages.push_back(st);
             changed = true;
         }
@@ -1759,6 +2004,7 @@ const wchar_t* AnimatorName(Animator a) {
     case ANIM_HUE_SHIFT:  return L"Fluid hue-shift bursts";
     case ANIM_TRANSITION: return L"Stage transition + journey";
     case ANIM_CYCLE:      return L"Cycle dwell timer";
+    case ANIM_CLOCKS:     return L"Slow key clocks";
     default:              return L"?";
     }
 }

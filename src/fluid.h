@@ -4,7 +4,9 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <string>
 #include <vector>
+#include "photo.h"
 
 // ---------------------------------------------------------------------------
 // "Liquid Acid" render look (ini section [liquid_acid], enabled by
@@ -1728,6 +1730,34 @@ public:
     void QueueSplatBurst(int amount) { m_entrySplats = amount; }
     void QueueDropUv(float u, float v) { QueueDrop(u * (float)m_width, v * (float)m_height); }
 
+    // ---- brief BY photo stage (src/photo.cpp; driven by cycle.cpp). Nothing
+    // below is called unless the director reaches a [photo] stage, and every
+    // branch it adds to Frame()/the display passes is gated on m_photoMode, so
+    // a run without a photo stage records exactly today's commands.
+    //   PhotoRequest  start decoding `path` on the worker for this output size
+    //                 (replaces a pending request; the shown photo stays until
+    //                 PhotoEnter). Called when a photo stage becomes the TARGET.
+    //   PhotoCancel   drop the pending request (the target moved away).
+    //   PhotoEnter    at the black point: photo mode on (no FrameSim, the
+    //                 display draws kPhotoSrc; black until the texture is up),
+    //                 the previous photo retires; kPhotoSrc compiled lazily.
+    //   PhotoLeave    at the black point into a look (or the director lets go):
+    //                 photo mode off, the texture retires after its last draw.
+    //   PhotoStatus   PHOTO_NONE / LOADING / SHOWN / FAILED of the request.
+    //   PhotoJoin     shot mode: block until the worker has finished (ms).
+    void   PhotoRequest(const std::wstring& path, bool fill);
+    void   PhotoCancel();
+    void   PhotoEnter();
+    void   PhotoLeave();
+    int    PhotoStatus();
+    double PhotoJoin();
+    bool   PhotoMode() const { return m_photoMode; }
+    // a load is in flight: from the request until its upload is recorded
+    bool   PhotoLoading() const { return m_photoJob != 0 || m_photoHavePending; }
+    const PhotoResult& PhotoShownInfo() const { return m_photoInfo; }
+    const std::string& PhotoFailReason() const { return m_photoWhy; }
+    double PhotoUploadRecordMs() const { return m_photoRecordMs; }
+
     // ---- animators.h: freezes of the DERIVED clocks + live-value getters ----
     // Indices = the first four Animator values (ANIM_PALETTE, ANIM_HUE2,
     // ANIM_RIG, ANIM_HUE_SHIFT). A frozen clock accumulates the time it spent
@@ -2095,6 +2125,37 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE m_postSrv = {};
     int  m_postW = 0, m_postH = 0;
     bool m_postGrainDeferred = false;
+
+    // brief BY photo stage: the fourth display PSO (kPhotoSrc, its own
+    // literal), one live texture + one loading, SRVs ping-pong at heap 22/24
+    // (texture slots 11/12: the sim uses 0..10, post 15). Retired textures and
+    // upload buffers are released once the fence of their last use completes.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPhoto;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_photoTex;
+    D3D12_GPU_DESCRIPTOR_HANDLE m_photoSrv = {};
+    struct PhotoRetire { Microsoft::WRL::ComPtr<ID3D12Resource> res; UINT64 fence; bool upload; double t0; };
+    std::vector<PhotoRetire> m_photoRetire;
+    PhotoResult  m_photoPending;          // decoded, waiting for its upload frame
+    PhotoResult  m_photoInfo;             // what is shown (no GPU objects)
+    std::string  m_photoWhy;              // why the last request failed
+    std::wstring m_photoReqPath;          // the pending request (re-sent after a re-init)
+    std::wstring m_photoShowPath;         // the shown texture's file
+    uint64_t m_photoJob = 0;              // worker job id in flight, 0 = none
+    bool   m_photoHavePending = false;
+    bool   m_photoMode = false;           // PhotoEnter .. PhotoLeave
+    bool   m_photoAccept = false;         // PhotoEnter came after the request: upload allowed
+    bool   m_photoShown = false;          // m_photoTex holds the requested photo
+    bool   m_photoReqFill = false, m_photoFill = false;
+    bool   m_photoFailed = false;
+    int    m_photoSlot = 1;               // 0/1 -> heap slot 11/12; flips per upload
+    int    m_photoTexW = 0, m_photoTexH = 0;
+    double m_photoRecordMs = 0.0;
+    void   EnsurePhotoPso();
+    void   PhotoPump();                   // take a finished job; re-request after a re-init
+    void   RecordPhotoUpload();           // in the frame's command list (black frame)
+    void   ReleaseRetiredPhotos();
+    void   RetirePhotoTex();
+    void   DrawPhoto(int w, int h, float sdrScale);   // on the bound target
 
     // --- M3 state ---
     bool m_prevMouseDown = false;

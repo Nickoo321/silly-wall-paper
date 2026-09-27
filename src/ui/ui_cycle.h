@@ -74,9 +74,15 @@ void         UiCycleRevertStage();
 void         UiCyclePauseForEditing();
 void         UiCycleResumeEditing();
 bool         UiJourneyActive();
+// brief CLOCKS (src/clocks.h): the window holds the slow key clocks while it is open
+// (every factor glides to 1, pre-flight 7); a clocked row still gliding is locked
+// (pre-flight 8); undo snapshots take the base (pre-flight 3).
+void         UiClocksHold(bool on);
+bool         UiClocksRowSettling(const std::string& sec, const std::string& key, float* base);
+void         UiClocksBaseCopy(FluidConfig& cfg);
 
 // freezes (animators.h Animator ids)
-enum UiAnim { UA_PALETTE = 0, UA_HUE2, UA_RIG, UA_HUE_SHIFT, UA_TRANSITION, UA_CYCLE, UA_COUNT };
+enum UiAnim { UA_PALETTE = 0, UA_HUE2, UA_RIG, UA_HUE_SHIFT, UA_TRANSITION, UA_CYCLE, UA_CLOCKS, UA_COUNT };
 void         UiFreeze(int a);                 // 15 min auto-release
 void         UiUnfreeze(int a);
 void         UiUnfreezeAll();

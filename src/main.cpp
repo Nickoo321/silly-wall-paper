@@ -42,7 +42,11 @@
 //   --cycle-seed N (default --seed) / --cycle-stage N (1-based start)
 //   --cycle-next-at T[,T..]  Next stage at wallpaper time T (the tray's call)
 //   --cycle-pause-at T1,T2   CyclePause at T1, CycleResume at T2 (animators.h)
-//   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition)
+//   --shot-freeze NAME,T1,T2 Freeze(palette|hue2|rig|hueshift|transition|clocks)
+//   --clocks-dryrun HOURS    brief CLOCKS: the clock scheduler alone (CPU, 10 Hz
+//                      virtual time), one line per draw + a summary, then exit
+//   --clocks-force G=F|mode|tail[,..]  pin clock groups (all = every group)
+//   --clocks-hold-at T1,T2   ClocksHold(true) at T1, (false) at T2 (the Settings window's calls)
 //   --shot-fade F      hold the display fade at F (fade-scaling proof)
 //   --cover-sweep a,b,.. also step a CPU-only shadow hue2 mix field per listed
 //                      film_hue2_cover bias and log its [cover] line (every 5 s
@@ -50,6 +54,11 @@
 //                      An entry b@s also sets that field's film_hue2_scale s.
 //   --cover-seeds N    run every --cover-sweep entry over N noise seeds (the
 //                      value-noise lattice; seed 0 = the live field's noise)
+//   --photos <dir>     brief BY: the folder an EMPTY [photo] folder= means in
+//                      this shot run (without it a --shot run has no default
+//                      photos folder, so identity never depends on the user's
+//                      photos). A photo stage's decode is JOINED at the black
+//                      point under --shot (frame-deterministic).
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -75,6 +84,8 @@
 #include "fluid.h"
 #include "app_state.h"
 #include "cycle.h"
+#include "clocks.h"
+#include "photo.h"
 #include "animators.h"
 #include "ui/ui_model.h"
 
@@ -1060,6 +1071,7 @@ enum TrayCmd : UINT {
     // stays the toggle, because that is what the tray menu item wants.
     CMD_PAUSE_ON = 8, CMD_PAUSE_OFF = 9,
     CMD_PRESET_SAVE = 30, CMD_PRESET_FOLDER = 31,
+    CMD_PHOTO_FOLDER = 32,    // brief BY: "Open photos folder" (33/34 stay retired)
     CMD_PRESET_BASE = 2000,   // up to kMaxTrayPresets entries (no 50 cap any more)
     // Cycle director. All non-toggling except the tray's On/Off item (a
     // checkbox, like CMD_PAUSE): scripts and --cycle-next use ON/OFF/NEXT/PREV
@@ -1077,6 +1089,7 @@ static NOTIFYICONDATAW g_nid = {};
 // presets (implementations further down; the menu needs them declared)
 static std::vector<std::wstring> g_presetPaths;
 static void GetPresetsDir(wchar_t out[MAX_PATH]);
+static void GetPhotosDir(wchar_t out[MAX_PATH]);
 static void ApplyPreset(const std::wstring& path);
 static void SaveCurrentAsPreset();
 static void ShowTrayMenuBody(HWND hwnd, HMENU presets);
@@ -1183,6 +1196,7 @@ static void ShowTrayMenu(HWND hwnd) {
         AppendMenuW(presets, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(presets, MF_STRING, CMD_PRESET_SAVE, L"Save current as new preset");
         AppendMenuW(presets, MF_STRING, CMD_PRESET_FOLDER, L"Open presets folder");
+        AppendMenuW(presets, MF_STRING, CMD_PHOTO_FOLDER, L"Open photos folder");
     }
     ShowTrayMenuBody(hwnd, presets);
 }
@@ -1385,6 +1399,13 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
             break;
         }
+        case CMD_PHOTO_FOLDER: {             // brief BY: the photo stage's default folder
+            wchar_t dir[MAX_PATH];
+            GetPhotosDir(dir);
+            CreateDirectoryW(dir, nullptr);
+            ShellExecuteW(nullptr, L"open", dir, nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        }
         default:
             if (LOWORD(wp) >= CMD_PRESET_BASE && LOWORD(wp) < CMD_PRESET_BASE + kMaxTrayPresets &&
                 LOWORD(wp) - CMD_PRESET_BASE < g_presetPaths.size()) {
@@ -1473,6 +1494,15 @@ static void GetPresetsDir(wchar_t out[MAX_PATH]) {
     wcscat_s(out, MAX_PATH, L"\\presets");
 }
 
+// brief BY pre-flight 21: the photo stage's default folder, the same
+// derivation as the presets folder: dirname(settings.ini)\photos.
+static void GetPhotosDir(wchar_t out[MAX_PATH]) {
+    wcscpy_s(out, MAX_PATH, g_iniPath);
+    wchar_t* slash = wcsrchr(out, L'\\');
+    if (slash) *slash = 0;
+    wcscat_s(out, MAX_PATH, L"\\photos");
+}
+
 static void WriteTextFileUtf16(const wchar_t* path, const wchar_t* text) {
     HANDLE f = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -1556,6 +1586,10 @@ L"idle_amount=3\r\nidle_interval=8\r\ncolor_cycle_period=40\r\n";
 static void EnsureBuiltinPresets() {
     if (!g_iniPath[0] || g_configReadOnly) return;
     wchar_t dir[MAX_PATH];
+    // brief BY: the (empty) photos folder next to presets\, so the user can
+    // find it; read-only runs (--shot) never create it
+    GetPhotosDir(dir);
+    CreateDirectoryW(dir, nullptr);
     GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
 
@@ -2222,11 +2256,14 @@ static void SaveCurrentAsPreset() {
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     GetPresetsDir(dir);
     CreateDirectoryW(dir, nullptr);
-    if (g_renderer) SaveFullConfig(g_renderer->Config());   // ini = live state
+    // CLOCKS pre-flight 3: a snapshot takes the BASE, never base x F
+    FluidConfig snap;
+    if (g_renderer) { snap = g_renderer->Config(); ClocksBaseCopy(snap); }
+    if (g_renderer) SaveFullConfig(snap);   // ini = live state (the clocks' base)
     for (int n = 1; n < 100; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
         if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            if (g_renderer) WriteConfigToIni(path, g_renderer->Config(), false);
+            if (g_renderer) WriteConfigToIni(path, snap, false);
             if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
             wchar_t msg[128];
             swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
@@ -2240,8 +2277,14 @@ static void SaveCurrentAsPreset() {
 void ApplyPresetPath(const std::wstring& path) { ApplyPreset(path); }
 void SaveCurrentAsPresetFile() { SaveCurrentAsPreset(); }
 void GetPresetsDirectory(wchar_t out[MAX_PATH]) { GetPresetsDir(out); }
+void GetPhotosDirectory(wchar_t out[MAX_PATH]) { GetPhotosDir(out); }
 void PersistShellSettings() { SaveSettings(); }
-void PersistFullConfigNow() { if (g_renderer) SaveFullConfig(g_renderer->Config()); }
+void PersistFullConfigNow() {
+    if (!g_renderer) return;
+    FluidConfig snap = g_renderer->Config();   // CLOCKS pre-flight 3: the base, never base x F
+    ClocksBaseCopy(snap);
+    SaveFullConfig(snap);
+}
 
 // ---------------------------------------------------------------------------
 // --shot: headless deterministic capture
@@ -2319,6 +2362,14 @@ struct ShotOpts {
     float    pauseAt = -1.0f, resumeAt = -1.0f;
     int      freezeAnim = -1;
     float    freezeAt = -1.0f, unfreezeAt = -1.0f;
+    // brief CLOCKS: --clocks-dryrun HOURS (the scheduler alone on the CPU, no
+    // renderer, then exit) and --clocks-force <group>=<F>|mode|tail[,...] (pins
+    // groups for a proof render; ticks with the cycle off).
+    double   clocksDryrun = 0.0;
+    std::wstring clocksForce;
+    // --clocks-hold-at T1,T2: ClocksHold(true) at T1, ClocksHold(false) at T2 -- the
+    // Settings window's calls, headless (proof 5: glide to 1, settle, release)
+    float    clocksHoldAt = -1.0f, clocksReleaseAt = -1.0f;
     // --shot-png-only: write <out>.png only (stats still logged). Saves ~35 MB
     // per capture on a long series; the md5 file is the same .png as always.
     bool     pngOnly = false;
@@ -2335,6 +2386,8 @@ struct ShotOpts {
     // --cover-seeds N replicates every entry over N noise seeds (0..N-1).
     std::vector<float> coverScale;
     int      coverSeeds = 1;
+    // brief BY: --photos <dir> (what an empty [photo] folder= means here)
+    std::wstring photosDir;
 };
 static bool g_shotPngOnly = false;
 
@@ -2841,6 +2894,13 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--cycle-draw-test") == 0 && i + 1 < argc) {
                 o.cycleDrawTest = _wtoi(argv[++i]);
+            } else if (wcscmp(argv[i], L"--clocks-dryrun") == 0 && i + 1 < argc) {
+                o.clocksDryrun = _wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--clocks-hold-at") == 0 && i + 1 < argc) {
+                swscanf_s(argv[++i], L"%f,%f", &o.clocksHoldAt, &o.clocksReleaseAt);
+            } else if (wcscmp(argv[i], L"--clocks-force") == 0 && i + 1 < argc) {
+                if (!o.clocksForce.empty()) o.clocksForce += L",";
+                o.clocksForce += argv[++i];
             } else if (wcscmp(argv[i], L"--cycle-pause-at") == 0 && i + 1 < argc) {
                 swscanf_s(argv[++i], L"%f,%f", &o.pauseAt, &o.resumeAt);
             } else if (wcscmp(argv[i], L"--shot-freeze") == 0 && i + 1 < argc) {
@@ -2851,9 +2911,12 @@ static int RunShotMode() {
                     else if (_wcsicmp(name, L"rig") == 0)        o.freezeAnim = ANIM_RIG;
                     else if (_wcsicmp(name, L"hueshift") == 0)   o.freezeAnim = ANIM_HUE_SHIFT;
                     else if (_wcsicmp(name, L"transition") == 0) o.freezeAnim = ANIM_TRANSITION;
+                    else if (_wcsicmp(name, L"clocks") == 0)     o.freezeAnim = ANIM_CLOCKS;
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
+            } else if (wcscmp(argv[i], L"--photos") == 0 && i + 1 < argc) {
+                o.photosDir = argv[++i];
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
                 o.fixedFade = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--cover-seeds") == 0 && i + 1 < argc) {
@@ -2918,6 +2981,10 @@ static int RunShotMode() {
     // Cycle director: [cycle] from the --ini file. Off (the default) = not a
     // single call below changes the render path.
     CycleSetLogger([](const char* s) { ShotLog("%s", s); });
+    // brief BY photo stage: its log, --photos, and the black-point join
+    PhotoSetLogger([](const char* s) { ShotLog("%s", s); });
+    PhotoSetCliDir(o.photosDir.c_str());
+    PhotoSetSynchronous(true);
     CycleLoad(g_configIniPath);
     CycleOverride(o.cycleDwell, o.cycleOrder, o.cycleSeed ? o.cycleSeed : o.seed,
                   o.cycleStage, o.cycleForce, o.cycleJitter);
@@ -2926,6 +2993,17 @@ static int RunShotMode() {
         CoUninitialize();
         return 0;
     }
+    // brief CLOCKS: [clocks] from the --ini file; the director's seed (pre-flight 24)
+    ClocksSetLogger([](const char* s) { ShotLog("%s", s); });
+    ClocksLoad(g_configIniPath);
+    ClocksSeed(CycleSeed());
+    if (o.clocksDryrun > 0.0) {              // scheduler only: no renderer, no GPU (pre-flight 25)
+        ClocksDryRun(o.clocksDryrun);
+        CoUninitialize();
+        return 0;
+    }
+    if (!o.clocksForce.empty() && !ClocksForce(o.clocksForce.c_str()))
+        ShotLog("[clocks] --clocks-force: could not parse all of '%ls'\n", o.clocksForce.c_str());
     const bool cycling = CycleBoot(cfg);
 
     // HDR state exactly as the shell would resolve it, without querying the
@@ -3008,6 +3086,20 @@ static int RunShotMode() {
     std::wstring stem = o.out;
     if (stem.size() > 4 && _wcsicmp(stem.c_str() + stem.size() - 4, L".png") == 0)
         stem.resize(stem.size() - 4);
+
+    // brief BY pre-flight 34: QPC time of CycleTick..Frame (the Sleep excluded)
+    // per frame; the max over each photo LOAD window (request .. upload
+    // recorded) against the max over the 5 s of frames before it. Reported at
+    // the [state] site. Nothing is timed-dependent: the image is unchanged.
+    LARGE_INTEGER qpcF;
+    QueryPerformanceFrequency(&qpcF);
+    std::vector<float> ftRing(144 * 5, 0.0f);   // the last 5 s of frame times
+    size_t ftPos = 0, ftFill = 0;
+    bool   ftLoading = false;
+    float  ftBase = 0.0f, ftLoad = 0.0f;
+    long long ftLoadFrames = 0;
+    double ftLoadT0 = 0.0;
+    std::vector<std::string> ftReports;
 
     std::vector<float> pixels;
     for (int s = 0; s < o.seriesCount; s++) {
@@ -3106,13 +3198,54 @@ static int RunShotMode() {
             }
             // The director's frame: fade / black / warm-up sub-steps. With the
             // cycle off this is fade 1.0, no black, no steps -- today's frame.
+            LARGE_INTEGER qpc0;
+            QueryPerformanceCounter(&qpc0);
             const CycleFrame cf = CycleTick(renderer, dt);
+            {
+                const float tNow = frames / 144.0f;
+                if (o.clocksHoldAt >= 0.0f && tNow >= o.clocksHoldAt) {
+                    ShotLog("[clocks] --clocks-hold-at %.2f: hold (the Settings window's call)\n", tNow);
+                    ClocksHold(true);
+                    o.clocksHoldAt = -1.0f;
+                }
+                if (o.clocksReleaseAt >= 0.0f && tNow >= o.clocksReleaseAt) {
+                    ShotLog("[clocks] --clocks-hold-at %.2f: release (WM_DESTROY's call)\n", tNow);
+                    ClocksHold(false);
+                    o.clocksReleaseAt = -1.0f;
+                }
+            }
+            ClocksTick(renderer, dt);        // brief CLOCKS: after the director, before the sim
             float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
             renderer.SetHdrOptions(peak, g_gamutMode);
             for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);
             renderer.SetFade(o.fixedFade >= 0.0f ? o.fixedFade : cf.fade);
             renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
+            {   // brief BY pre-flight 34 (see ftRing above)
+                LARGE_INTEGER qpc1;
+                QueryPerformanceCounter(&qpc1);
+                const float ms = (float)(1000.0 * (double)(qpc1.QuadPart - qpc0.QuadPart) / (double)qpcF.QuadPart);
+                const bool loading = renderer.PhotoLoading();
+                if (loading && !ftLoading) {
+                    ftBase = 0.0f;
+                    for (size_t k = 0; k < ftFill; k++) ftBase = fmaxf(ftBase, ftRing[k]);
+                    ftLoad = 0.0f;
+                    ftLoadFrames = 0;
+                    ftLoadT0 = frames / 144.0;
+                }
+                if (loading || ftLoading) { ftLoad = fmaxf(ftLoad, ms); ftLoadFrames++; }
+                if (!loading && ftLoading) {
+                    char b[256];
+                    _snprintf_s(b, _TRUNCATE, "[photo] max frame %.2f ms over the load window (%lld frames, "
+                                "t %.3f..%.3f) vs %.2f ms over the preceding 5 s baseline (%zu frames)\n",
+                                ftLoad, ftLoadFrames, ftLoadT0, (frames + 1) / 144.0, ftBase, ftFill);
+                    ftReports.push_back(b);
+                }
+                ftLoading = loading;
+                ftRing[ftPos] = ms;
+                ftPos = (ftPos + 1) % ftRing.size();
+                if (ftFill < ftRing.size()) ftFill++;
+            }
             frames++;
             // Leave the GPU some air: an unthrottled full-res sim starves the
             // compositor and Wallpaper Engine (the OLED went grey once when
@@ -3167,6 +3300,9 @@ static int RunShotMode() {
                     fmodf(renderer.PaletteBaseHueDeg() + renderer.PaletteHueDeg(), 360.0f),
                     renderer.Hue2Deg(), renderer.Fade(), renderer.BlackOut() ? 1 : 0);
         }
+        if (ClocksActive()) ClocksReport();  // brief CLOCKS proof 3e: max |delta| per frame
+        for (const std::string& r : ftReports) ShotLog("%s", r.c_str());   // brief BY pre-flight 34
+        ftReports.clear();
         // Where the camera rig is at this instant. Every [post] effect hangs
         // off these, and all of them are supposed to be moving, so a series of
         // shots at different t is the only honest test of the motion.
@@ -3390,6 +3526,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     CycleLoad(g_configIniPath);
     CycleOverride(-1.0f, -1, 0, cycleStartStage, false);
     CycleBoot(cfg);
+    ClocksLoad(g_configIniPath);             // brief CLOCKS: [clocks] from settings.ini
+    ClocksSeed(CycleSeed());
 
     printf("FluidWallpaper - fluid simulation behind desktop icons\n");
 
@@ -3816,6 +3954,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         // per shown frame while the target is cleared to black. Off: fade
         // 1.0, no black, no steps, i.e. exactly today's frame.
         const CycleFrame cf = CycleTick(renderer, simDt);
+        ClocksTick(renderer, simDt);         // brief CLOCKS: after the director, before the sim
         float peak = g_hdrPeakNits < 0.0f ? g_maxNits : g_hdrPeakNits;   // -1 = panel max
         renderer.SetHdrOptions(peak, g_gamutMode);
         for (int k = 0; k < cf.extraSteps; k++) renderer.SimOnlyStep(cf.stepDt);

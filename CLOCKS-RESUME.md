@@ -1,0 +1,50 @@
+# CLOCKS phase 1 -- resume state
+
+Worktree C:\Users\abg77\fw-clocks, branch `clocks` from main 5d9c39b. Do not merge.
+Brief: reference\briefs\CLOCKS.md (+ AUDITOR PRE-FLIGHT items 1-30, + FABLE DECISIONS).
+
+## Milestones
+- [x] M0 code written: src\clocks.cpp/.h, hooks in cycle.cpp (s_from / s_amtFrom / s_preOverlay
+      take the base, GoOff restores it, CycleSeed(), AnimatorName), main.cpp (ClocksTick after
+      CycleTick in both loops, [clocks] load + seed, --clocks-dryrun, --clocks-force, --shot-freeze
+      clocks, --clocks-hold-at, save paths take the base, [clocks] report at [state]), ui
+      (ClocksHold at create / input / WM_DESTROY, row settling lock, undo snapshot base, UA_CLOCKS),
+      animators.h ANIM_CLOCKS, CMakeLists, FEATURES.md rows, test inis reference\configs\clocks-*.ini.
+- [x] M1 build OK 04:30 (lock won only after BX's queue ended). Dry runs (pre mean-fix, f64e6e5): Base 240 h
+      all PASS (1.083 tails/h, min gap 20.2, 0 repeats, body 0.0093/s); Calm-like 0.775/h; Wild-like mean F
+      0.94-0.96 FAIL -> fd0da15 solves mu per group so the CLAMPED body has E[F]=1. Re-run dry runs on the rebuilt exe.
+- [x] M2 identity: 19/19 UNCHANGED (clocks exe fd0da15 build vs main exe); main side (build2\shots\clocks\identity-main-5d9c39b.txt, parity MATCH, clocks-off-test == cycle-final); parity MATCH 835AECBD on both; dxbc IDENTICAL x3, slot-check + keymeta-check PASS: fast tier + cycle-final/first/lerp-test + clocks-off-test.ini, main exe
+      (C:\Users\abg77\fw-wt\build2, == main src) vs clocks exe; parity; dxbc-cmp; slot/keymeta-check
+- [x] M3 proof 3e (build2/shots/clocks/p3e/mono900.log, 900 s, 1280x720, seed 1234): 2 forced tails (hue2 inert on
+      monotone, lens F 2.70 + adds), shortest glide 20.0 s; max per frame body 2.7e-5 x base (0.0040/s),
+      tail 0.172/s and hold glide 0.174/s (post_blur_px, bounded by fade_min 20 s), reel steps only at re-rolls.
+      Hold 600 s -> settled 31.2 s later (reel keys wait for their reel); release 700; freeze/unfreeze 760/820 logged.: 900 s headless on clocks-mono-cycle.ini (+ hold / freeze windows)
+- [x] M4 sheet: main repo build2\shots\live\clocks\groups-mono-{hdr,sdr}.png (+ groups-mono-meanlum.txt).
+      Rendered on the f64e6e5 exe (force columns; mean fix only moves mode F 0.874->0.877). F=1 column md5 ==
+      main's monotone md5 A060338C (verbatim proven). No tail column > 1.25x; hue2 tail inert on monotone
+      (amounts 0, bit-identical); grain tail = blocky macro grain (size keys x2.2) -> recommend dropping
+      grain_scale / film_grain_size / film_noise_size from the tail.
+- [x] Dry runs on the final exe (fd0da15): Base PASS 1.075/h; Calm-like 0.817/h; Wild-like 2.80/h, means PASS.
+- [x] M5 report handed back. UI-side hold wiring (window create/input/WM_DESTROY) untested headless: ui-dump has no renderer.
+
+## Scratch
+- scripts + logs: %TEMP%\claude\...\scratchpad\clocks\ (gpujob.ps1 = one command under the lock)
+- renders: C:\Users\abg77\fw-clocks\build2\shots\clocks\ ; sheets -> main repo build2\shots\live\clocks\
+
+## Notes / findings so far
+- BX queue (fw-bx after-queue.ps1) re-grabs the lock immediately after each render; my 5 s poll
+  races it. Its identity phase holds the lock ~80 min twice.
+- Excluded beyond the pre-flight (reasons in clocks.cpp kSpec comments): lid_scratch_density,
+  lid_scratch_len (static hash<amount populations: pops), lid_ghost_spread (4-bit pack),
+  lid_scratch_corner / curve_center (placements), bloom_px / bloom_warmth (bloom), droplet_mass_bias
+  (population), film_equal_load(_patches), hue2 layout/rate keys, rig extents/times.
+- Reel-quantised: film_hairs / film_scratches / film_leak commit only at their reel re-roll
+  (shader gates each slot by hash < amount per reel -> a ramp would pop a hair in mid-life).
+
+## Fable change 2026-09-27 10:35 (done, 8c6b999)
+- K_NOTAIL: grain_scale, film_grain_size, film_noise_size + the lens/lid reach keys fog_px, halation_px,
+  halo_px, post_glow_px, lid_sheen_px follow the group BODY only (hold their body value through a tail).
+- 240 h dryrun (defaults, seed 1234): summary byte-identical to before (1.075 tails/h, RESULT PASS).
+- Sheet: grain, lens, lid tail columns re-rendered (HDR on/off) and recomposed; grain tail mean_lum
+  0.7418 HDR / 0.2473 SDR (1.006x F=1), lens 0.879x, lid 1.003x.
+- Identity vs main: 19/19 UNCHANGED, parity MATCH.

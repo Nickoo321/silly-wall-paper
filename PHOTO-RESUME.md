@@ -20,7 +20,9 @@ sheets -> MAIN repo build2\shots\live\photo\.
       16.6 ms = the one-time lazy kPhotoSrc compile (16 ms, at black), second window 0.87 ms vs 0.55 baseline.
 - [x] main-side identity (fw-wt rebuilt on bc4c6ef): scratch\identity-main-bc4c6ef.txt, parity MATCH.
 - [x] proof 6 draw test (no GPU): tier mode 20000 draws, WE-alternation breaks 0, overlay-after-photo 0.
-- [ ] M2 identity: main exe (fw-wt rebuilt on bc4c6ef) vs photo exe, parity, dxbc, slot/keymeta
+- [x] M2 identity (18:19): photo exe ad2b421-build vs main bc4c6ef exe: 19/19 UNCHANGED (parity + 14 fast rows +
+      cycle-final/first/lerp-test + clocks-off-test), parity MATCH 835AECBD; cycle-photo-test NEW 5147ADA1FDD3DDA8B15E75485F4C477E;
+      dxbc IDENTICAL x3, slot-check PASS, keymeta-check OK (M0).
 - [ ] M3 photo sheets HDR on/off + numbers.txt (item 33)
 - [ ] M4 empty-folder skip + re-scan; notjpeg + 30 MB JPEG + max frame; alternation draw test
 - [ ] M5 report

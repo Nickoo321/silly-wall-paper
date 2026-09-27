@@ -675,6 +675,7 @@ static void LoadConfigFromIni(const wchar_t* ini, FluidConfig& cfg) {
         a.conserveMass     = getF(S, L"conserve_mass",  a.conserveMass);
         a.spawnGrowS       = getF(S, L"spawn_grow_s",   a.spawnGrowS);
         a.dissolveS        = getF(S, L"dissolve_s",     a.dissolveS);
+        a.blobTurnoverS    = getF(S, L"blob_turnover_s", a.blobTurnoverS);   // brief BZ
         a.dropletRingWobble= getF(S, L"droplet_ring_wobble", a.dropletRingWobble);
         a.dropletDepth     = getF(S, L"droplet_depth", a.dropletDepth);
         a.depthRise        = getF(S, L"depth_rise", a.depthRise);
@@ -2037,6 +2038,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
         putF(S, L"conserve_mass", a.conserveMass, 3);
         putF(S, L"spawn_grow_s", a.spawnGrowS, 3);
         putF(S, L"dissolve_s", a.dissolveS, 3);
+        putF(S, L"blob_turnover_s", a.blobTurnoverS, 3);   // brief BZ
         putF(S, L"droplet_ring_wobble", a.dropletRingWobble, 3);
         putF(S, L"droplet_depth", a.dropletDepth, 3);
         putF(S, L"depth_rise", a.depthRise, 3);

@@ -413,6 +413,8 @@ KEY_SLIDER("  spawn grow (s)", 0, 20, 0.5f, 1, &c.acid.spawnGrowS, nullptr, "liq
            G_OIL, "A", "", 0, "", "")
 KEY_SLIDER("  dissolve (s)", 0, 20, 0.5f, 1, &c.acid.dissolveS, nullptr, "liquid_acid", "dissolve_s", false, "Seconds a droplet dying of old age takes to shrink away (0 = the old 0.34 s)",
            G_OIL, "A", "", 0, "", "")
+KEY_SLIDER("  blob turnover (s)", 0, 300, 5, 0, &c.acid.blobTurnoverS, nullptr, "liquid_acid", "blob_turnover_s", false, "The oil population re-draws itself every this many seconds: one blob at a time dissolves and a new one grows in from under the bottom edge with the CURRENT kind mix and sizes, so a layout change arrives as a glide, never a cut. 0 = off (blobs live forever)",
+           G_OIL, "A", "liquid_acid.conserve_mass>0.5", KF_MOTION, "zero:off", "")
 KEY_SLIDER("Ring out-of-round", 0, 1, 0.05f, 2, &c.acid.dropletRingWobble, nullptr, "liquid_acid", "droplet_ring_wobble", false, "Stops a ring being a perfect circle: a seeded ellipse whose axis turns over a minute or two, plus a breathing 3-lobe wobble, and a wall that thins where the ring bulges. 0 = perfect circles",
            G_DROPLETS, "A", "liquid_acid.droplets>0 && liquid_acid.droplet_ring_frac>0", 0, "", "")
 KEY_SLIDER("Droplet depth spread", 0, 1, 0.05f, 2, &c.acid.dropletDepth, nullptr, "liquid_acid", "droplet_depth", false, "How far droplets and rings are spread in front of and behind the masses' own plane. 0 = everything at one depth, which is what the camera saw before. Needs [post] dof_max_px to be visible",

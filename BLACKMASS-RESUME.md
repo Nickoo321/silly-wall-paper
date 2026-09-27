@@ -1,0 +1,45 @@
+# BLACK-MASS phase 1 -- resume state
+
+Worktree C:\Users\abg77\fw-blackmass, branch `blackmass` from main 14b01aa (CLOCKS + PHOTO phase 1 merged).
+Do not merge. Brief: reference\briefs\BLACK-MASS.md (+ AUDITOR PRE-FLIGHT 1-26, + FABLE DECISIONS: ROLE A --
+on the monotone base the FILM is lit, the black masses are the GAPS + kind-0 droplets; every recipe in the brief
+and the study is inverted). Targets: handoff\review\creative-brief-black-mass.md (main repo, untracked).
+Phase 1 = pre-flight item 25. Rafts NOT built (user decision pending). Layout clock = phase 2.
+
+Scratch: %TEMP%\claude\...\scratchpad\bm\ (job scripts, logs). Renders: C:\Users\abg77\fw-blackmass\build2\shots\blackmass\
+(per run: <label>-<hdr>\s<seed>-NNN.png, s<seed>.log = the exe's own stdout, black-share.json, summary.txt).
+Sheets -> MAIN repo build2\shots\live\blackmass\. Main's exe for identity = C:\Users\abg77\fw-wt (detached, moved
+bc4c6ef -> 14b01aa this session, rebuilt under the lock).
+
+## Milestones
+- [x] M0 code + tool (no GPU):
+  - src: `[liquid_acid] blob_turnover_s` (fluid.h LiquidAcidConfig, default 0), `float born` in AcidBlob (set to m_time
+    in AdjustAcidBlobCount's grow-in only), m_acidTurnAcc/m_acidTurnRng/m_acidTurnBlockedLogged, StepAcidTurnover()
+    called from Frame() inside the conserve_mass branch only when blob_turnover_s > 0 (and it re-checks
+    conserve_mass > 0.5). Pick per item 4 (candidates rTarget > 0 && baseR >= 0.9 rTarget; clear-of-frame first,
+    then oldest born, then an index hash on the private xorshift). Accumulator reset at all three m_acidSeeded=false
+    sites + in SeedAcidBlobs (which also seeds the private stream from g_randSeed without drawing from `rng`).
+    Hazard 5a: size >= 127 -> skip, accumulator held at one period, `[turnover] blocked` printed once.
+    Hazard 5b: respawn floor uses max(baseR, rTarget) when turnover > 0 and conserve_mass. Each retire prints
+    `[turnover] retire t=.. blob=.. kind=.. r=.. born=.. clear=.. y=..` to stdout (never the shared ShotLog).
+  - main.cpp getF/putF beside dissolve_s; keys.inc row after dissolve_s (G_OIL, gate conserve_mass>0.5,
+    KF_MOTION, zero:off), range 0..300 step 5 PROVISIONAL until the sheet.
+  - tools\black-share.py (measure: max(R,G,B) < 40 on the 8-bit SDR png; `merge` = base + partial, overlay keys
+    first, the preset-identity composition) + tools\black-share.ps1 (BelowNormal, lock per seed, 1280x720,
+    series 31:10 from T0 30, yield 30, png-only, per-seed mean/min/max + mean of means, summary.txt).
+  - dxbc-cmp vs main 14b01aa shaders.h: IDENTICAL x6 (shaders.h untouched); slot-check PASS; keymeta-check OK.
+- [ ] M1 build (lock) + smoke; main exe rebuilt at 14b01aa
+- [ ] M2 MEASURE FIRST: monotone-post-0924 + acid-rise-12 black % (300 s, 3 seeds, HDR on; HDR off once)
+- [ ] M3 turnover: two-run md5 at 90; the range sheet
+- [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
+- [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
+      FEATURES rows; report
+
+## Measured (black % = share of max(R,G,B) < 40 on the 8-bit SDR png, 1280x720, 300 s window)
+(none yet)
+
+## Decisions / deviations
+- Turnover pick: the clear-of-frame preference applies only among DUE blobs (the oldest cohort, or born at least
+  half a turnover period ago). Reason: a fresh grow-in parks under the bottom edge fully grown (spawn_grow_s 4 vs a
+  ~25 s climb into view), is "clear of the frame" and would be retired before ever being seen, so the standing
+  population would never turn over. Among the seeded cohort (all born 0) the pre-flight order holds exactly.

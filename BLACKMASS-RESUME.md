@@ -49,7 +49,7 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
 
 ## Queue (scratchm\q3.ps1, running from 19:53)
 Coordinator 21:00: sleep 15 s before every lock take (black-share.ps1 now does; q3's inline det loop does not,
-so q3 is ended by build2\shotsblackmass\STOP after M2 and q4.ps1 = det + screening with the gap).
+so q3 is ended by build2\shots\blackmass\STOP after M2 and q4.ps1 = det + screening with the gap).
 M2 (monotone on x3, acid-rise-12 on x3, monotone off x1) -> M3 det (t90 a/b + t0, blob_count 80, 150 s) ->
 screening round 1 (seed 1234): FG1-3 (blob_count 80, turnover 90, 3-5 big holes, T0 90), LR1-3 (threshold/support),
 SF1-3 (thin film threshold, droplets up, ink_frac down). Log scratchm\q3.log.

@@ -70,6 +70,13 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       .8) 24.0 [25.3/24.8/21.8], off 25.3; Layout - Starfield.ini (SF8: 88 blobs, turnover 90, threshold .62, bubble .15,
       holes .03-.08 w 3) 7.3 [7.0/8.5/6.4], off 7.0. Each sets the same key union (base values elsewhere) so they
       apply in any order. Manifest rows (Base monotone, Tier full), FEATURES row. (Few giants / Lava rise / Starfield) from a first sheet
+- [~] M5a strip (proof 21, 08:22-08:37): monotone + blob_turnover_s 90, Layout - Few giants AT 5 s, frames every 5 s:
+      black 2 4 6 9 14 21 25 31 38 44 49 48 47 49 51 52 48 42 34 26 19 14 16 17 17 16 15 12 11 11 12 15 18 17 14 18
+      (5..180 s): the count walk (126 -> 50) dissolves 76 blobs over ~50 s (black overshoots to ~50 %), the turnover is
+      [blocked] meanwhile (50 live + 76 retirees > 127: hazard 5a working) and resumes at 73 s at one retire per 1.8 s;
+      largest 5-s step 7.6 points; no cut. Grow-ins retire ~90 s after birth. 45/180 "range" strips were INVALID (the
+      preset's own blob_turnover_s 90 overrides the base's at 5 s): redo queued with preset copies carrying T (q12.ps1,
+      after identity). Popdetect windows at in-view retires 24.139 / 96.804 / 168.787 s (frame-step 2 s each).
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 

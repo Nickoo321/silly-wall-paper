@@ -77,6 +77,9 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       largest 5-s step 7.6 points; no cut. Grow-ins retire ~90 s after birth. 45/180 "range" strips were INVALID (the
       preset's own blob_turnover_s 90 overrides the base's at 5 s): redo queued with preset copies carrying T (q12.ps1,
       after identity). Popdetect windows at in-view retires 24.139 / 96.804 / 168.787 s (frame-step 2 s each).
+- [x] M5b contact sheets (proof 23): MAIN repo build2\shots\live\blackmass\layouts-hdr.png (4 layouts x 4 frames, 3 seeds,
+      HDR on) + layouts-sdr.png (HDR off seed 1234 x 3 frames), proven-1..4 row (screen crops) under each; panels labelled
+      target vs measured, each frame with its own black %. Built by sheet.py (copied beside the sheets).
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 

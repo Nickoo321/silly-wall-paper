@@ -1,0 +1,23 @@
+# exe-sha256 884CD7902C8127ACB6551EF0A764202634057234F9AF3892BF4D1022BA4E1A24
+# git-head d070dd57b47fcb452fbedca20db5edb578dbd1a6
+# tier presets
+835AECBD9EF1384A8CAAF1A611EE3A26	reference\configs\we-look-live.ini
+DFB7D1B3F2508F8581BF73A800EC0964	reference\configs\acid-rise-12.ini
+5147ADA1FDD3DDA8B15E75485F4C477E	reference\configs\cycle-photo-test.ini
+C4F36D5FEA4273E2208549C83B71E2E0	reference\configs\ink-paper.ini
+C20479E5B6B6E57844EEC9B11661CDBF	reference\configs\lapd-look-candidate.ini
+A060338C929AF4EC409DF324AD4CC49D	reference\configs\monotone-post-0924.ini
+EC4EC54EA2CBA11C1DCFCF6CA9008584	reference\presets\Ink - auto bursts.ini
+3A330907CE2132289FE6B60B9F2D27E1	reference\presets\Ink - inverted.ini
+4FD40D8E6E4FEC01CB3A6A0DF0755584	reference\presets\Ink - paint pour.ini
+053EED79A7AAAC019A897CAC5BAC379F	reference\presets\Liquid Acid - magenta on black (real oil).ini
+C2FEA60E8CDAF0416B6F1C33D34E70FB	reference\presets\Liquid Acid - oil on ink water.ini
+2AEB390BC1D8C8EE72162A439AA486A3	reference\presets\Liquid Acid - rising colours.ini
+788759BC8F8763036B637052BE130C70	reference\presets\Liquid Acid A.ini
+C33DDC40DC91215A2141AC6CA75F34D2	reference\presets\Mirror - kaleidoscope 6 (overlay).ini
+632F67B9B9DCD103495204DA2B2E1E82	reference\presets\Mirror - quad (overlay).ini
+835AECBD9EF1384A8CAAF1A611EE3A26	reference\presets\WE parity (fluid).ini
+A288FA6EC36F02B789B626FBDD919276	reference\configs\cycle-final.ini
+F9BDCDA59657E0D43764149478BC2F62	reference\configs\cycle-first.ini
+D5DC0D61CD4268E9B9B62464813D084B	reference\configs\cycle-lerp-test.ini
+A288FA6EC36F02B789B626FBDD919276	reference\configs\clocks-off-test.ini

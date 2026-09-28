@@ -60,6 +60,11 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       (5..74 swing). One-seed noise ~+-5 (LR7 < LR8). CHOSEN for confirmation: FG5 (Few giants), LR6 (Lava rise: 56
       blobs, stretch .8 -- the lit film breaks and lit blobs pinch off and rise through black). Round 5 = SF10/SF11
       (more/bigger unscaled holes) then 3-seed + HDR-off confirmation (q8.ps1).
+- [~] round 5: SF9 (holes .03-.06) 3.3, SF10 (bubble .05, holes .03-.10) 6.7, SF11 (bubble .10, .05-.10) 5.7 -- unscaled
+      holes grow in together under the bottom edge and merge into rising black clumps (a mass, not a starfield); SF8
+      stays the starfield candidate. CONFIRMATION (300 s, HDR on): FG5 1234 25.6 / 5678 27.1 / 9012 27.6 -> 26.8
+      (target 28: PASS), HDR off 1234 25.6 (= on); LR6 28.7 / 30.7 / 31.2 -> 30.2 (target 25: +5.2, just OUT), HDR off
+      28.7 (= on) -> LR10 = 72 blobs + stretch .8 queued at 3 seeds (q9). SF8 confirmation queued (q9).
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report

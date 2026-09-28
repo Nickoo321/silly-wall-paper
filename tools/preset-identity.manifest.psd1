@@ -211,6 +211,12 @@
            Note = 'tray acid preset; ink_mode=bands (default)' }
         @{ Path = 'reference\presets\Liquid Acid A.ini'; Look = 'acid'; Base = ''; Delay = 60; Tier = 'fast'
            Note = 'tray acid preset; the ink_mode=bands (default) representative' }
+        @{ Path = 'reference\presets\Layout - Few giants.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BZ BLACK-MASS layout, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); blob_turnover_s 90 (the 60 s frame is mid-turnover: deterministic, two-run md5 equal)' }
+        @{ Path = 'reference\presets\Layout - Lava rise.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BZ BLACK-MASS layout, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); no turnover key' }
+        @{ Path = 'reference\presets\Layout - Starfield.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BZ BLACK-MASS layout, PARTIAL [liquid_acid] overlay on monotone-post-0924 (merged, overlay keys first); blob_turnover_s 90' }
         @{ Path = 'reference\presets\Mirror - kaleidoscope 6 (overlay).ini'; Look = 'overlay'; Base = 'reference\configs\acid-rise-12.ini'; Delay = 60; Tier = 'fast'
            Note = 'PARTIAL [mirror] overlay (mode 4) on the live acid preset' }
         @{ Path = 'reference\presets\Mirror - off (overlay).ini'; Look = 'overlay'; Base = 'reference\configs\acid-rise-12.ini'; Delay = 60; Tier = 'full'

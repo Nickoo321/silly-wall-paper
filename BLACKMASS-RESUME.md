@@ -40,6 +40,8 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
 ## Measured (black % = share of max(R,G,B) < 40 on the 8-bit SDR png, 1280x720, 300 s window)
 - TODAY = monotone-post-0924, HDR on, t 30..330 s: seed 1234 6.4 (0.0..17.9), 5678 11.5 (0.2..36.7), 9012 10.6 (0.9..28.1);
   mean of means 9.5 (spread 5.1). Swings hard inside a seed (one big gap mass rising through the frame).
+- acid-rise-12, HDR on: 1234 7.7 (0.7..25.2), 5678 17.0 (0.9..43.6), 9012 9.5 (0.0..40.5); mean of means 11.4 (spread 9.3).
+  (seeds at --shot-yield 30; from 21:45 the coordinator switched the user-away renders to yield 8)
 
 ## Decisions / deviations
 - Turnover pick: the clear-of-frame preference applies only among DUE blobs (the oldest cohort, or born at least

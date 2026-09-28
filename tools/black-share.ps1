@@ -13,7 +13,7 @@
 #       [-NoLock] [-LockMinutes 240] [-KeepFrames]
 #
 # Defaults = the binding run (pre-flight 14): 1280x720, --shot-series 31:10 from T0 = 30 s
-# (a 300 s window), --shot-yield 30, --shot-png-only. With blob_turnover_s on, pass
+# (a 300 s window), --shot-png-only; -Yield is the per-frame sleep (EXECUTOR-CARD throttle: 30 while the user is at the PC, 8 once away -- the default here, 2 asleep). With blob_turnover_s on, pass
 # -Delay >= blob_turnover_s (the population is not the seed's until one period has passed).
 # Partials are merged into a scratch FULL ini (<OutDir>\composed.ini, overlay keys first).
 # GPU: this process drops itself to BelowNormal (children inherit it) and takes the MAIN
@@ -27,7 +27,7 @@ param(
     [double]$Delay = 30,
     [string]$Series = '31:10',
     [string]$Size = '1280x720',
-    [int]$Yield = 30,
+    [int]$Yield = 8,
     [string]$Label = '',
     [string]$OutDir = '',
     [string]$Exe = '',

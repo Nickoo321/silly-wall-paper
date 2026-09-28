@@ -84,7 +84,13 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       t = 24.139 / 96.799 / 168.785 s of the t90 strip run: popdetect --min 200 = 0 / 0 / 0 pops (jumpy band px
       10401 / 10631 / 5314 over 287 transitions, mean d 0.3-0.4); black % per frame 13.0..15.7 / 28.1..31.1 /
       15.8..17.3, max per-frame delta 0.06 / 0.02 / 0.01 points (limit 1.5). build2\shots\blackmass\pop{1,2,3}-on\.
-- [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
+- [x] M5d proof 20 (08:50-09:54, yield 8, one lock hold): main 14b01aa exe (fw-wt, rebuilt) -Save
+      scratch\bm\identity-main-14b01aa.txt, blackmass exe -Baseline: 20 UNCHANGED, 0 changed/missing/new (parity row +
+      14 fast rows + WE parity preset + cycle-final/first/lerp-test/clocks-off-test); PARITY MATCH 835AECBD... on both
+      exes; cycle-photo-test 5147ADA1 (= PHOTO's value). dxbc-cmp IDENTICAL x6, slot-check PASS, keymeta-check OK (M0;
+      shaders.h untouched since). SETTINGS.md: no generator exists (handoff\SETTINGS.md is a hand-written handoff doc
+      from the deleted settings.cpp) -- not regenerated.
+- [ ] M5 range sheet redo (q12) + report (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 
 ## Measured (black % = share of max(R,G,B) < 40 on the 8-bit SDR png, 1280x720, 300 s window)

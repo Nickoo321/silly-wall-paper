@@ -65,7 +65,11 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       stays the starfield candidate. CONFIRMATION (300 s, HDR on): FG5 1234 25.6 / 5678 27.1 / 9012 27.6 -> 26.8
       (target 28: PASS), HDR off 1234 25.6 (= on); LR6 28.7 / 30.7 / 31.2 -> 30.2 (target 25: +5.2, just OUT), HDR off
       28.7 (= on) -> LR10 = 72 blobs + stretch .8 queued at 3 seeds (q9). SF8 confirmation queued (q9).
-- [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
+- [x] M4 Layout partials (08:22): reference\presets\Layout - Few giants.ini (FG5: 50 blobs, bubble .37, holes .15-.30
+      w 2.5, droplets 500, turnover 90) 26.8 [25.6/27.1/27.6], off 25.6; Layout - Lava rise.ini (LR10: 72 blobs, stretch
+      .8) 24.0 [25.3/24.8/21.8], off 25.3; Layout - Starfield.ini (SF8: 88 blobs, turnover 90, threshold .62, bubble .15,
+      holes .03-.08 w 3) 7.3 [7.0/8.5/6.4], off 7.0. Each sets the same key union (base values elsewhere) so they
+      apply in any order. Manifest rows (Base monotone, Tier full), FEATURES row. (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 

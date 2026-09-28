@@ -63,3 +63,12 @@
       mono-off A060338C unchanged; identity (v3) 14 unchanged. Preset mean_lum now +35.5 / +35.2 / +34.2%.
       Sheets regenerated: live\bx\heart-vs-user.png, heart-home-4.png, ab-lamp_grey_heart.png. STALE (v1 renders):
       ab-lamp_grey_heart_lift.png, ab-lamp_grey_heart_size.png, heart-sdr.png. FEATURES rows + fluid.h comment updated.
+- [x] 20:00 merge main 14b01aa (CLOCKS + PHOTO phase 1) -> 34f09d7: auto-merged, NO conflicts (heart rows in keys.inc/main.cpp,
+      stage 21, manifest row all kept; tray ids untouched). src/clocks.cpp: lamp_grey_heart (GR_RIG), _lift (GR_RIG, K_ABL),
+      _size (GR_RIG, K_NOTAIL). v4 build 19:56 (under lock). slot-check PASS, keymeta OK, dxbc: fluid/ink IDENTICAL,
+      post base + BN IDENTICAL, acid differs. --clocks-dryrun 24 --seed 1234 (needs --shot to enter shot mode):
+      byte-identical to main's exe; 24 h has lid FAIL on main too; 240 h RESULT PASS (1.075 tails/h).
+      INCIDENT: my first dryrun call lacked --shot, so the exe started as a normal wallpaper (WorkerW, the user's
+      settings.ini, cycle on) for 10 min until my own timeout ended it (~19:58-20:08).
+- [ ] 20:09 v4-queue.ps1 (detached): clocks table probe, 12 stale-sheet renders (jobs-v4.txt), identity -Presets 19 rows
+      vs identity-main-14b01aa-composed.txt (PHOTO's bc4c6ef baseline + cycle-photo-test 5147ADA1). Log fix.log / id-v4.log.

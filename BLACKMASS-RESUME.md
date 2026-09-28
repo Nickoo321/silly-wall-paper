@@ -32,7 +32,12 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       black 4.0/9.2/6.5 %, 34 ms/frame at yield 30 (a 330 s series = ~27 min/seed). Black masses render ~14/255
       (counted); kind-0 droplet interiors ~35-50 (partly above 40, so droplets are undercounted by the metric).
 - [x] M2 MEASURE FIRST (00:00-01:28): monotone-post-0924 + acid-rise-12 black % (300 s, 3 seeds, HDR on; HDR off once)
-- [ ] M3 turnover: two-run md5 at 90; the range sheet
+- [x] M3 determinism (01:33-02:14): monotone + blob_count 80 + blob_turnover_s 90, 1280x720, 150 s, seed 1234, yield 8:
+      run a A994D8621C935E292407423E501DE30B, run b A994D8621C935E292407423E501DE30B (EQUAL). 133 retires in 150 s,
+      none blocked (80 live + <= ~40 retirees < 127); first cohort picks clear=1 bubbles, then discs in view; by 147 s
+      the retirees are grow-ins born 56-58 s (lifetime ~90 s as designed). WORKS: vs turnover 0 (A0E792BB...) MAD 48.6,
+      max 254; black 11.9 % vs 22.2 % at that instant (pair: build2\shotslackmass\det\pair.png).
+- [ ] M3b range sheet for blob_turnover_s (the strip at 45/90/180)
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report

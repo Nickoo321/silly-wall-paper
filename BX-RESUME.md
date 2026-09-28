@@ -72,3 +72,7 @@
       settings.ini, cycle on) for 10 min until my own timeout ended it (~19:58-20:08).
 - [ ] 20:09 v4-queue.ps1 (detached): clocks table probe, 12 stale-sheet renders (jobs-v4.txt), identity -Presets 19 rows
       vs identity-main-14b01aa-composed.txt (PHOTO's bc4c6ef baseline + cycle-photo-test 5147ADA1). Log fix.log / id-v4.log.
+- [ ] 21:05 v4-queue.ps1 (pid 32064) still waiting for the GPU lock: the BLACKMASS executor re-takes it between its series
+      (19:56, 20:24, 20:51) faster than the queue's 5 s poll. My attempt to stop and relaunch the queue with a faster poll
+      was DENIED by the permission classifier; the queue was left running untouched and will proceed when it wins the lock.
+      Remaining after it finishes: bx2.py sheets (lift/size/sdr) -> live\bx, id-v4.log check, final commit, report.

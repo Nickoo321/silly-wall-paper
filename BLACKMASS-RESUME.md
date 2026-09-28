@@ -46,6 +46,13 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       round 2 (q5.ps1): FG4/5/6 = blob_count 40/50/60 (+3 holes, turnover 90), LR4 (thr 1.10 sup 1.5), LR5 (70 blobs,
       thr .95, sup 1.7, stretch .8), LR6 (56 blobs, stretch .8), SF2 (thr .68, 2400 drops, r_max .018), SF4 (thr .65,
       2400 drops, r_max .024, droplet_bias 2.0).
+- [~] round 2 (seed 1234): FG4 (40 blobs) 43.7 (lit islands on black: overshoot, wrong shape); FG5 (50 blobs,
+      bubble .37, 3 holes .15-.30 w 2.5, turnover 90, droplets 500) 25.6 -- black lobed masses cut by the frame edges
+      round one lit film; LR4 (thr 1.10 sup 1.5) 14.7; LR5 (70 blobs thr .95 sup 1.7 stretch .8) 37.8; SF2 6.8;
+      SF4 (r_max .024 bias 2) 5.2. STARFIELD FINDING: kind-0 droplet cores read 80-127 in the film's channel (per-droplet
+      optics + halo/fog lift) -- droplets are dark-tinted, not black, so no droplet recipe reaches max<40; only metaball
+      GAPS render ~15. Round 3 (q6.ps1): Starfield from many small kind-3 HOLES in a continuous film (bubble_frac
+      .25/.15 -> 23/36 holes, threshold .70/.65), Lava rise at 90/100 blobs.
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report

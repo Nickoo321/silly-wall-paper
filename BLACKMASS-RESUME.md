@@ -53,6 +53,13 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       optics + halo/fog lift) -- droplets are dark-tinted, not black, so no droplet recipe reaches max<40; only metaball
       GAPS render ~15. Round 3 (q6.ps1): Starfield from many small kind-3 HOLES in a continuous film (bubble_frac
       .25/.15 -> 23/36 holes, threshold .70/.65), Lava rise at 90/100 blobs.
+- [~] rounds 3-4 (seed 1234): SF5 (bubble .25 thr .70 hw 2) 7.0, SF6 (bubble .15) 7.2, SF7 (bubble .15 thr .65 hw 2.5
+      hole_max .10) 8.1 -- seeded holes are sub-scaled into parents, few visible; SF8 (88 blobs + turnover 90, thr .62,
+      bubble .15, holes .03-.08 w 3, T0 90) 7.0 with the flattest curve (3.8..12.5: no big mass) -> the starfield family;
+      LR7 (90 blobs thr .95 sup 1.7 st .8) 19.7, LR8 (100, same) 21.8, LR9 (62 blobs st .8) 32.9; FG7 (48 blobs) 31.5
+      (5..74 swing). One-seed noise ~+-5 (LR7 < LR8). CHOSEN for confirmation: FG5 (Few giants), LR6 (Lava rise: 56
+      blobs, stretch .8 -- the lit film breaks and lit blobs pinch off and rise through black). Round 5 = SF10/SF11
+      (more/bigger unscaled holes) then 3-seed + HDR-off confirmation (q8.ps1).
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report

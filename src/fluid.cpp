@@ -499,6 +499,7 @@ void FluidRenderer::EnsureLookResources() {
     if (needAcid) {
         MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
         m_acidSeeded = false;          // Frame() reseeds under the current keys
+        m_acidTurnAcc = 0.0f;          // brief BZ: turnover restarts with the population
         printf("look: liquid_acid PSO compiled on demand\n");
     }
     if (needInk) {
@@ -2011,6 +2012,11 @@ void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
             // pass over 96 blobs, so the surplus keeps shrinking and the
             // shortfall keeps growing until the two agree.
             if (m_acidWantBlobs != want) m_acidWantBlobs = want;
+            // brief BZ blob_turnover_s: retire ONE blob per period; the walk
+            // below then grows ONE through the unchanged grow-in path. The
+            // guard is the whole of the off-state: at 0 nothing is drawn,
+            // nothing is read and the population is today's bit for bit.
+            if (m_cfg.acid.blobTurnoverS > 0.0f) StepAcidTurnover(dt, want);
             int live = 0;
             for (size_t bi = 0; bi < m_acidBlobs.size(); bi++)
                 if (m_acidBlobs[bi].rTarget > 0.0f) live++;
@@ -2118,6 +2124,7 @@ void FluidRenderer::ResetLookState() {
     // resets for a resume)
     m_acidBlobs.clear();
     m_acidSeeded = false;
+    m_acidTurnAcc = 0.0f;           // brief BZ: turnover restarts with the population
     m_acidWantBlobs = -1;
     m_acidDrops.clear();
     m_dropletOrder.clear();
@@ -2716,6 +2723,7 @@ void FluidRenderer::Shutdown() {
     m_velPending = false;
     m_acidBlobs.clear();
     m_acidSeeded = false;
+    m_acidTurnAcc = 0.0f;           // brief BZ: turnover restarts with the population
 
     // sim textures
     auto freeTex = [](Tex& t) {
@@ -3518,6 +3526,10 @@ void FluidRenderer::SeedAcidBlobs() {
         m_acidBlobs[bi].dyeId   = NextAcidDyeId();
     }
     m_acidRespawnRng = rng.next() | 1u;
+    // brief BZ blob_turnover_s: the pick's own stream, from the seed alone (no
+    // draw from `rng`, so every other stream is untouched), and a fresh period.
+    m_acidTurnRng = ((g_randSeed ? g_randSeed * 0x85EBCA6Bu : GetTickCount()) ^ 0x7B1DB00Cu) | 1u;
+    m_acidTurnAcc = 0.0f;
     m_acidWantBlobs = n;
     m_acidSeeded = true;
 }
@@ -3587,9 +3599,88 @@ void FluidRenderer::AdjustAcidBlobCount(int want) {
         b.s1 = rf() * TWO_PI;
         b.s2 = rf() * TWO_PI;
         b.dyeId = NextAcidDyeId();                // brief AG-b: a new blob, a new identity
+        b.born = m_time;                          // brief BZ: read only by the turnover pick
         m_acidBlobs.push_back(b);
         live++;
     }
+}
+
+// ---------------------------------------------------------------------------
+// brief BZ BLACK-MASS: blob_turnover_s. The kind keys only shape blobs that are
+// CREATED, so a live change of disc/web/bubble_frac etc. never reached a
+// standing population. Turnover retires one blob every
+// blob_turnover_s / blob_count seconds -- rTarget 0, so it dissolves over
+// dissolve_s exactly as a blob_count decrease does -- and the conserve_mass
+// walk in Frame() grows one in its place from the CURRENT keys. The pick
+// (pre-flight item 4): a candidate is a live blob that has finished growing
+// (baseR >= 0.9 rTarget; else the 2%-radius blob just grown in under the edge
+// would be retired every time); among the DUE ones (the oldest cohort, or at
+// least half a turnover period old -- else a fresh grow-in parked under the
+// bottom edge, which is "clear of the frame", would be retired before it is
+// ever seen) a blob whose field is clear of the frame wins, then the oldest,
+// then an index HASH on the private stream (the seeded population is all
+// born 0 in KIND order, and index order would retire every disc first).
+// Hazard 5a: kAcidMaxBlobs counts the retirees still dissolving, and grow-in
+// stops at 128, so while the vector holds >= 127 the retire waits (the
+// accumulator is held at one period, so a wait never turns into a burst).
+// ---------------------------------------------------------------------------
+void FluidRenderer::StepAcidTurnover(float dt, int want) {
+    const LiquidAcidConfig& a = m_cfg.acid;
+    if (a.conserveMass <= 0.5f || a.blobTurnoverS <= 0.0f) return;   // hazard 5e
+    const float period = a.blobTurnoverS / (float)(want > 0 ? want : 1);
+    m_acidTurnAcc += dt;
+    if (m_acidTurnAcc < period) return;
+    if ((int)m_acidBlobs.size() >= kAcidMaxBlobs - 1) {
+        if (!m_acidTurnBlockedLogged) {
+            printf("[turnover] blocked t=%.3f: %d blobs incl. retirees (cap %d) -- "
+                   "the retire waits for a dissolve to finish\n",
+                   m_time, (int)m_acidBlobs.size(), kAcidMaxBlobs);
+            m_acidTurnBlockedLogged = true;
+        }
+        m_acidTurnAcc = period;
+        return;
+    }
+    m_acidTurnRng ^= m_acidTurnRng << 13;
+    m_acidTurnRng ^= m_acidTurnRng >> 17;
+    m_acidTurnRng ^= m_acidTurnRng << 5;
+    const uint32_t salt = m_acidTurnRng;
+    auto hashIdx = [salt](uint32_t i) {
+        uint32_t h = (i * 0x9E3779B9u) ^ salt;
+        h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+        return h;
+    };
+    const float aspect = (float)m_width / fmaxf((float)m_height, 1.0f);
+    float oldest = 3.4e38f;
+    for (size_t i = 0; i < m_acidBlobs.size(); i++) {
+        const AcidBlob& b = m_acidBlobs[i];
+        if (b.rTarget > 0.0f && b.baseR >= 0.9f * b.rTarget && b.born < oldest) oldest = b.born;
+    }
+    const float dueBy = m_time - 0.5f * a.blobTurnoverS;
+    int best = -1; int bestClear = 0; float bestBorn = 0.0f; uint32_t bestHash = 0;
+    for (size_t i = 0; i < m_acidBlobs.size(); i++) {
+        const AcidBlob& b = m_acidBlobs[i];
+        if (b.rTarget <= 0.0f || b.baseR < 0.9f * b.rTarget) continue;
+        if (!(b.born <= oldest || b.born <= dueBy)) continue;
+        const float supOut = b.baseR * a.supportScale * (1.0f + a.breathAmt) * 0.86f;
+        const float supX = supOut / fmaxf(aspect, 1e-4f);
+        const int clear = (b.y < -supOut || b.y > 1.0f + supOut ||
+                           b.x < -supX   || b.x > 1.0f + supX) ? 1 : 0;
+        const uint32_t h = hashIdx((uint32_t)i);
+        bool better = best < 0;
+        if (!better) {
+            if (clear != bestClear)      better = clear > bestClear;
+            else if (b.born != bestBorn) better = b.born < bestBorn;
+            else                         better = h < bestHash;
+        }
+        if (better) { best = (int)i; bestClear = clear; bestBorn = b.born; bestHash = h; }
+    }
+    if (best < 0) { m_acidTurnAcc = period; return; }   // everyone still growing in
+    AcidBlob& r = m_acidBlobs[(size_t)best];
+    printf("[turnover] retire t=%.3f blob=%d kind=%d r=%.4f born=%.1f clear=%d y=%.3f\n",
+           m_time, best, r.kind, r.baseR, r.born, bestClear, r.y);
+    r.rTarget = 0.0f;
+    m_acidTurnAcc -= period;
+    if (m_acidTurnAcc > period) m_acidTurnAcc = period;
 }
 
 // 64x36 velocity downsample -> CPU, one frame late (same trick as
@@ -4230,7 +4321,14 @@ void FluidRenderer::StepAcidBlobs(float dt) {
         // it a strong downward eddy could carry one off and the rise would
         // take minutes to bring it back, thinning the population for free.
         if (respawnMode) {
-            const float floorY = 1.0f + supOut + 0.06f;
+            // brief BZ hazard 5b: a blob grown in by the turnover is born at 2%
+            // of its radius, so a floor on the CURRENT baseR pulls a future
+            // giant up to y ~1.06 and it swells in view at the bottom edge.
+            // With turnover on, park it by the radius it is growing to.
+            const float supFloor = (a.blobTurnoverS > 0.0f && cons)
+                ? fmaxf(b.baseR, b.rTarget) * a.supportScale * (1.0f + a.breathAmt) * 0.86f
+                : supOut;
+            const float floorY = 1.0f + supFloor + 0.06f;
             if (b.y > floorY) { b.y = floorY; if (b.vy > 0.0f) b.vy = 0.0f; }
         }
 

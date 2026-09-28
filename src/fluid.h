@@ -530,6 +530,15 @@ struct LiquidAcidConfig {
     float conserveMass  = 0.0f;     // 0..1                        conserve_mass
     float spawnGrowS    = 0.0f;     // s, 0 = today (0.34)         spawn_grow_s
     float dissolveS     = 0.0f;     // s, 0 = today (0.34)         dissolve_s
+    // brief BZ BLACK-MASS: continuous TURNOVER. Every blob_turnover_s /
+    // blob_count seconds ONE blob is retired (dissolve_s, exactly as a count
+    // decrease) and the unchanged conserve_mass walk grows ONE in from under
+    // the bottom edge, its kind and size drawn from the CURRENT kind keys --
+    // so the population re-draws itself every blob_turnover_s and a change of
+    // disc/web/bubble_frac, hole_weight, big/size_bias or *_min/_max reaches
+    // the screen without a reseed. 0 = off = bit-identical (no RNG draw, the
+    // birth time never read). Only under conserve_mass > 0.5.
+    float blobTurnoverS = 0.0f;     // s, 0 = off                  blob_turnover_s
     float dropletRingWobble= 1.0f;  // out-of-round 0..1        droplet_ring_wobble
 
     // --- BACKLIGHT PENUMBRA (oil_penumbra) --------------------------------
@@ -2241,8 +2250,19 @@ private:
         // life and re-rolled only when it respawns off-screen. Uploaded as
         // AcidBlobGPU.c.w; the shader reads it for negative-weight blobs only.
         float dyeId = 0.5f;
+        // brief BZ blob_turnover_s: wallpaper time the blob was grown in
+        // (AdjustAcidBlobCount); 0 for the seeded population. Read only by
+        // the turnover pick, so it is inert while blob_turnover_s is 0.
+        float born = 0.0f;
     };
     std::vector<AcidBlob> m_acidBlobs;
+    // brief BZ blob_turnover_s: time accumulated toward the next retire, the
+    // pick's private xorshift (seeded with the population, from --seed; never
+    // rand(), never m_acidRespawnRng) and the one-shot "[turnover] blocked" log.
+    float    m_acidTurnAcc = 0.0f;
+    uint32_t m_acidTurnRng = 0x2545F491u;
+    bool     m_acidTurnBlockedLogged = false;
+    void     StepAcidTurnover(float dt, int want);
     uint32_t m_acidDyeSerial = 0;    // next dye identity serial (brief AG-b)
     uint32_t m_acidDyeSalt   = 0;    // per-seed salt for the identity hash
     float NextAcidDyeId();

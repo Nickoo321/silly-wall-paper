@@ -36,7 +36,7 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       run a A994D8621C935E292407423E501DE30B, run b A994D8621C935E292407423E501DE30B (EQUAL). 133 retires in 150 s,
       none blocked (80 live + <= ~40 retirees < 127); first cohort picks clear=1 bubbles, then discs in view; by 147 s
       the retirees are grow-ins born 56-58 s (lifetime ~90 s as designed). WORKS: vs turnover 0 (A0E792BB...) MAD 48.6,
-      max 254; black 11.9 % vs 22.2 % at that instant (pair: build2\shotslackmass\det\pair.png).
+      max 254; black 11.9 % vs 22.2 % at that instant (pair: build2\shots\blackmass\det\pair.png).
 - [ ] M3b range sheet for blob_turnover_s (the strip at 45/90/180)
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
@@ -55,9 +55,9 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
   ~25 s climb into view), is "clear of the frame" and would be retired before ever being seen, so the standing
   population would never turn over. Among the seeded cohort (all born 0) the pre-flight order holds exactly.
 
-## Queue (scratchm\q3.ps1, running from 19:53)
+## Queue (scratch\bm\q3.ps1, running from 19:53)
 Coordinator 21:00: sleep 15 s before every lock take (black-share.ps1 now does; q3's inline det loop does not,
 so q3 is ended by build2\shots\blackmass\STOP after M2 and q4.ps1 = det + screening with the gap).
 M2 (monotone on x3, acid-rise-12 on x3, monotone off x1) -> M3 det (t90 a/b + t0, blob_count 80, 150 s) ->
 screening round 1 (seed 1234): FG1-3 (blob_count 80, turnover 90, 3-5 big holes, T0 90), LR1-3 (threshold/support),
-SF1-3 (thin film threshold, droplets up, ink_frac down). Log scratchm\q3.log.
+SF1-3 (thin film threshold, droplets up, ink_frac down). Log scratch\bm\q3.log.

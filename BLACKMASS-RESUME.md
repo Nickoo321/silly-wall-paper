@@ -38,6 +38,14 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       the retirees are grow-ins born 56-58 s (lifetime ~90 s as designed). WORKS: vs turnover 0 (A0E792BB...) MAD 48.6,
       max 254; black 11.9 % vs 22.2 % at that instant (pair: build2\shots\blackmass\det\pair.png).
 - [ ] M3b range sheet for blob_turnover_s (the strip at 45/90/180)
+- [~] M4 screening round 1 (seed 1234, 300 s, yield 8): FG1 (blob_count 80, turnover 90, 3 holes .15-.30 w 2.5,
+      droplets 500, T0 90) 11.2; LR1 (threshold .90, support 1.8) 5.6; SF1 (threshold .70, droplets 1800, ink_frac .08,
+      r_max .016, mass_bias .3) 5.4. Reading: at 126 blobs the film stays continuous whatever threshold/support do;
+      black = only the edge gap masses. Droplet interiors read ~45-70 in the SDR png (bloom/halo lift) so they are
+      mostly NOT counted by max<40 -- only the big droplet cores are. FG2/3, LR2/3, SF3 dropped (same family);
+      round 2 (q5.ps1): FG4/5/6 = blob_count 40/50/60 (+3 holes, turnover 90), LR4 (thr 1.10 sup 1.5), LR5 (70 blobs,
+      thr .95, sup 1.7, stretch .8), LR6 (56 blobs, stretch .8), SF2 (thr .68, 2400 drops, r_max .018), SF4 (thr .65,
+      2400 drops, r_max .024, droplet_bias 2.0).
 - [ ] M4 Layout partials (Few giants / Lava rise / Starfield) from a first sheet
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report

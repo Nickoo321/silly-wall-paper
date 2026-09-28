@@ -76,3 +76,7 @@
       (19:56, 20:24, 20:51) faster than the queue's 5 s poll. My attempt to stop and relaunch the queue with a faster poll
       was DENIED by the permission classifier; the queue was left running untouched and will proceed when it wins the lock.
       Remaining after it finishes: bx2.py sheets (lift/size/sdr) -> live\bx, id-v4.log check, final commit, report.
+- [x] 2026-09-28 00:52 V4 DONE (queue won the lock 21:15): clocks probe "[clocks] table: 109 keys (... rig 18 ...); 9 ABL-capped,
+      9 body-only"; identity (id-v4.log) PARITY MATCH 835AECBD..., diff 20 unchanged / 0 changed / 0 missing / 0 new vs main 14b01aa
+      (composed baseline). Sheets regenerated in live\bx: ab-lamp_grey_heart_lift.png, ab-lamp_grey_heart_size.png, heart-sdr.png
+      (v4 renders); FEATURES lift row = v4 sweep. All six BX sheets are now post-fix.

@@ -80,6 +80,10 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
 - [x] M5b contact sheets (proof 23): MAIN repo build2\shots\live\blackmass\layouts-hdr.png (4 layouts x 4 frames, 3 seeds,
       HDR on) + layouts-sdr.png (HDR off seed 1234 x 3 frames), proven-1..4 row (screen crops) under each; panels labelled
       target vs measured, each frame with its own black %. Built by sheet.py (copied beside the sheets).
+- [x] M5c popdetect (proof 21): three 2 s frame-step windows (288 frames at 1/144) starting at in-view retires
+      t = 24.139 / 96.799 / 168.785 s of the t90 strip run: popdetect --min 200 = 0 / 0 / 0 pops (jumpy band px
+      10401 / 10631 / 5314 over 287 transitions, mean d 0.3-0.4); black % per frame 13.0..15.7 / 28.1..31.1 /
+      15.8..17.3, max per-frame delta 0.06 / 0.02 / 0.01 points (limit 1.5). build2\shots\blackmass\pop{1,2,3}-on\.
 - [ ] M5 proofs 20 (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 

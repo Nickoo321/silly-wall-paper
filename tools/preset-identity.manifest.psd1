@@ -139,6 +139,8 @@
            Note = 'UTF-16LE WITHOUT a BOM: the profile API may read it as ANSI (= built-in defaults); still deterministic' }
 
         # ---------------- reference\presets (tray) ----------------
+        @{ Path = 'reference\presets\Grey heart (overlay).ini'; Look = 'overlay'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'full'
+           Note = 'brief BX grey heart (0.75 / 1.7 / 0.45) on the monotone base; cycle-final stage 21' }
         @{ Path = 'reference\presets\Ink - auto bursts.ini'; Look = 'ink'; Base = ''; Delay = 60; Tier = 'fast'
            Note = 'tray ink preset (inverted, bursts)' }
         @{ Path = 'reference\presets\Ink - duo bursts yellow.ini'; Look = 'ink'; Base = ''; Delay = 60; Tier = 'full'

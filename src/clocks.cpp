@@ -119,12 +119,17 @@ const Spec kSpec[] = {
     { "post", "lid_rings",                  GR_LID, 0 },
     { "post", "lid_sheen",                  GR_LID, 0 },
     { "post", "lid_sheen_px",               GR_LID, K_NOTAIL },
-    // rig: STRENGTH keys only (15). Out: the positions light_x/y/z, camera_axis_x/y,
+    // rig: STRENGTH keys (17) + the heart size (K_NOTAIL). Out: the positions light_x/y/z, camera_axis_x/y,
     // camera_focus, focus_tilt_angle (pre-flight 15); the times focus_tilt_move_s,
     // focus_tilt_period; the extents lamp_grey_size, oil_fluor_reach, oil_penumbra_px,
     // shadow_len, shadow_soft and the hue turn oil_penumbra_hue (not strengths).
     { "liquid_acid", "lamp_grey",           GR_RIG, 0 },
     { "liquid_acid", "lamp_grey_cool",      GR_RIG, 0 },
+    // brief BX grey heart (pre-flight CLOCKS 28): amount + lift are strengths (lift is
+    // brightness: K_ABL, +35% mean_lum at the preset); size is an extent: K_NOTAIL.
+    { "liquid_acid", "lamp_grey_heart",      GR_RIG, 0 },
+    { "liquid_acid", "lamp_grey_heart_lift", GR_RIG, K_ABL },
+    { "liquid_acid", "lamp_grey_heart_size", GR_RIG, K_NOTAIL },
     { "liquid_acid", "oil_fluor",           GR_RIG, 0 },
     { "liquid_acid", "oil_hdr",             GR_RIG, K_ABL },
     { "liquid_acid", "oil_penumbra",        GR_RIG, 0 },

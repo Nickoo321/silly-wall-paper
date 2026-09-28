@@ -995,6 +995,10 @@ bool WantsScheme(int target) {
     const CycleStage& B = s_cfg.stages[target];
     if (A.look != CYCLE_LOOK_ACID || B.look != CYCLE_LOOK_ACID) return false;
     if (B.transition == CYCLE_TR_CUT || B.transition == CYCLE_TR_FADE) return false;
+    // ...and LEAVING one marked cut/fade takes the fade too (brief BX: the grey
+    // heart shares the Schemes' base, and its amount is not one the swap ramps,
+    // so a heart -> Scheme swap would snap the grey off at the swap).
+    if (A.transition == CYCLE_TR_CUT || A.transition == CYCLE_TR_FADE) return false;
     if (A.basePath.empty() || _wcsicmp(A.basePath.c_str(), B.basePath.c_str()) != 0) return false;
     if (!g_renderer) return false;
     FluidConfig ca, cb;

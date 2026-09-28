@@ -1111,6 +1111,7 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
     // read from these numbers rather than re-derived beside them.
     float rig[20] = {};
     bool bnOptics = false;   // brief BN: set in the rg1 pack below
+    bool heartPost = false;  // brief BX: set in the rg1 pack below
     rig[0] = m_rig.lampX;   rig[1] = m_rig.lampY;
     rig[2] = m_rig.axisX;   rig[3] = m_rig.axisY;
     // rig[4..5] (rg1.xy) used to carry the tilt, which the post pass never
@@ -1146,7 +1147,17 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
                + qcwr * 64.0f                          // corner_warp_r (BN)
                + qbw;                                  // bloom_warmth (BN)
         rig[5] = qgs * 262144.0f                       // glass_streaks (BN)
-               + qht * 4096.0f;                        // halation_threshold (BN); spare | spare
+               + qht * 4096.0f;                        // halation_threshold (BN)
+        // brief BX (fix round): the grey heart's desaturation runs at the END
+        // of this pass on the acid look (fields 3 and 4 of rg1.y: amount,
+        // size (0.8..2.2 -> 0..1)), so bloom / halation / glow / grain / stock
+        // grey with the film and the kept chroma is hue-independent; the
+        // display pass then does only the film lift (UploadAcidConstants
+        // writes HEART_K negative). Both fields 0 when the heart is off.
+        const LiquidAcidConfig& ha = m_cfg.acid;
+        const float qhk = ha.enabled ? q6(ha.lampGreyHeart) : 0.0f;
+        heartPost = qhk >= 1.0f;
+        if (heartPost) rig[5] += qhk * 64.0f + q6((fminf(fmaxf(ha.lampGreyHeartSize, 0.8f), 2.2f) - 0.8f) / 1.4f);
     }
     // rig[6..7] (rg1.zw) are brief BM's lid scratches, packed below.
     // The LENS's own chromatic split (item Z). It lives in the rig block
@@ -1258,7 +1269,16 @@ void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
         printf("post: BN_OPTICS PSO compiled on demand\n");
     }
     m_cmd->OMSetRenderTargets(1, &dst, FALSE, nullptr);
-    m_cmd->SetPipelineState(bnOptics ? m_psoPostBN.Get() : m_psoPost.Get());
+    // brief BX: the grey heart's post PSO (BN_OPTICS + BX_HEART), compiled the
+    // first time the heart is on with this pass running, and kept. BN code in
+    // it is still gated on its own fields, so one variant covers both.
+    if (heartPost && !m_psoPostHeart) {
+        const D3D_SHADER_MACRO defs[] = { { "BN_OPTICS", "1" }, { "BX_HEART", "1" }, { nullptr, nullptr } };
+        MakeGraphicsPso(kPostSrc, m_psoPostHeart, defs);
+        printf("post: BX_HEART PSO compiled on demand\n");
+    }
+    m_cmd->SetPipelineState(heartPost ? m_psoPostHeart.Get()
+                            : bnOptics ? m_psoPostBN.Get() : m_psoPost.Get());
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, c, 0);
     m_cmd->SetGraphicsRoot32BitConstants(6, 20, rig, 0);
     // The sim's own low-res velocity, so the thermal shimmer is ADVECTED by
@@ -2720,7 +2740,7 @@ void FluidRenderer::Shutdown() {
     m_psoAdvectVel.Reset(); m_psoAdvectDye.Reset();
     m_psoSplatVel.Reset(); m_psoSplatDye.Reset(); m_psoSplatDyeCompact.Reset();
     m_psoDownsample.Reset(); m_psoDiffuseDye.Reset();
-    m_psoDisplay.Reset(); m_psoGradient.Reset(); m_psoPost.Reset(); m_psoPostBN.Reset();
+    m_psoDisplay.Reset(); m_psoGradient.Reset(); m_psoPost.Reset(); m_psoPostBN.Reset(); m_psoPostHeart.Reset();
     m_psoLiquidAcid.Reset();
     m_psoOilMask.Reset(); m_psoOilDrag.Reset(); m_psoOilDyeBlock.Reset();
     m_oilMaskMade = false;
@@ -3122,7 +3142,7 @@ struct AcidParamsGPU {
     // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
-    // laP38: .x film_equal_load_patches (brief BW); .yzw free.
+    // laP38: .x film_equal_load_patches (brief BW); .yzw grey heart (brief BX).
     float p36[4], p37[4], p38[4];
     // brief BU-b: p39 = highlight tint + balance.
     float p39[4];
@@ -6234,6 +6254,15 @@ void FluidRenderer::UploadAcidConstants() {
         slot(LA_GREY_COOL, fminf(fmaxf(a.lampGreyCool, 0.0f), 1.0f));
         slot(LA_GREY_CX,   gx);
         slot(LA_GREY_CY,   gy);
+        // brief BX: the grey heart (centred mask on the same block). No 0.6
+        // factor: amount 1 = fully grey inside the core. 0 skips the branch.
+        // Fix round: with the [post] pass running, the DESATURATION moves to its
+        // end (RunPostPass, rg1.y) and the display pass does only the film lift:
+        // HEART_K is written NEGATIVE (-amount) to say so.
+        const float hk = fminf(fmaxf(a.lampGreyHeart, 0.0f), 1.0f);
+        slot(LA_HEART_K,    (PostActive() && (int)(hk * 63.0f + 0.5f) >= 1) ? -hk : hk);
+        slot(LA_HEART_SIZE, fminf(fmaxf(a.lampGreyHeartSize, 0.8f), 2.2f));
+        slot(LA_HEART_LIFT, fminf(fmaxf(a.lampGreyHeartLift, 0.0f), 0.8f));
     }
     // ---- brief BU: SPLIT TONE --------------------------------------------
     // The user: "make it the opposite of the main hue, and obviously rotate

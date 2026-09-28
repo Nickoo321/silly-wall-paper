@@ -874,11 +874,27 @@ struct LiquidAcidConfig {
     // edge over 90 s) is desaturated about its own LINEAR luminance by up to
     // 0.6 x lamp_grey at the corner, plus a Y-normalised cool shift of
     // lamp_grey_cool of that. Y is kept, so ABL / mean_lum do not move; never
-    // the centre (the frame centre is > 1 screen height from any corner).
+    // the centre (the frame centre is > 1 screen height from any corner; the
+    // centre is the grey heart below).
     // 0 = today (the shader skips the branch).
     float lampGrey      = 0.0f;     // 0..1, 0 = today            lamp_grey
     float lampGreySize  = 0.40f;    // 0.25..0.6 screen heights   lamp_grey_size
     float lampGreyCool  = 0.20f;    // 0..1                       lamp_grey_cool
+    // --- brief BX: GREY HEART (acid look) ---------------------------------
+    // An OKLab desaturation (a/b x (1 - g), luminance held on the scRGB Y)
+    // with a CENTRED elliptical mask hm = 1 - smoothstep(0.3 x size, size, r),
+    // r in half-frame units (edge midpoints 1, corners 1.41): one long ramp,
+    // no visible core edge; g = amount x sqrt(hm) (fitted per r bin to the
+    // user's Lightroom radial edit). The LAST colour op of the frame: at the
+    // end of the [post] pass when it runs (BX_HEART post PSO), else in the
+    // display pass after the gamut stretch; so the kept chroma is the same on
+    // every hue. Lift (display pass): the FILM's luminance x (1 + lift x hm x
+    // alpha), independent of the amount (0.45 = x1.45 in the middle, the
+    // edit's plateau); masses never lift. Size/lift defaults = the user's edit
+    // scaled 1.3x (spec update). Amount 0 = today (skipped).
+    float lampGreyHeart     = 0.0f;   // 0..1, 0 = today          lamp_grey_heart
+    float lampGreyHeartSize = 1.7f;   // 0.8..2.2 half-frames     lamp_grey_heart_size
+    float lampGreyHeartLift = 0.45f;  // 0..0.8                   lamp_grey_heart_lift
     // SPLIT TONE: the black masses take the complement of the main (film)
     // hue, following hue_rotate / the sweep, lifted by at most
     // shadow_tone_lift (sRGB-encoded, of SDR white) -- the one BU piece that
@@ -2102,6 +2118,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPost;
     // brief BN: kPostSrc with BN_OPTICS, built on demand when a BN key is live
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPostBN;
+    // brief BX: kPostSrc with BN_OPTICS + BX_HEART, built on demand when the grey heart is on
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_psoPostHeart;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_postTex;
     D3D12_RESOURCE_STATES m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     D3D12_GPU_DESCRIPTOR_HANDLE m_postSrv = {};

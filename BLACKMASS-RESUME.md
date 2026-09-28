@@ -38,7 +38,8 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       FEATURES rows; report
 
 ## Measured (black % = share of max(R,G,B) < 40 on the 8-bit SDR png, 1280x720, 300 s window)
-(none yet)
+- TODAY = monotone-post-0924, HDR on, t 30..330 s: seed 1234 6.4 (0.0..17.9), 5678 11.5 (0.2..36.7), 9012 10.6 (0.9..28.1);
+  mean of means 9.5 (spread 5.1). Swings hard inside a seed (one big gap mass rising through the frame).
 
 ## Decisions / deviations
 - Turnover pick: the clear-of-frame preference applies only among DUE blobs (the oldest cohort, or born at least
@@ -47,6 +48,8 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
   population would never turn over. Among the seeded cohort (all born 0) the pre-flight order holds exactly.
 
 ## Queue (scratchm\q3.ps1, running from 19:53)
+Coordinator 21:00: sleep 15 s before every lock take (black-share.ps1 now does; q3's inline det loop does not,
+so q3 is ended by build2\shotslackmass\STOP after M2 and q4.ps1 = det + screening with the gap).
 M2 (monotone on x3, acid-rise-12 on x3, monotone off x1) -> M3 det (t90 a/b + t0, blob_count 80, 150 s) ->
 screening round 1 (seed 1234): FG1-3 (blob_count 80, turnover 90, 3-5 big holes, T0 90), LR1-3 (threshold/support),
 SF1-3 (thin film threshold, droplets up, ink_frac down). Log scratchm\q3.log.

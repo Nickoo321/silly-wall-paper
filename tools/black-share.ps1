@@ -49,6 +49,10 @@ if (-not $Label) {
 if (-not $OutDir) { $OutDir = Join-Path $root "build2\shots\blackmass\$Label-$Hdr" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $py = Join-Path $PSScriptRoot 'black-share.py'
+# A STOP file ends the CALLING queue too (the whole PowerShell process), only at a point where no render
+# runs and the lock is released: checked before the first seed and after the stats.
+$stopFile = Join-Path $root 'build2\shots\blackmass\STOP'
+if (Test-Path $stopFile) { Write-Output "STOP file present: $stopFile -- ending the queue"; [Environment]::Exit(0) }
 
 # ---- the ini actually rendered -------------------------------------------------------------
 $runIni = $Ini
@@ -73,7 +77,7 @@ foreach ($s in $Seeds) {
                '--shot-yield', "$Yield", '--shot-png-only') + $Extra
     $argStr = ($args2 | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
     $got = $true
-    if (-not $NoLock) { $got = Wait-GpuLock -Owner "BLACKMASS black-share $Label hdr=$Hdr seed=$s" -TimeoutMinutes $LockMinutes }
+    if (-not $NoLock) { Start-Sleep -Seconds 15; $got = Wait-GpuLock -Owner "BLACKMASS black-share $Label hdr=$Hdr seed=$s" -TimeoutMinutes $LockMinutes }
     if (-not $got) { Write-Output "LOCK TIMEOUT after $LockMinutes min: $Label seed $s skipped"; continue }
     $t0 = Get-Date
     try {
@@ -94,6 +98,7 @@ $json = Join-Path $OutDir 'black-share.json'
 Add-Content -Path (Join-Path $OutDir 'summary.txt') -Value ("{0} ini={1} set=[{2}] hdr={3} delay={4} series={5} seeds={6}" -f `
     (Get-Date -Format s), $runIni, ($Set -join ' '), $Hdr, $Delay, $Series, ($Seeds -join ','))
 & python $py @groups | Add-Content -Path (Join-Path $OutDir 'summary.txt')
+if (Test-Path $stopFile) { Write-Output "STOP file present: $stopFile -- ending the queue"; [Environment]::Exit(0) }
 if (-not $KeepFrames) {
     # keep the first, middle and last frame of each seed for sheets; the rest is ~1 MB a frame
     foreach ($s in $Seeds) {

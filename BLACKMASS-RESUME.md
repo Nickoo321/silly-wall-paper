@@ -90,7 +90,13 @@ bc4c6ef -> 14b01aa this session, rebuilt under the lock).
       exes; cycle-photo-test 5147ADA1 (= PHOTO's value). dxbc-cmp IDENTICAL x6, slot-check PASS, keymeta-check OK (M0;
       shaders.h untouched since). SETTINGS.md: no generator exists (handoff\SETTINGS.md is a hand-written handoff doc
       from the deleted settings.cpp) -- not regenerated.
-- [ ] M5 range sheet redo (q12) + report (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
+- [x] M5e range sheet (q12, preset copies carrying T): black % after Few giants AT 5 s -- T 45: overshoots and STAYS
+      55-70 % (in-view retires outrun the grow-ins still climbing from under the edge; max 5-s step 13.8); T 90: peak 52
+      at 80 s then 11-18 % (step 7.6); T 180: peak 45, dips to 3 % at 125 s, back to 28 % at 180 (step 7.7). Useful
+      range 60..300 -> keys.inc 0..300 step 15 (was provisional step 5), tooltip warns below ~60; rebuilt OK 10:05 (UI
+      only, no render path). Sheets: MAIN build2\shots\live\blackmass\turnover-range.png, strip-t90.png (proof 21 six
+      frames 30..180 s).
+- [x] M5 report handed back. (identity/parity/dxbc/slot/keymeta), 21 (strip + popdetect), 23 (contact sheet); manifest,
       FEATURES rows; report
 
 ## Measured (black % = share of max(R,G,B) < 40 on the 8-bit SDR png, 1280x720, 300 s window)

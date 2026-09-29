@@ -2808,6 +2808,21 @@ static LRESULT CALLBACK ShotCycleWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+// Settings-window model on the renderer's config; hooks = the calls the old window made.
+// Called by BOTH the live path (wWinMain) and RunShotMode once g_renderer is set: without it
+// UiModelReady() is false and ShowSettingsWindow() returns silently (tray Settings / the
+// second-launch shortcut did nothing on every live build since UI 1a, 2026-09-24).
+static void InitSettingsModel(FluidRenderer& renderer) {
+    UiModelInit(renderer.Config());
+    UiLoadActivePreset();
+    UiHooks h;
+    h.reinitWanderers = [] { if (g_renderer) g_renderer->ReinitWanderers(); };
+    h.ensureLook = [] { if (g_renderer) g_renderer->EnsureLookResources(); };
+    h.setResolutions = [](int simRes, int dyeRes) { if (g_renderer) g_renderer->SetResolutions(simRes, dyeRes); };
+    h.applyPreset = [](const std::wstring& p) { ApplyPreset(p); };
+    UiSetHooks(h);
+}
+
 static int RunShotMode() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
@@ -3051,16 +3066,7 @@ static int RunShotMode() {
                     c[8], c[9]);
         }
     };
-    {   // settings-window model on the renderer's config; hooks = the calls the old window made
-        UiModelInit(renderer.Config());
-        UiLoadActivePreset();
-        UiHooks h;
-        h.reinitWanderers = [] { if (g_renderer) g_renderer->ReinitWanderers(); };
-        h.ensureLook = [] { if (g_renderer) g_renderer->EnsureLookResources(); };
-        h.setResolutions = [](int simRes, int dyeRes) { if (g_renderer) g_renderer->SetResolutions(simRes, dyeRes); };
-        h.applyPreset = [](const std::wstring& p) { ApplyPreset(p); };
-        UiSetHooks(h);
-    }
+    InitSettingsModel(renderer);
     // --cycle-next from ANOTHER process reaches a headless run through this
     // message-only window (class FluidWallpaperShotCycle, never the live
     // tray's class, so no script can mistake one for the other). Only while
@@ -3569,6 +3575,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     }
     g_renderer = &renderer;
     renderer.SetCoverageWanted(CycleCoverageWanted());
+    InitSettingsModel(renderer);   // the Settings window needs the model on the LIVE path too
 
     CreateTrayWindow();
 

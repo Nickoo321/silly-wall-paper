@@ -1372,6 +1372,7 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case CMD_PEAK_800:  g_hdrPeakNits = 800.0f;  SaveSettings(); break;
         case CMD_PEAK_1000: g_hdrPeakNits = 1000.0f; SaveSettings(); break;
         case CMD_SETTINGS:
+            WpLog("tray: CMD_SETTINGS");
             ShowSettingsWindow();
             break;
         case CMD_ANALYZER:

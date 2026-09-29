@@ -16,6 +16,7 @@
 // renderer, config read-only (main.cpp returns before the mutex, like --shot).
 
 #include <windows.h>
+void WpLog(const char* fmt, ...);   // main.cpp: %APPDATA%\FluidWallpaper\FluidWallpaper.log
 #include <shellapi.h>
 #include <dwmapi.h>
 #include <d3d11.h>
@@ -1412,7 +1413,7 @@ bool CreateDeviceAndSwap(HWND hwnd) {
     if (FAILED(hr))
         hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, fl, 2,
                                D3D11_SDK_VERSION, &s_dev, nullptr, &s_ctx);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) { WpLog("settings: D3D11CreateDevice FAILED hr=0x%08X (hardware and WARP)", (unsigned)hr); return false; }
     ComPtr<IDXGIDevice1> dxgiDev;
     if (SUCCEEDED(s_dev.As(&dxgiDev))) dxgiDev->SetMaximumFrameLatency(1);
     ComPtr<IDXGIAdapter> adapter;
@@ -1432,7 +1433,7 @@ bool CreateDeviceAndSwap(HWND hwnd) {
         sd.Scaling = DXGI_SCALING_STRETCH;
         hr = factory->CreateSwapChainForHwnd(s_dev.Get(), hwnd, &sd, nullptr, nullptr, &s_swap);
     }
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) { WpLog("settings: CreateSwapChainForHwnd FAILED hr=0x%08X hwnd=%p", (unsigned)hr, (void*)hwnd); return false; }
     factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
     CreateRtv();
     return true;
@@ -1846,13 +1847,14 @@ void CloseSettingsWindow() {
 }
 
 void ShowSettingsWindow() {
+    WpLog("settings: ShowSettingsWindow (wnd=%p renderer=%d model=%d)", (void*)s_wnd, g_renderer ? 1 : 0, UiModelReady() ? 1 : 0);
     if (s_wnd) {
         if (IsIconic(s_wnd)) ShowWindow(s_wnd, SW_RESTORE);
         ShowWindow(s_wnd, SW_SHOW);
         SetForegroundWindow(s_wnd);
         return;
     }
-    if (!g_renderer || !UiModelReady()) return;
+    if (!g_renderer || !UiModelReady()) { WpLog("settings: no renderer/model, not opening"); return; }
     s_view.live = true;
 
     static bool registered = false;
@@ -1886,10 +1888,11 @@ void ShowSettingsWindow() {
     }
     s_wnd = CreateWindowExW(WS_EX_APPWINDOW, L"FluidWallpaperSettings2", L"Fluid Wallpaper \u2014 Settings",
                             WS_OVERLAPPEDWINDOW, x, y, w, h, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!s_wnd) return;
+    if (!s_wnd) { WpLog("settings: CreateWindowExW FAILED err=%lu", GetLastError()); return; }
     BOOL dark = TRUE;
     DwmSetWindowAttribute(s_wnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
     if (!CreateDeviceAndSwap(s_wnd)) {
+        WpLog("settings: device/swap chain failed, window destroyed");
         DestroyWindow(s_wnd);
         return;
     }
@@ -1909,6 +1912,7 @@ void ShowSettingsWindow() {
     SetTimer(s_wnd, kTimerId, 33, nullptr);
     ShowWindow(s_wnd, SW_SHOW);
     SetForegroundWindow(s_wnd);
+    WpLog("settings: window shown hwnd=%p", (void*)s_wnd);
     s_lastInput = GetTickCount64();
     RenderLive();
 }

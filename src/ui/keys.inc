@@ -89,7 +89,7 @@ KEY_SLIDER("Brightness", 0.5f, 1.5f, 0.01f, 2, &c.postBrightness, nullptr, "colo
            G_COLOUR, "FAI", "", 0, "", "")
 KEY_SLIDER("Hue rotate (deg)", 0, 360, 1, 0, &c.postHue, nullptr, "color", "post_hue", false, "Rotates all colors. Warning: rotates outside the hue band",
            G_COLOUR, "FAI", "", 0, "", "")
-KEY_SLIDER("Stage dwell (s)", 30, 240, 10, 0, UiCycleDwellPtr(), nullptr, "cycle", "dwell", false, "Seconds on a cycle stage before the next (stages may set their own; 240 = the 4-minute maximum)",
+KEY_SLIDER("Stage dwell (s)", 30, 900, 10, 0, UiCycleDwellPtr(), nullptr, "cycle", "dwell", false, "Seconds on a cycle stage before the next (stages may set their own; 900 = the 15-minute maximum)",
            G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")
 KEY_SLIDER("Fluid transition (s)", 1, 20, 1, 0, UiCycleTransitionPtr(), nullptr, "cycle", "lerp", false, "Seconds a fluid-to-fluid stage change glides (hue bridge + lerp); look changes fade through black",
            G_SYSTEM, "FAI", "cycle.enabled>0", KF_MACHINE, "", "")

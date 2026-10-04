@@ -30,7 +30,7 @@
 //   stage_count=N  current=K (written back: resume here after a restart)
 //   stage_K_file=<path, relative to the ini's folder, or absolute>
 //   stage_K_base=<optional base ini under the file>
-//   dwell=180 (default stage dwell, s)  jitter=0.3   -- every dwell max 240 s
+//   dwell=180 (default stage dwell, s)  jitter=0.3   -- every dwell max 900 s
 //   stage_K_dwell=<s, default [cycle] dwell>  stage_K_transition=cut|fade|lerp
 //   stage_K_overlay=1  (a partial ini, e.g. a Mirror preset, applied ON TOP of the
 //                       running look for its dwell, then removed: short fade, no
@@ -72,6 +72,13 @@
 //   over scheme_ramp s, the rest is swapped as a PLAIN SET, then they ramp
 //   back (CYCLE_SCHEME).
 //   A stage file's own [meta] base= is its base when stage_K_base is empty.
+//   we_every=N (default 1 = strict alternation, today's walk draw for draw): the
+//       WE interlude comes only after every N-th non-WE look; in between the next
+//       non-WE look follows directly (two Schemes: no black). Overlays still only
+//       land on WE.
+//   scheme_hue_period=S (default 0 = each stage's own hue_rotate_period): the hue
+//       rotation period of the oil stages that ride the rotation with the sweep off
+//       (the Schemes), so the film hue travels during a long run between blacks.
 //
 // PHOTO stage (brief BY PHOTO-STAGE phase 1, reference/briefs/PHOTO-STAGE.md +
 // its binding pre-flight): a stage whose FILE has a [photo] section (or whose
@@ -94,6 +101,8 @@
 #include <vector>
 #include "fluid.h"
 
+const float kCycleMaxDwellSec = 900.0f;   // every dwell is clamped to this (cycle.cpp)
+
 enum CycleLook       { CYCLE_LOOK_FLUID = 0, CYCLE_LOOK_ACID = 1, CYCLE_LOOK_INK = 2,
                        CYCLE_LOOK_PHOTO = 3 };   // brief BY: a [photo] stage (no Config)
 enum CycleTransition { CYCLE_TR_DEFAULT = -1, CYCLE_TR_CUT = 0, CYCLE_TR_FADE = 1, CYCLE_TR_LERP = 2 };
@@ -107,7 +116,7 @@ enum CycleTier       { CYCLE_TIER_NONE = -1, CYCLE_TIER_PROVEN = 0, CYCLE_TIER_M
 struct CycleStage {
     std::wstring file;             // as written (relative to the ini folder, or absolute)
     std::wstring base;             // optional declared base; empty = FluidConfig{} defaults
-    float dwellSec   = -1.0f;      // -1 = [cycle] dwell; every dwell is clamped to 240 s
+    float dwellSec   = -1.0f;      // -1 = [cycle] dwell; every dwell is clamped to 900 s
     bool  overlay    = false;      // stage_N_overlay=1: partial ini ON TOP of the running look
     bool  photo      = false;      // stage_N_photo=1, or the file has [photo] (brief BY)
     int   transition = CYCLE_TR_DEFAULT;
@@ -138,13 +147,15 @@ struct CycleConfig {
     int      warmupSteps = 8;      // sim steps per shown frame while black
     float    warmupStepHz = 144.0f;
     float    lerpSec = 4.0f;       // fluid -> fluid transition length
-    float    dwellSec = 180.0f;    // [cycle] dwell: default stage dwell (max 240)
+    float    dwellSec = 180.0f;    // [cycle] dwell: default stage dwell (max 900)
     float    jitter = 0.3f;        // [cycle] jitter: default +- fraction
     float    earlyDarkPct = 92.0f; // dark-screen trigger (fluid stages)
     float    minDwellSec = 60.0f;
     float    burstWeight = 1.0f;   // [cycle] burst_weight: the burst moment's wild multiplier
     float    burstSec = 12.0f;     // [cycle] burst_sec: the tamed burst's length
     float    schemeRampSec = 2.0f; // [cycle] scheme_ramp: each half of an oil -> oil change
+    int      weEvery = 1;          // [cycle] we_every: WE after every N-th non-WE look
+    float    schemeHuePeriod = 0.0f; // [cycle] scheme_hue_period: 0 = each stage's own
     std::vector<CycleStage> stages;
 };
 

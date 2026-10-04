@@ -8,7 +8,7 @@
 #include <string>
 
 bool*  UiCycleEnabledPtr();          // [cycle] enabled   (keys.inc row pointers)
-float* UiCycleDwellPtr();            // [cycle] dwell     (s, default stage dwell, max 240)
+float* UiCycleDwellPtr();            // [cycle] dwell     (s, default stage dwell, max 900)
 float* UiCycleTransitionPtr();       // [cycle] lerp      (s, fluid -> fluid transition)
 float* UiCycleJitterPtr();           // [cycle] jitter    (+- fraction of the dwell)
 bool   UiCycleIsPtr(const void* p);  // one of the four above (pointer-exception list)

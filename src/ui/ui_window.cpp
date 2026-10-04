@@ -1156,7 +1156,7 @@ void DrawPlaylist() {
                 float dv = s_view.dwellEditRow == i ? s_view.dwellEditVal : st.dwellSec;
                 ImGui::SetNextItemWidth(-FLT_MIN);
                 const char* df = st.ownDwell ? "%.0f s" : "%.0f s (default)";
-                if (ImGui::SliderFloat("##dwell", &dv, 30.0f, 240.0f, df)) {
+                if (ImGui::SliderFloat("##dwell", &dv, 30.0f, 900.0f, df)) {
                     s_view.dwellEditRow = i;
                     s_view.dwellEditVal = roundf(dv / 10.0f) * 10.0f;
                 }

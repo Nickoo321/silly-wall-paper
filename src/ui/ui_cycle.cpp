@@ -128,7 +128,7 @@ void UiCycleJump(int i) { CycleJump(i); }
 void UiCycleSetStageDwell(int i, float sec) {
     if (!Valid(i)) return;
     CycleConfig c = CycleGet();
-    c.stages[i].dwellSec = fminf(fmaxf(sec, 10.0f), 240.0f);
+    c.stages[i].dwellSec = fminf(fmaxf(sec, 10.0f), kCycleMaxDwellSec);
     CycleSet(c);
 }
 void UiCycleSetStageWeight(int i, float w) {
@@ -156,7 +156,7 @@ void UiCycleAddStage(const std::wstring& path, const std::wstring& base, bool ov
     st.file = path;                       // absolute: resolves the same from any ini folder
     st.base = base;                       // a partial "Save as" names its base preset here
     st.overlay = overlay;
-    st.dwellSec = fminf(dwellSec, 240.0f);
+    st.dwellSec = fminf(dwellSec, kCycleMaxDwellSec);
     c.stages.push_back(st);
     CycleSet(c);
 }

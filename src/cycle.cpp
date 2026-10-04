@@ -35,10 +35,11 @@ namespace {
 //   ink (ink-inverted)     8 s: clear water until the first drop lands at ~7.5 s
 const float kWarmupDefault[3] = { 16.0f, 32.0f, 8.0f };   // fluid, liquid_acid, ink
 const float kWarmupExtraCap = 30.0f;   // max extra sim s waiting for the hue glide
-// User 2026-09-25: "it should really keep moving, but like up to 4 mins per
-// definite stage" -> every dwell (per stage, [cycle] dwell, CLI, and the
-// jittered target) is clamped to this.
-const float kMaxDwellSec = 240.0f;
+// Every dwell (per stage, [cycle] dwell, CLI, and the jittered target) is
+// clamped to this. Was 240 s (user 2026-09-25: "up to 4 mins per definite
+// stage"); 900 s since the user's 2026-10-04 "make the time between black
+// screens 3-4x longer".
+const float kMaxDwellSec = kCycleMaxDwellSec;
 // An overlay stage's own fades (it snaps a fold on/off, no look switch, no
 // warm-up): short, unless the stage sets stage_N_fade_out / _fade_in.
 const float kSoftFadeOut = 0.6f, kSoftFadeIn = 0.9f;
@@ -96,6 +97,8 @@ void (*s_logger)(const char*) = nullptr;
 // tier mode: the non-WE stage drawn (at an oil / ink visit's midpoint) for the
 // slot after the WE interlude; this visit's draw / burst done
 int   s_queued = -1;
+// [cycle] we_every: consecutive non-WE LOOK stages entered since the last WE
+int   s_otherRun = 0;
 bool  s_midDrawn = false;
 bool  s_burstDone = false;
 bool  s_burstWatch = false;          // a burst is landing: log where it lands
@@ -471,6 +474,14 @@ void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int&
     // on an oil stage is the palette clock (anchor drift + the rare tamed
     // burst). Off glides any angle home (UpdateHueShift), never a snap.
     if (st.look == CYCLE_LOOK_ACID && !st.overlay) c.hsEnabled = false;
+    // [cycle] scheme_hue_period (user 2026-10-04: "hues changing more
+    // continuously between black screen transitions"): the oil stages that ride
+    // the hue rotation with the sweep off (every Scheme) turn at this period
+    // instead of their base's. One value for all of them, so two Schemes still
+    // share a palette clock (WantsScheme). 0 = each stage's own.
+    if (s_cfg.schemeHuePeriod > 0.0f && st.look == CYCLE_LOOK_ACID && !st.overlay &&
+        c.acid.hueRotatePeriod > 0.01f && !(c.acid.hueSweepPeriod > 0.01f))
+        c.acid.hueRotatePeriod = s_cfg.schemeHuePeriod;
     out = c;
     // [hdr] peak_nits / gamut are shell globals: the stage's value when it
     // carries one (file over base), else the user's own setting
@@ -500,7 +511,15 @@ void PersistCurrent() {
     WritePrivateProfileStringW(L"cycle", L"current", v, g_iniPath);
 }
 
+// [cycle] we_every: count the non-WE look stages entered in a row (an overlay
+// neither counts nor resets; a WE stage resets).
+void NoteEntered(int from, int to) {
+    if (IsFluid(to)) s_otherRun = 0;
+    else if (IsOtherLook(to) && from != to) s_otherRun++;
+}
+
 void PushHistory(int from, int to) {
+    NoteEntered(from, to);
     if (from >= 0 && from != to) {
         s_history.push_back(from);
         if (s_history.size() > 64) s_history.erase(s_history.begin());
@@ -642,13 +661,16 @@ void ApplyStage(FluidRenderer& r, int i) {
 // wild tier also holds the "burst moment" (burst_weight); drawn where it
 // cannot fire (allowBurst false), the member is redrawn inside the wild tier,
 // so the tier shares stay 70/20/10. Returns a stage, kBurst, or -1.
-int DrawTiered(bool allowBurst, bool allowOverlays, const char* why) {
+int DrawTiered(bool allowBurst, bool allowOverlays, const char* why, int exclude = -1) {
     if (!s_rngSeeded) SeedRng();
     const int n = (int)s_cfg.stages.size();
     std::vector<int> mem[3];
     float tot[3] = {};
     for (int j = 0; j < n; j++) {
         if (IsFluid(j) || !Drawable(j)) continue;   // brief BY: empty photo stages out, before NextUnit
+        // we_every chain: never the running stage (or its file) again
+        if (Valid(exclude) && (j == exclude ||
+            _wcsicmp(s_cfg.stages[j].path.c_str(), s_cfg.stages[exclude].path.c_str()) == 0)) continue;
         if (s_cfg.stages[j].overlay && !allowOverlays) continue;
         const float w = fmaxf(s_cfg.stages[j].weight, 0.0f);
         if (w <= 0.0f) continue;
@@ -760,6 +782,22 @@ int PickTier() {
         const bool ovOk = !IsPhoto(s_cur);   // pre-flight 4: never an overlay over a photo
         const int q = TakeQueued(ovOk);
         return q >= 0 ? q : DrawTiered(false, ovOk, "after WE");
+    }
+    // [cycle] we_every > 1 (user 2026-10-04: "make WE show up 50% less"): the
+    // WE interlude only after every we_every-th non-WE look. Until then the
+    // next non-WE look follows directly -- two Schemes on the same base change
+    // with no black (CYCLE_SCHEME). The queued draw is used when it fits here
+    // (not an overlay: those only land on WE; not this stage again), else it
+    // stays queued for the slot after the WE and a fresh draw is made.
+    if (s_cfg.weEvery > 1 && s_otherRun < s_cfg.weEvery) {
+        int q = -1;
+        if (Drawable(s_queued) && !IsFluid(s_queued) && !IsOverlay(s_queued) && s_queued != s_cur &&
+            _wcsicmp(s_cfg.stages[s_queued].path.c_str(), s_cfg.stages[s_cur].path.c_str()) != 0) {
+            q = s_queued;
+            s_queued = -1;
+        }
+        if (q < 0) q = DrawTiered(false, false, "chain", s_cur);
+        if (Valid(q)) return q;
     }
     // oil / ink: the WE interlude; its successor is drawn now if the midpoint
     // draw has not queued one (or it was the burst)
@@ -1264,7 +1302,7 @@ void CycleLoad(const wchar_t* ini) {
     s_cfg.lerpSec = fmaxf(IniF(S, L"lerp", 4.0f, I), 1.0f);
     s_cfg.dwellSec = IniF(S, L"dwell", 180.0f, I);
     if (s_cfg.dwellSec > kMaxDwellSec) {
-        Log("[cycle] [cycle] dwell=%.0f clamped to %.0f s (the 4-minute maximum)\n", s_cfg.dwellSec, kMaxDwellSec);
+        Log("[cycle] [cycle] dwell=%.0f clamped to %.0f s (the maximum)\n", s_cfg.dwellSec, kMaxDwellSec);
         s_cfg.dwellSec = kMaxDwellSec;
     }
     s_cfg.jitter = fminf(fmaxf(IniF(S, L"jitter", 0.3f, I), 0.0f), 0.9f);
@@ -1273,6 +1311,10 @@ void CycleLoad(const wchar_t* ini) {
     s_cfg.burstWeight = fmaxf(IniF(S, L"burst_weight", 1.0f, I), 0.0f);
     s_cfg.burstSec = fminf(fmaxf(IniF(S, L"burst_sec", 12.0f, I), 1.0f), 60.0f);
     s_cfg.schemeRampSec = fminf(fmaxf(IniF(S, L"scheme_ramp", 2.0f, I), 0.1f), 10.0f);
+    s_cfg.weEvery = (int)GetPrivateProfileIntW(S, L"we_every", 1, I);
+    if (s_cfg.weEvery < 1) s_cfg.weEvery = 1;
+    if (s_cfg.weEvery > 12) s_cfg.weEvery = 12;
+    s_cfg.schemeHuePeriod = fmaxf(IniF(S, L"scheme_hue_period", 0.0f, I), 0.0f);
     const int count = (int)GetPrivateProfileIntW(S, L"stage_count", 0, I);
     for (int k = 1; k <= count && k <= 99; k++) {
         wchar_t key[48];
@@ -1283,7 +1325,7 @@ void CycleLoad(const wchar_t* ini) {
         st.base = IniStr(S, K(L"base"), I);
         st.dwellSec = IniF(S, K(L"dwell"), -1.0f, I);
         if (st.dwellSec > kMaxDwellSec) {
-            Log("[cycle] stage %d dwell=%.0f clamped to %.0f s (the 4-minute maximum)\n",
+            Log("[cycle] stage %d dwell=%.0f clamped to %.0f s (the maximum)\n",
                 k, st.dwellSec, kMaxDwellSec);
             st.dwellSec = kMaxDwellSec;
         }
@@ -1350,6 +1392,7 @@ bool CycleBoot(FluidConfig& cfg) {
     g_hdrPeakNits = peak;
     g_gamutMode = gamut;
     s_cur = start;
+    s_otherRun = IsOtherLook(start) ? 1 : 0;
     s_next = -1;
     s_phase = CYCLE_WARMUP;                  // the first frame is a fresh sim anyway
     s_phaseT = 0.0f;
@@ -1661,6 +1704,8 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.burstWeight = fmaxf(c.burstWeight, 0.0f);
     s_cfg.burstSec = fminf(fmaxf(c.burstSec, 1.0f), 60.0f);
     s_cfg.schemeRampSec = fminf(fmaxf(c.schemeRampSec, 0.1f), 10.0f);
+    s_cfg.weEvery = c.weEvery < 1 ? 1 : (c.weEvery > 12 ? 12 : c.weEvery);
+    s_cfg.schemeHuePeriod = fmaxf(c.schemeHuePeriod, 0.0f);
     s_cfg.stages = c.stages;
     s_queued = -1;                           // indices may have moved
     const std::wstring base = s_iniPath.empty() ? std::wstring(g_iniPath) : s_iniPath;
@@ -1692,6 +1737,8 @@ void CycleSet(const CycleConfig& c) {
         if (s_cfg.burstWeight != 1.0f) putF(L"burst_weight", s_cfg.burstWeight);
         if (s_cfg.burstSec != 12.0f) putF(L"burst_sec", s_cfg.burstSec);
         if (s_cfg.schemeRampSec != 2.0f) putF(L"scheme_ramp", s_cfg.schemeRampSec);
+        if (s_cfg.weEvery != 1) putI(L"we_every", s_cfg.weEvery);
+        if (s_cfg.schemeHuePeriod > 0.0f) putF(L"scheme_hue_period", s_cfg.schemeHuePeriod);
         putI(L"stage_count", (int)s_cfg.stages.size());
         for (int k = 0; k < (int)s_cfg.stages.size(); k++) {
             const CycleStage& st = s_cfg.stages[k];
@@ -1792,6 +1839,7 @@ void CycleDrawTest(int draws) {
     s_queued = -1;
     s_base = -1;
     s_cur = -1;
+    s_otherRun = 0;
     for (int j = 0; j < n; j++) if (IsFluid(j)) { s_cur = j; break; }
     if (s_cur < 0) s_cur = PickNext();
     long visits = 0, breaks = 0, overlays = 0, weVisits = 0;
@@ -1824,15 +1872,17 @@ void CycleDrawTest(int draws) {
         if (IsPhoto(s_cur) && IsPhoto(nx)) photoAfterPhoto++;
         if (IsOverlay(nx)) { if (!IsOverlay(s_cur)) s_base = s_cur; }
         else s_base = -1;
+        NoteEntered(s_cur, nx);
         s_cur = nx;
     }
     s_quiet = false;
     const double D = (double)(s_statDraws > 0 ? s_statDraws : 1);
     Log("[drawtest] order=%s seed=%u draws=%ld visits=%ld (WE %ld, overlay %ld) bursts=%ld "
-        "burst-redraws=%ld WE-alternation breaks=%ld\n",
+        "burst-redraws=%ld WE-alternation breaks=%ld%s\n",
         s_cfg.order == CYCLE_ORDER_FIXED ? "fixed" : "alternate_random",
         s_seedOverride ? s_seedOverride : s_cfg.seed, s_statDraws, visits, weVisits, overlays,
-        s_statBurst, s_statRedraw, breaks);
+        s_statBurst, s_statRedraw, breaks,
+        s_cfg.weEvery > 1 ? " (we_every > 1: same-side neighbours are the chain, by design)" : "");
     if (anyPhoto)
         Log("[drawtest] photo: visits=%ld overlay-after-photo=%ld photo-after-photo=%ld\n",
             photoVisits, overlayOnPhoto, photoAfterPhoto);

@@ -1818,9 +1818,10 @@ public:
     void DisableMirror();
     bool MirrorActive() const { return m_mirrorChain != nullptr; }
     bool MirrorBroken() const { return m_mirrorBroken; }
-    void SetMirrorHdr(float sdrScale, float peakNits) {
+    void SetMirrorHdr(float sdrScale, float peakNits, bool hdrActive) {
         m_mirrorSdrScale = sdrScale;
         m_mirrorPeakNits = peakNits;
+        m_mirrorHdrActive = hdrActive;   // the MIRROR monitor's own Windows HDR state
     }
 
     // mood-conductor primitives
@@ -1929,7 +1930,8 @@ private:
     void RenderDisplay();
     void RenderMirror();
     void BuildDisplayConstants(float out[32]);
-    void BuildDisplayConstantsEx(float out[32], int w, int h, float sdrScale, float peakNits);
+    void BuildDisplayConstantsEx(float out[32], int w, int h, float sdrScale, float peakNits,
+                                 bool hdrActive);
     void MaybeRenderAnalyzer();
     void CreateAnalyzerResources();
     void RenderGradient(float timeSec);
@@ -2175,6 +2177,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_mirrorBuffers[3];
     int   m_mirrorW = 0, m_mirrorH = 0;
     float m_mirrorSdrScale = 1.0f, m_mirrorPeakNits = 0.0f;
+    bool  m_mirrorHdrActive = false;
     bool  m_mirrorBroken = false;
     struct Wanderer {
         float x, y, heading, turn;   // random-wander state

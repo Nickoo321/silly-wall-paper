@@ -1396,24 +1396,26 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
 }
 
 void FluidRenderer::BuildDisplayConstants(float out[32]) {
-    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits);
+    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits, m_hdrActive);
 }
 
+// hdrActive = the Windows HDR state of the monitor this frame goes to (the
+// primary's for the wallpaper, the second monitor's own for the mirror).
 void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
-                                            float sdrScale, float peakNits) {
+                                            float sdrScale, float peakNits, bool hdrActive) {
     // CSS-filter chain parameters. The shader evaluates them primitive by
     // primitive with a clamp after each (Chromium/Skia behaviour); see
     // kDisplaySrc. Canvas filter: saturate -> brightness -> contrast ->
     // hue-rotate (the hue-shift burst). Then WE's right-panel adjust,
     // outermost: saturate -> brightness -> contrast -> hue-rotate.
-    float hdrOn = (m_hdrActive && m_cfg.hdrCompensation) ? 1.0f : 0.0f;
+    float hdrOn = (hdrActive && m_cfg.hdrCompensation) ? 1.0f : 0.0f;
     float hue = fmodf(m_hueAngle, 360.0f);
     if (hue > -0.05f && hue < 0.05f) hue = 0.0f;
 
     // HDR highlight expansion: gain that carries hot dye from SDR white up to
     // the peak-nits target (resolved by the shell; 0 = parity mode).
     float peakGain = 1.0f;
-    if (m_hdrActive && peakNits > 0.0f) {
+    if (hdrActive && peakNits > 0.0f) {
         float sdrWhiteNits = 80.0f * sdrScale;
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
@@ -1423,7 +1425,7 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
     // channels, and the panel's own SDR mode already widens sRGB, so the
     // stretch made SDR harsher than HDR instead of equal to it (user
     // 2026-10-03: "it should switch between BT.2020 and SDR when I toggle").
-    float gamut = m_hdrActive ? (float)m_cfg.gamutMode : 0.0f;
+    float gamut = hdrActive ? (float)m_cfg.gamutMode : 0.0f;
 
     // Cycle fade: sdrScale above is the UNFADED scale (so peakGain does not
     // grow as the frame dims); the constant the shader multiplies by carries
@@ -1752,7 +1754,8 @@ void FluidRenderer::RenderMirror() {
     m_cmd->SetGraphicsRootSignature(m_graphicsRS.Get());
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
-    BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits);
+    BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits,
+                            m_mirrorHdrActive);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();

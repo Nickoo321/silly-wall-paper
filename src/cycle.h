@@ -79,6 +79,15 @@
 //   scheme_hue_period=S (default 0 = each stage's own hue_rotate_period): the hue
 //       rotation period of the oil stages that ride the rotation with the sweep off
 //       (the Schemes), so the film hue travels during a long run between blacks.
+//       A stage whose own FILE sets hue_rotate_period keeps its own.
+//   oil_layout=<partial ini> (default empty = off): a partial ini (e.g. a
+//       "Layout - *.ini" preset: blob_count, hole sizes, threshold, turnover) loaded
+//       for every oil look stage, between its base and its file (the stage FILE
+//       wins, so a Settings Save into it takes effect). A stage with no base whose
+//       file is a full ini keeps its own layout keys: give it a base to follow.
+//       All based oil stages share one blob layout, so a Scheme -> Scheme change
+//       moves no layout key. Relative to the cycle ini's folder, or absolute. It
+//       never switches the look.
 //
 // PHOTO stage (brief BY PHOTO-STAGE phase 1, reference/briefs/PHOTO-STAGE.md +
 // its binding pre-flight): a stage whose FILE has a [photo] section (or whose
@@ -156,6 +165,8 @@ struct CycleConfig {
     float    schemeRampSec = 2.0f; // [cycle] scheme_ramp: each half of an oil -> oil change
     int      weEvery = 1;          // [cycle] we_every: WE after every N-th non-WE look
     float    schemeHuePeriod = 0.0f; // [cycle] scheme_hue_period: 0 = each stage's own
+    std::wstring oilLayout;        // [cycle] oil_layout: partial ini over every oil look stage; empty = off
+    std::wstring oilLayoutPath;    // resolved (not persisted); empty when off or the file is missing
     std::vector<CycleStage> stages;
 };
 
@@ -222,6 +233,9 @@ int CycleTierFromName(const wchar_t* s);      // proven|home, moderate, wild|rar
 
 // ---- the small API for the Settings UI (phase 1b Modes page) ---------------
 const CycleConfig& CycleGet();
+// The file chain of a stage onto c (base -> [cycle] oil_layout -> stage file, then
+// scheme_hue_period): the director's Compose without the shell keys. No renderer needed.
+void CycleComposeStageFiles(int stage, FluidConfig& c);
 void CycleSet(const CycleConfig& c);          // replace list; persisted to settings.ini
 void CycleJump(int stage);                    // 0-based; fades out to it
 CycleStatus CycleState();

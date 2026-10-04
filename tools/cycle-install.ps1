@@ -1,7 +1,7 @@
 # cycle-install.ps1 -- install the shipped cycle (brief FINAL-CYCLE.md B.6).
 # Copies the [cycle] block of reference\configs\cycle-final.ini into
 # %APPDATA%\FluidWallpaper\settings.ini (replacing any [cycle] section there), with every
-# stage_N_file / stage_N_base made ABSOLUTE (resolved against the cycle ini's folder), so
+# stage_N_file / stage_N_base / oil_layout made ABSOLUTE (resolved against the cycle ini's folder), so
 # the stages load the repo's files in place. settings.ini is backed up first
 # (settings.ini.bak-cycle-<time>) and keeps its encoding. `current` is dropped (the cycle
 # starts on a fresh draw).
@@ -26,7 +26,7 @@ foreach ($line in (Get-Content -LiteralPath $CycleIni)) {
     $t = $line.Trim()
     if ($t -match '^\[(.+)\]$') { $inCycle = ($Matches[1] -ieq 'cycle'); if ($inCycle) { $block.Add('[cycle]') }; continue }
     if (-not $inCycle -or $t -eq '' -or $t.StartsWith(';')) { continue }
-    if ($t -match '^(stage_\d+_(file|base))\s*=\s*(.+)$') {
+    if ($t -match '^(stage_\d+_(file|base)|oil_layout)\s*=\s*(.+)$') {
         $v = $Matches[3].Trim()
         if (-not ([IO.Path]::IsPathRooted($v))) { $v = [IO.Path]::GetFullPath((Join-Path $folder $v)) }
         if (-not (Test-Path -LiteralPath $v)) { throw "stage file missing: $v" }

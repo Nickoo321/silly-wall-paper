@@ -37,6 +37,8 @@
            Note = 'THE shipped cycle ([cycle] enabled=1, stage files relative to reference\configs): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
         @{ Path = 'reference\configs\cycle-flow.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'the long-run cycle (user 2026-10-04): cycle-final stage list with we_every=2, scheme_hue_period=900 and 480/600 s dwells; a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the walk' }
+        @{ Path = 'reference\configs\monotone-stage.ini'; Look = 'acid'; Base = 'reference\configs\monotone-post-0924.ini'; Delay = 60; Tier = 'skip'
+           Note = 'cycle-flow stage 2: an EMPTY partial on monotone-post-0924 ([meta] base), composes to exactly that look; exists so [cycle] oil_layout (loaded between base and file) reaches the monotone stage' }
         @{ Path = 'reference\configs\cycle-first.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'
            Note = 'CYCLE-DIRECTOR.md section 5 first draft ([cycle] enabled=1, interleaves WE/oil/ink/mirror stages, order=alternate_random): a --ini run boots the director (cycle seed = --seed 1234), so the 60 s frame is a fixed point of the cycle walk' }
         @{ Path = 'reference\configs\clocks-off-test.ini'; Look = 'cycle'; Base = ''; Delay = 60; Tier = 'full'

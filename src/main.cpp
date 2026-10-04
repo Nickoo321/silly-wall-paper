@@ -3768,7 +3768,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                         bool hdr2 = QueryHDR(g_monitor2, &max2);
                         float sdrW2 = GetSdrWhiteNits(g_monitor2);
                         float peak2 = hdr2 ? (g_hdrPeakNits < 0.0f ? max2 : g_hdrPeakNits) : 0.0f;
-                        renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2);
+                        renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2, hdr2);
                     }
                 }
             } else if (!want && renderer.MirrorActive()) {
@@ -3792,6 +3792,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             bool hdr = QueryHDR(g_monitor, &g_maxNits);
             float sdrWhite = GetSdrWhiteNits(g_monitor);
             if (sdrWhite != g_sdrWhiteNits) g_sdrWhiteNits = sdrWhite;
+            // the second-monitor mirror follows ITS monitor's HDR state (review 2026-10-04:
+            // it was read once, when the mirror came up, and its gamut came from the primary)
+            if (renderer.MirrorActive() && g_monitor2) {
+                float max2 = 0.0f;
+                const bool hdr2 = QueryHDR(g_monitor2, &max2);
+                const float sdrW2 = GetSdrWhiteNits(g_monitor2);
+                const float peak2 = hdr2 ? (g_hdrPeakNits < 0.0f ? max2 : g_hdrPeakNits) : 0.0f;
+                renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2, hdr2);
+            }
             if (hdr != g_hdrActive) {
                 g_hdrActive = hdr;
                 UpdateTrayTip();

@@ -97,8 +97,15 @@ void (*s_logger)(const char*) = nullptr;
 // tier mode: the non-WE stage drawn (at an oil / ink visit's midpoint) for the
 // slot after the WE interlude; this visit's draw / burst done
 int   s_queued = -1;
-// [cycle] we_every: consecutive non-WE LOOK stages entered since the last WE
+// [cycle] we_every: consecutive non-WE LOOK stages entered since the last WE.
+// A stage applied at a black point is counted there, before it is shown; when
+// it is replaced while still black (a Next / Jump during the warm-up, a failed
+// photo) the count goes back to the snapshot taken at that black point and the
+// replacement is counted from the stage that was last SHOWN.
 int   s_otherRun = 0;
+int   s_runAtBlack = 0;              // s_otherRun before the black-point apply
+int   s_fromAtBlack = -1;            // the stage on screen before that black point
+bool  s_noCount = false;             // ApplyStage's own PushHistory must not count (re-target)
 bool  s_midDrawn = false;
 bool  s_burstDone = false;
 bool  s_burstWatch = false;          // a burst is landing: log where it lands
@@ -454,12 +461,45 @@ void FlipDiscrete(FluidRenderer& r, const FluidConfig& t) {
     r.ReinitWanderers();
 }
 
-// FluidConfig{} + base + file; the shell keys never come from a stage.
+// The FILE chain of a stage, onto c (start it from FluidConfig{}): base, then
+// the cycle-wide oil overrides, then the stage file -- so a key the stage FILE
+// carries always wins and a Settings-window Save into that file takes effect
+// (review 2026-10-04). Shared by Compose and the headless scripted UI path.
+//   [cycle] oil_layout (user 2026-10-04: "add the number of bigger black
+//     blobs"): one partial layout ini for every oil look stage, loaded between
+//     the base and the file. A stage with NO base whose file is a full ini is a
+//     complete look of its own and keeps its own layout keys: give it a base
+//     (cycle-flow.ini: monotone-stage.ini on monotone-post-0924.ini) to make it
+//     follow. It never switches the look. Empty = no load.
+//   [cycle] scheme_hue_period (user 2026-10-04: "hues changing more
+//     continuously between black screen transitions"): the oil stages that ride
+//     the hue rotation with the sweep off (every Scheme) turn at this period
+//     instead of their base's -- unless the stage FILE sets
+//     hue_rotate_period itself. One value for all of them, so two Schemes still share a palette
+//     clock (WantsScheme). 0 = each stage's own.
+void ComposeFiles(const CycleStage& st, FluidConfig& c) {
+    const bool oil = st.look == CYCLE_LOOK_ACID && !st.overlay;
+    const bool layout = oil && !s_cfg.oilLayoutPath.empty();
+    auto loadLayout = [&] {
+        const bool acid = c.acid.enabled, ink = c.ink.enabled;
+        LoadConfigFromFile(s_cfg.oilLayoutPath.c_str(), c);
+        c.acid.enabled = acid;
+        c.ink.enabled = ink;
+    };
+    if (!st.basePath.empty()) LoadConfigFromFile(st.basePath.c_str(), c);
+    if (layout) loadLayout();
+    LoadConfigFromFile(st.path.c_str(), c);
+    if (s_cfg.schemeHuePeriod > 0.0f && oil &&
+        c.acid.hueRotatePeriod > 0.01f && !(c.acid.hueSweepPeriod > 0.01f) &&
+        IniStr(L"liquid_acid", L"hue_rotate_period", st.path.c_str()).empty())
+        c.acid.hueRotatePeriod = s_cfg.schemeHuePeriod;
+}
+
+// FluidConfig{} + the file chain; the shell keys never come from a stage.
 void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int& gamut) {
     const CycleStage& st = s_cfg.stages[i];
     FluidConfig c;
-    if (!st.basePath.empty()) LoadConfigFromFile(st.basePath.c_str(), c);
-    LoadConfigFromFile(st.path.c_str(), c);
+    ComposeFiles(st, c);
     c.simRes        = live.simRes;          // SHELL: never applied from a stage
     c.dyeRes        = live.dyeRes;
     c.fpsLimit      = live.fpsLimit;
@@ -474,14 +514,6 @@ void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int&
     // on an oil stage is the palette clock (anchor drift + the rare tamed
     // burst). Off glides any angle home (UpdateHueShift), never a snap.
     if (st.look == CYCLE_LOOK_ACID && !st.overlay) c.hsEnabled = false;
-    // [cycle] scheme_hue_period (user 2026-10-04: "hues changing more
-    // continuously between black screen transitions"): the oil stages that ride
-    // the hue rotation with the sweep off (every Scheme) turn at this period
-    // instead of their base's. One value for all of them, so two Schemes still
-    // share a palette clock (WantsScheme). 0 = each stage's own.
-    if (s_cfg.schemeHuePeriod > 0.0f && st.look == CYCLE_LOOK_ACID && !st.overlay &&
-        c.acid.hueRotatePeriod > 0.01f && !(c.acid.hueSweepPeriod > 0.01f))
-        c.acid.hueRotatePeriod = s_cfg.schemeHuePeriod;
     out = c;
     // [hdr] peak_nits / gamut are shell globals: the stage's value when it
     // carries one (file over base), else the user's own setting
@@ -514,6 +546,7 @@ void PersistCurrent() {
 // [cycle] we_every: count the non-WE look stages entered in a row (an overlay
 // neither counts nor resets; a WE stage resets).
 void NoteEntered(int from, int to) {
+    if (s_noCount) return;
     if (IsFluid(to)) s_otherRun = 0;
     else if (IsOtherLook(to) && from != to) s_otherRun++;
 }
@@ -524,6 +557,18 @@ void PushHistory(int from, int to) {
         s_history.push_back(from);
         if (s_history.size() > 64) s_history.erase(s_history.begin());
     }
+}
+
+// we_every, still black: the stage applied at the black point has not been
+// shown. Before a replacement DRAW the count goes back to what it was before
+// that black point...
+void UndoBlackCount() { s_otherRun = s_runAtBlack; }
+// ...and afterwards whichever stage is now waiting in black (the replacement,
+// applied with s_noCount set, or the same one when nothing replaced it) is
+// counted once, from the stage that was last SHOWN. Idempotent.
+void RecountBlack() {
+    s_otherRun = s_runAtBlack;
+    NoteEntered(s_fromAtBlack, s_cur);
 }
 
 // A journey on a fluid stage: stage_N_journey, else the file's [journey] file=
@@ -1095,6 +1140,16 @@ void SchemeSwap(FluidRenderer& r) {
         target + 1, s_cfg.stages[target].name.c_str(), s_amtTo[0], s_amtTo[1], s_amtTo[2], s_amtTo[3]);
 }
 
+// A scheme change in flight, finished at once: the swap if it has not happened,
+// the target's amounts at full, and its dwell. (A manual Next / Previous / Jump
+// lands it first, so the draw and we_every's count see the stage really on screen.)
+void LandScheme(FluidRenderer& r) {
+    if (s_phase != CYCLE_SCHEME) return;
+    if (s_schemeSub == 0) SchemeSwap(r);
+    SetAmts(r.Config().acid, s_amtTo, 1.0f);
+    EnterDwell(r, s_cur);
+}
+
 void BeginSwitch(FluidRenderer& r, int target) {
     if (!Valid(target)) return;
     if (OverlayBlocked(target)) {        // pre-flight 4: never an overlay over a photo
@@ -1105,7 +1160,10 @@ void BeginSwitch(FluidRenderer& r, int target) {
     if (IsOverlay(target) && (s_phase == CYCLE_WARMUP || (s_phase == CYCLE_FADE_OUT && !s_soft))) return;
     if (s_phase == CYCLE_FADE_OUT && s_soft) return;   // a soft switch is 0.6 s: let it land
     if (s_phase == CYCLE_WARMUP) {          // still black: re-target in place
+        s_noCount = true;                   // we_every: s_cur was never shown
         ApplyStage(r, target);
+        s_noCount = false;
+        RecountBlack();
         r.ReleaseHueShift(false);
         s_phaseT = 0.0f;
         s_warmSim = 0.0f;
@@ -1121,12 +1179,13 @@ void BeginSwitch(FluidRenderer& r, int target) {
         r.Config() = s_target;
         r.ReleaseHueShift(false);
         FinishLerp(r);
+        if (s_phase == CYCLE_OFF) return;
+        if (target == s_cur) return;        // it landed ON the target: never a lerp onto itself
     }
     if (s_phase == CYCLE_SCHEME) {          // land the scheme change first
-        if (s_schemeSub == 0) SchemeSwap(r);
-        SetAmts(r.Config().acid, s_amtTo, 1.0f);
-        EnterDwell(r, s_cur);
+        LandScheme(r);
         if (s_phase == CYCLE_OFF) return;
+        if (target == s_cur) return;        // it landed ON the target: nothing left to switch
     }
     if (s_phase == CYCLE_DWELL && WantsLerp(target)) {
         BeginLerp(r, target);
@@ -1189,7 +1248,10 @@ void SoftPoint(FluidRenderer& r) {
             target + 1, s_cfg.stages[target].name.c_str());
         s_base = -1;
     }
+    const bool backToBase = IsOverlay(s_cur) && !IsOverlay(target);
     PushHistory(s_cur, target);
+    // we_every: an overlay coming off lands back on the look it covered, not a new one
+    if (backToBase && IsOtherLook(target) && s_otherRun > 0) s_otherRun--;
     s_cur = target;
     s_next = -1;
     PersistCurrent();
@@ -1207,6 +1269,7 @@ void PhotoFallback(FluidRenderer& r, const char* why) {
     s_photoLoadStage = -1;
     s_photoFile.clear();
     s_excludeStage = ph;
+    UndoBlackCount();                        // we_every: the photo was never shown (before the draw)
     int n = PickNext();
     s_excludeStage = -1;
     if (!Valid(n) || n == ph || IsOverlay(n)) {
@@ -1221,7 +1284,10 @@ void PhotoFallback(FluidRenderer& r, const char* why) {
     }
     Log("[cycle] photo stage %d %ls: %s -> falling back to stage %d %ls at black\n", ph + 1,
         s_cfg.stages[ph].name.c_str(), why, n + 1, s_cfg.stages[n].name.c_str());
+    s_noCount = true;
     ApplyStage(r, n);
+    s_noCount = false;
+    RecountBlack();
     r.ReleaseHueShift(false);
     s_phaseT = 0.0f;
     s_warmSim = 0.0f;
@@ -1260,6 +1326,8 @@ void PhotoWarmup(FluidRenderer& r) {
 
 void BlackPoint(FluidRenderer& r) {
     const int target = Valid(s_next) ? s_next : s_cur;
+    s_runAtBlack = s_otherRun;               // we_every: see UndoBlackCount
+    s_fromAtBlack = s_cur;
     ApplyStage(r, target);
     // The hue angle glides home (next full turn) during the black warm-up --
     // AGENTS: never zero m_hueAngle abruptly. WARMUP waits for it.
@@ -1315,6 +1383,14 @@ void CycleLoad(const wchar_t* ini) {
     if (s_cfg.weEvery < 1) s_cfg.weEvery = 1;
     if (s_cfg.weEvery > 12) s_cfg.weEvery = 12;
     s_cfg.schemeHuePeriod = fmaxf(IniF(S, L"scheme_hue_period", 0.0f, I), 0.0f);
+    s_cfg.oilLayout = IniStr(S, L"oil_layout", I);
+    s_cfg.oilLayoutPath = s_cfg.oilLayout.empty() ? std::wstring() : Resolve(s_cfg.oilLayout, s_iniPath);
+    if (!s_cfg.oilLayoutPath.empty() && !Exists(s_cfg.oilLayoutPath)) {
+        Log("[cycle] oil_layout not found: %ls (off)\n", s_cfg.oilLayoutPath.c_str());
+        s_cfg.oilLayoutPath.clear();
+    } else if (!s_cfg.oilLayoutPath.empty()) {
+        Log("[cycle] oil_layout: %ls over every oil look stage\n", s_cfg.oilLayoutPath.c_str());
+    }
     const int count = (int)GetPrivateProfileIntW(S, L"stage_count", 0, I);
     for (int k = 1; k <= count && k <= 99; k++) {
         wchar_t key[48];
@@ -1393,6 +1469,8 @@ bool CycleBoot(FluidConfig& cfg) {
     g_gamutMode = gamut;
     s_cur = start;
     s_otherRun = IsOtherLook(start) ? 1 : 0;
+    s_runAtBlack = 0;                        // nothing was shown before the boot stage
+    s_fromAtBlack = -1;
     s_next = -1;
     s_phase = CYCLE_WARMUP;                  // the first frame is a fresh sim anyway
     s_phaseT = 0.0f;
@@ -1611,16 +1689,24 @@ void CycleManualOverride(const char* why) {
 
 void CycleNext() {
     if (!g_renderer || s_phase == CYCLE_OFF) return;
+    LandScheme(*g_renderer);                 // review 2026-10-04: draw from the stage on screen
+    if (s_phase == CYCLE_OFF) return;
+    if (s_phase == CYCLE_WARMUP) UndoBlackCount();   // ...and never count a stage still in black
     const int n = PickNext();
     Log("[cycle] next -> %d\n", n + 1);
     if (Valid(n) && n != s_cur) BeginSwitch(*g_renderer, n);
+    if (s_phase == CYCLE_WARMUP) RecountBlack();     // replaced or not: what waits in black counts once
 }
 
 void CyclePrev() {
     if (!g_renderer || s_phase == CYCLE_OFF) return;
+    LandScheme(*g_renderer);
+    if (s_phase == CYCLE_OFF) return;
+    if (s_phase == CYCLE_WARMUP) UndoBlackCount();
     const int n = PickPrev();
     Log("[cycle] previous -> %d\n", n + 1);
     if (Valid(n) && n != s_cur) BeginSwitch(*g_renderer, n);
+    if (s_phase == CYCLE_WARMUP) RecountBlack();
 }
 
 void CycleJump(int stage) {
@@ -1687,6 +1773,10 @@ std::wstring CycleStageLabel(int i) {
 
 const CycleConfig& CycleGet() { return s_cfg; }
 
+void CycleComposeStageFiles(int stage, FluidConfig& c) {
+    if (stage >= 0 && stage < (int)s_cfg.stages.size()) ComposeFiles(s_cfg.stages[stage], c);
+}
+
 void CycleSet(const CycleConfig& c) {
     const bool wasEnabled = s_cfg.enabled;
     s_cfg.loop = c.loop;
@@ -1710,6 +1800,9 @@ void CycleSet(const CycleConfig& c) {
     s_queued = -1;                           // indices may have moved
     const std::wstring base = s_iniPath.empty() ? std::wstring(g_iniPath) : s_iniPath;
     for (auto& st : s_cfg.stages) ResolveStage(st, base);
+    s_cfg.oilLayout = c.oilLayout;
+    s_cfg.oilLayoutPath = c.oilLayout.empty() ? std::wstring() : Resolve(c.oilLayout, base);
+    if (!s_cfg.oilLayoutPath.empty() && !Exists(s_cfg.oilLayoutPath)) s_cfg.oilLayoutPath.clear();
     if (!Valid(s_cur)) s_cur = -1;
     if (!Valid(s_next)) s_next = -1;
     s_history.clear();
@@ -1739,6 +1832,7 @@ void CycleSet(const CycleConfig& c) {
         if (s_cfg.schemeRampSec != 2.0f) putF(L"scheme_ramp", s_cfg.schemeRampSec);
         if (s_cfg.weEvery != 1) putI(L"we_every", s_cfg.weEvery);
         if (s_cfg.schemeHuePeriod > 0.0f) putF(L"scheme_hue_period", s_cfg.schemeHuePeriod);
+        if (!s_cfg.oilLayout.empty()) putS(L"oil_layout", s_cfg.oilLayout.c_str());
         putI(L"stage_count", (int)s_cfg.stages.size());
         for (int k = 0; k < (int)s_cfg.stages.size(); k++) {
             const CycleStage& st = s_cfg.stages[k];

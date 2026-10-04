@@ -178,8 +178,8 @@ bool UiCycleStageBase(FluidConfig& out) {
     if (!s_scriptStatus.on || !Valid(s_scriptStatus.stage)) return false;
     const CycleStage& st = CycleGet().stages[s_scriptStatus.stage];
     out = FluidConfig{};                  // the director's Compose, minus the live shell keys
-    if (!st.basePath.empty()) LoadConfigFromFile(st.basePath.c_str(), out);
-    LoadConfigFromFile(st.path.c_str(), out);
+    (void)st;
+    CycleComposeStageFiles(s_scriptStatus.stage, out);   // base -> oil_layout -> file, scheme_hue_period
     return true;
 }
 std::wstring UiCycleStageFile() {

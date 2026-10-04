@@ -1418,12 +1418,19 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
+    // The gamut stretch (P3 / BT.2020) only while Windows HDR is on. With HDR
+    // off the desktop is sRGB: DWM clips the stretched (negative / over-1)
+    // channels, and the panel's own SDR mode already widens sRGB, so the
+    // stretch made SDR harsher than HDR instead of equal to it (user
+    // 2026-10-03: "it should switch between BT.2020 and SDR when I toggle").
+    float gamut = m_hdrActive ? (float)m_cfg.gamutMode : 0.0f;
+
     // Cycle fade: sdrScale above is the UNFADED scale (so peakGain does not
     // grow as the frame dims); the constant the shader multiplies by carries
     // the fade. m_fade == 1.0f -> sdrScale * 1.0f == sdrScale exactly.
     float consts[32] = { 1.0f / w, 1.0f / h,
                          m_cfg.shading ? 1.0f : 0.0f, sdrScale * m_fade,
-                         (float)m_cfg.gamutMode, peakGain, m_cfg.hdrKnee,
+                         gamut, peakGain, m_cfg.hdrKnee,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          m_cfg.hdrSaturation, m_cfg.hdrBrightness, m_cfg.hdrContrast, hdrOn,
                          hue, m_cfg.postSaturation, m_cfg.postBrightness, m_cfg.postContrast,

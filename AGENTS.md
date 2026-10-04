@@ -86,7 +86,8 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   off the frame is plain sRGB (user 2026-10-04). `--hdr off` shots therefore differ from
   `--hdr on` shots in colour by design; identity baselines are `--hdr on`.
 - `reference/configs/cycle-flow.ini` is the LIVE cycle (long runs: `we_every=2`,
-  `scheme_hue_period=900`, 480/600 s dwells); `cycle-final.ini` stays the proven walk.
+  `scheme_hue_period=900`, 480/600 s dwells, `oil_layout` = Layout - Few giants over every oil
+  stage, loaded between the stage's base and its file); `cycle-final.ini` stays the proven walk.
 - Never zero `m_hueAngle` abruptly (whole-screen color snap) — always glide
   to the next full turn.
 

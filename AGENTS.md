@@ -82,9 +82,11 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
 - Hue rotation is post-process (`CssHueRotate(+m_hueAngle)`); emission
   counter-rotates while a hue command is active (WheelHue) — keep that
   invariant when touching color generation.
-- The `[hdr] gamut` stretch (P3 / BT.2020) is applied only while Windows HDR is ON; with HDR
-  off the frame is plain sRGB (user 2026-10-04). `--hdr off` shots therefore differ from
-  `--hdr on` shots in colour by design; identity baselines are `--hdr on`.
+- The `[hdr] gamut` stretch (P3 / BT.2020) goes out as is only while Windows HDR is ON. With HDR
+  off, `[hdr] sdr_gamut` decides (default 1 = the gamut converted to the PANEL's own primaries from
+  DXGI/EDID, so SDR lands on the colours HDR shows; 0 plain sRGB; 2 the HDR stretch, clipped).
+  `--hdr off` shots differ from `--hdr on` shots in colour by design (headless: the P3 stand-in
+  unless `--panel-primaries` is given); identity baselines are `--hdr on`.
 - `reference/configs/cycle-flow.ini` is the LIVE cycle (long runs: `we_every=2`,
   `scheme_hue_period=900`, 480/600 s dwells, `oil_layout` = Layout - Few giants over every oil
   stage, loaded between the stage's base and its file); `cycle-final.ini` stays the proven walk.

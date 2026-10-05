@@ -1396,13 +1396,70 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
 }
 
 void FluidRenderer::BuildDisplayConstants(float out[32]) {
-    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits, m_hdrActive);
+    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits, m_hdrActive,
+                            m_panelPrimValid ? m_panelPrim : nullptr, m_sdrManaged);
+}
+
+// RGB -> XYZ of a set of primaries (xy of R, G, B) with a D65 white. false when
+// the triangle is degenerate.
+static bool PrimariesToXyz(const float p[6], double m[9]) {
+    double c[9];
+    for (int k = 0; k < 3; k++) {
+        const double x = p[2 * k], y = p[2 * k + 1];
+        if (!(y > 1e-4)) return false;
+        c[k] = x / y; c[3 + k] = 1.0; c[6 + k] = (1.0 - x - y) / y;
+    }
+    const double wx = 0.3127, wy = 0.3290;
+    const double W[3] = { wx / wy, 1.0, (1.0 - wx - wy) / wy };
+    const double det = c[0] * (c[4] * c[8] - c[5] * c[7]) - c[1] * (c[3] * c[8] - c[5] * c[6]) +
+                       c[2] * (c[3] * c[7] - c[4] * c[6]);
+    if (fabs(det) < 1e-9) return false;
+    const double inv[9] = {
+        (c[4] * c[8] - c[5] * c[7]) / det, (c[2] * c[7] - c[1] * c[8]) / det, (c[1] * c[5] - c[2] * c[4]) / det,
+        (c[5] * c[6] - c[3] * c[8]) / det, (c[0] * c[8] - c[2] * c[6]) / det, (c[2] * c[3] - c[0] * c[5]) / det,
+        (c[3] * c[7] - c[4] * c[6]) / det, (c[1] * c[6] - c[0] * c[7]) / det, (c[0] * c[4] - c[1] * c[3]) / det };
+    double S[3];
+    for (int r = 0; r < 3; r++) S[r] = inv[3 * r] * W[0] + inv[3 * r + 1] * W[1] + inv[3 * r + 2] * W[2];
+    for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) m[3 * r + k] = c[3 * r + k] * S[k];
+    return true;
+}
+
+// [hdr] sdr_gamut = 1: the configured gamut (1 P3, 2 BT.2020) expressed in the
+// PANEL's primaries. A wide-gamut panel shows an SDR desktop's values in its
+// native gamut, so sending these coordinates puts the same chromaticity on the
+// glass that HDR does (colours outside the panel clip in DWM, as they clip in
+// the monitor under HDR). Rows sum to 1: white stays white.
+bool FluidRenderer::SdrMatchMatrix(int gamutMode, const float primXY[6], float out[9]) {
+    static const float kP3[6]   = { 0.680f, 0.320f, 0.265f, 0.690f, 0.150f, 0.060f };
+    static const float k2020[6] = { 0.708f, 0.292f, 0.170f, 0.797f, 0.131f, 0.046f };
+    if (!primXY || gamutMode < 1 || gamutMode > 2) return false;
+    // plausibility: a real panel sits between a little under sRGB and BT.2020
+    for (int k = 0; k < 6; k++) if (!(primXY[k] > 0.01f && primXY[k] < 0.90f)) return false;
+    const double area = 0.5 * fabs(primXY[0] * (primXY[3] - primXY[5]) + primXY[2] * (primXY[5] - primXY[1]) +
+                                   primXY[4] * (primXY[1] - primXY[3]));
+    if (area < 0.085 || area > 0.225) return false;       // sRGB 0.112, BT.2020 0.212
+    double src[9], pan[9];
+    if (!PrimariesToXyz(gamutMode == 2 ? k2020 : kP3, src) || !PrimariesToXyz(primXY, pan)) return false;
+    const double det = pan[0] * (pan[4] * pan[8] - pan[5] * pan[7]) - pan[1] * (pan[3] * pan[8] - pan[5] * pan[6]) +
+                       pan[2] * (pan[3] * pan[7] - pan[4] * pan[6]);
+    if (fabs(det) < 1e-9) return false;
+    const double inv[9] = {
+        (pan[4] * pan[8] - pan[5] * pan[7]) / det, (pan[2] * pan[7] - pan[1] * pan[8]) / det, (pan[1] * pan[5] - pan[2] * pan[4]) / det,
+        (pan[5] * pan[6] - pan[3] * pan[8]) / det, (pan[0] * pan[8] - pan[2] * pan[6]) / det, (pan[2] * pan[3] - pan[0] * pan[5]) / det,
+        (pan[3] * pan[7] - pan[4] * pan[6]) / det, (pan[1] * pan[6] - pan[0] * pan[7]) / det, (pan[0] * pan[4] - pan[1] * pan[3]) / det };
+    for (int r = 0; r < 3; r++)
+        for (int k = 0; k < 3; k++)
+            out[3 * r + k] = (float)(inv[3 * r] * src[k] + inv[3 * r + 1] * src[3 + k] + inv[3 * r + 2] * src[6 + k]);
+    return true;
 }
 
 // hdrActive = the Windows HDR state of the monitor this frame goes to (the
-// primary's for the wallpaper, the second monitor's own for the mirror).
+// primary's for the wallpaper, the second monitor's own for the mirror);
+// primXY = that monitor's primaries (null = unknown); sdrManaged = Windows
+// colour-manages its SDR desktop (see SetSdrGamut).
 void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
-                                            float sdrScale, float peakNits, bool hdrActive) {
+                                            float sdrScale, float peakNits, bool hdrActive,
+                                            const float* primXY, bool sdrManaged) {
     // CSS-filter chain parameters. The shader evaluates them primitive by
     // primitive with a clamp after each (Chromium/Skia behaviour); see
     // kDisplaySrc. Canvas filter: saturate -> brightness -> contrast ->
@@ -1420,12 +1477,28 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
-    // The gamut stretch (P3 / BT.2020) only while Windows HDR is on. With HDR
-    // off the desktop is sRGB: DWM clips the stretched (negative / over-1)
-    // channels, and the panel's own SDR mode already widens sRGB, so the
-    // stretch made SDR harsher than HDR instead of equal to it (user
-    // 2026-10-03: "it should switch between BT.2020 and SDR when I toggle").
-    float gamut = hdrActive ? (float)m_cfg.gamutMode : 0.0f;
+    // HDR on: the gamut stretch (P3 / BT.2020), shown colour-accurately.
+    // HDR off: the desktop is sRGB-coded, DWM clips what leaves it, and the
+    // panel then shows those values in ITS OWN gamut. [hdr] sdr_gamut says what
+    // to send (user 2026-10-03: "it should switch between BT.2020 and SDR when
+    // I toggle"; 2026-10-04: plain sRGB alone left SDR visibly less saturated
+    // than HDR in the reds / oranges / magentas on the X27U):
+    //   1 (default) the gamut converted to the panel's primaries = the colours
+    //     HDR shows (gamut 3 + the matrix); primaries unknown -> the P3 stretch
+    //     for a BT.2020 config (X27U: mean ~0.003, worst ~0.017 u'v' at the
+    //     blue-violets), plain for a P3 config;
+    //   0 plain sRGB;   2 the HDR stretch itself, clipped (sRGB-mode monitors).
+    // An SDR desktop that Windows colour-manages (sdrManaged) is the HDR case:
+    // DWM maps our scRGB to the panel, so the stretch goes out untouched.
+    float gamut = (float)m_cfg.gamutMode;
+    float gm[9] = {};
+    if (!hdrActive && !sdrManaged && m_cfg.gamutMode > 0) {
+        if (m_sdrGamutMode == 0) gamut = 0.0f;
+        else if (m_sdrGamutMode == 1) {
+            if (SdrMatchMatrix(m_cfg.gamutMode, primXY, gm)) gamut = 3.0f;
+            else gamut = m_cfg.gamutMode == 2 ? 1.0f : 0.0f;
+        }
+    }
 
     // Cycle fade: sdrScale above is the UNFADED scale (so peakGain does not
     // grow as the frame dims); the constant the shader multiplies by carries
@@ -1436,8 +1509,8 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          m_cfg.hdrSaturation, m_cfg.hdrBrightness, m_cfg.hdrContrast, hdrOn,
                          hue, m_cfg.postSaturation, m_cfg.postBrightness, m_cfg.postContrast,
-                         m_cfg.postHue, 0, 0, 0,
-                         0, 0, 0, 0,
+                         m_cfg.postHue, gm[0], gm[1], gm[3],
+                         gm[4], gm[6], gm[7], 0,
                          m_cfg.curveEnabled ? 1.0f : 0.0f,
                          m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight,
                          m_cfg.shadowFloor, m_cfg.shadowKnee, 0.0f, 0.0f };
@@ -1755,7 +1828,8 @@ void FluidRenderer::RenderMirror() {
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits,
-                            m_mirrorHdrActive);
+                            m_mirrorHdrActive, m_mirrorPrimValid ? m_mirrorPrim : nullptr,
+                            m_mirrorSdrManaged);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
@@ -1855,7 +1929,7 @@ void FluidRenderer::ReassertColorSpace() {
 void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameInput& input) {
     m_hdrActive = hdrActive;
     m_sdrScale = sdrScale;
-    m_time += dt;
+    AdvanceClock(dt);
     AccumFrozen(dt);   // animators.h freezes; no-op unless something is frozen
 
     BeginFrame();
@@ -2059,7 +2133,7 @@ void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
 void FluidRenderer::SimOnlyStep(float dt) {
     if (!m_device || m_cfg.gradientMode || m_cfg.calibratePage > 0) return;
     if (m_photoMode) return;                // brief BY: no sim under a photo
-    m_time += dt;
+    AdvanceClock(dt);
     AccumFrozen(dt);
     BeginFrame();
     FrameSim(dt, FrameInput{});
@@ -2653,6 +2727,10 @@ void FluidRenderer::ReportStats() {
 }
 
 void FluidRenderer::WaitForGpuIdle() {
+    // A device that never got its fence (the soft-fail TryInit path: the swap chain was
+    // refused before CreateFence) has run no command list: nothing to wait for. Without
+    // this the unwind in Shutdown() died on the null fence (review 2026-10-04 R2).
+    if (!m_queue || !m_fence || !m_fenceEvent) return;
     const UINT64 v = m_nextFence++;
     HR(m_queue->Signal(m_fence.Get(), v));
     if (m_fence->GetCompletedValue() < v) {
@@ -3498,7 +3576,11 @@ void FluidRenderer::SeedAcidBlobs() {
         b.baseR = drawR(a.bubbleMin, a.bubbleMax, a.sizeBias);
         setCol(b, (k % 3 == 0) ? 1 : 3);
         if (k > 0 && rng.f() < 0.45f) {          // cluster on an earlier bubble
-            const AcidBlob& par = m_acidBlobs[idx - 1 - (int)(rng.f() * 3.0f) % 3];
+            // same draw as ever; only an index before the first blob is clamped (with
+            // disc + web <= 1 it read heap bytes before the vector: review 2026-10-04 R12)
+            int parIdx = idx - 1 - (int)(rng.f() * 3.0f) % 3;
+            if (parIdx < 0) parIdx = 0;
+            const AcidBlob& par = m_acidBlobs[parIdx];
             float ang = rng.f(0.0f, TWO_PI);
             float d = (par.baseR + b.baseR) * rng.f(1.15f, 4.0f);
             place(b, par.x + cosf(ang) * d, par.y + sinf(ang) * d);

@@ -345,6 +345,10 @@ void RecomputeTarget() {
         }
     }
     if (!s_activePreset.empty() && GetFileAttributesW(s_activePreset.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // the peak is the user's GLOBAL setting unless the preset carries its own (below): with
+        // -1 as the target every preset without [hdr] showed a permanent "1 change", and Save
+        // wrote the global peak into the preset (review 2026-10-04 R16)
+        s_peakTarget = g_hdrPeakNits;
         // a partial "Save as" names the preset it sits on: [meta] base= loads first
         std::wstring base = UiPresetBase(s_activePreset);
         if (!base.empty() && GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES)
@@ -418,7 +422,7 @@ void RestoreSnapshot(const Snapshot& s) {
         s_hooks.reinitWanderers();
     if (s_hooks.ensureLook) s_hooks.ensureLook();
     if (!g_configReadOnly && g_iniPath[0]) {
-        WriteConfigToIni(g_iniPath, c, true);
+        if (!UiCycleOn()) WriteConfigToIni(g_iniPath, c, true);   // cycling: the stage is not the user's base
         PersistShellSettings();
     }
     s_activePreset = s.preset;
@@ -625,15 +629,21 @@ void UiSetValue(int i, float v) {
     KeyRow& r = s_rows[i];
     if (r.flags & KF_SHELL) return;
     FluidConfig& c = *s_cfg;
+    // While the director owns the look, a mode knob is a live tweak of the running STAGE
+    // (Save puts it into the stage file; the next stage drops it). settings.ini is the
+    // user's own cycle-off base and is not written, the same rule as ApplyPreset
+    // (review 2026-10-04 R4: a tweak during the cycle used to change that base for good).
+    // Global / machine rows (peak, gamut, fps, mirror, [cycle] ...) always persist.
+    const bool persist = !(UiCycleOn() && !(r.flags & (KF_GLOBAL | KF_MACHINE)));
     if (r.isLook) {
         // Look switches are live and mutually exclusive (DisplayPso() would otherwise just
         // prefer acid); turning one ON may need its display PSO compiled first.
         bool on = v > 0.5f;
         *r.b = on;
-        WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
+        if (persist) WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
         if (on) {
-            if (r.b == &c.acid.enabled) { c.ink.enabled = false; WriteIniInt(L"look", L"ink", 0); }
-            else                        { c.acid.enabled = false; WriteIniInt(L"look", L"liquid_acid", 0); }
+            if (r.b == &c.acid.enabled) { c.ink.enabled = false; if (persist) WriteIniInt(L"look", L"ink", 0); }
+            else                        { c.acid.enabled = false; if (persist) WriteIniInt(L"look", L"liquid_acid", 0); }
         }
         if (s_hooks.ensureLook) s_hooks.ensureLook();
         return;
@@ -649,20 +659,22 @@ void UiSetValue(int i, float v) {
             UiCycleSetEnabled(on);   // persists + toggles the renderer's coverage readback
         } else {
             *r.b = on;
-            WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
+            if (persist) WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
         }
         return;
     }
     if (r.i) {
         *r.i = (int)lroundf(v);
         if (r.reinit && s_hooks.reinitWanderers) s_hooks.reinitWanderers();
-        WriteIniInt(r.wsec, r.wkey, *r.i);
+        if (r.i == &g_gamutMode) UiCycleNoteUserGamut(*r.i);   // the user's own value while cycling
+        if (persist) WriteIniInt(r.wsec, r.wkey, *r.i);
         return;
     }
     if (r.f) {
         *r.f = v;
         if (r.reinit && s_hooks.reinitWanderers) s_hooks.reinitWanderers();
-        WriteIniFloat(r.wsec, r.wkey, v, r.dec);
+        if (r.isPeak) UiCycleNoteUserPeak(v);
+        if (persist) WriteIniFloat(r.wsec, r.wkey, v, r.dec);
     }
 }
 
@@ -893,10 +905,9 @@ float UiComposedPeak() { return s_peakTarget; }
 void  UiRecomputeTarget() { RecomputeTarget(); }
 
 std::wstring UiSaveTarget() {
-    if (UiCycleOn()) {
-        std::wstring f = UiCycleStageFile();
-        if (!f.empty()) return f;
-    }
+    // cycling: the running stage's file, or nothing (photo / overlay stage). Never the
+    // active preset: the live config is the director's stage, not that preset's look.
+    if (UiCycleOn()) return UiCycleStageFile();
     return s_activePreset;
 }
 

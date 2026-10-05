@@ -409,7 +409,8 @@ cbuffer CB : register(b0) {
     float2 texelSize;   // 1 / screen resolution (reference uses screen texels)
     float  shading;
     float  sdrScale;    // scRGB multiplier for SDR-reference white (1.0 when HDR off)
-    float  gamut;       // 0 = sRGB, 1 = Display-P3 (WE parity), 2 = BT.2020 (QD-OLED)
+    float  gamut;       // 0 = sRGB, 1 = Display-P3 (WE parity), 2 = BT.2020 (QD-OLED),
+                        // 3 = the matrix in fm2.yzw / fmOff (HDR off: gamut -> panel primaries)
     float  peakGain;    // HDR highlight expansion: peakNits / sdrWhiteNits (1 = off)
     float  knee;        // dye brightness where highlight expansion starts
     float  capBright;   // dye brightness cap (expansion reaches peakGain here)
@@ -419,7 +420,8 @@ cbuffer CB : register(b0) {
     // own colour-matrix stage, and Skia clamps after every stage).
     //   fm0 = (hdrSaturate, hdrBrightness, hdrContrast, hdrEnabled)
     //   fm1 = (hueBurstDeg, postSaturate, postBrightness, postContrast)
-    //   fm2 = (postHueDeg, 0, 0, 0)
+    //   fm2 = (postHueDeg, m00, m01, m10)   fmOff = (m11, m20, m21, 0): the first two
+    //         entries of each row of the gamut-3 matrix (each row sums to 1)
     float4 fm0;
     float4 fm1;
     float4 fm2;
@@ -799,7 +801,11 @@ float3 LampGreyY(float3 col, float gk, float gkCool, float liftMul) {
 // (BubLum(k x) = k BubLum(x), k >= 0), so a scale is one step.
 float BubLum(float3 x) {
     float3 y = x;
-    if (gamut > 1.5) {
+    if (gamut > 2.5) {
+        y = float3(dot(float3(fm2.y, fm2.z, 1.0 - fm2.y - fm2.z), x),
+                   dot(float3(fm2.w, fmOff.x, 1.0 - fm2.w - fmOff.x), x),
+                   dot(float3(fmOff.y, fmOff.z, 1.0 - fmOff.y - fmOff.z), x));
+    } else if (gamut > 1.5) {
         y = float3(dot(float3( 1.66049, -0.58764, -0.07285), x),
                    dot(float3(-0.12455,  1.13290, -0.00835), x),
                    dot(float3(-0.01815, -0.10058,  1.11873), x));
@@ -3299,7 +3305,12 @@ R"hlsl(
     // Interpret the dye in a wider gamut and convert to the swap chain's 709
     // primaries. Out-of-gamut saturation comes out as negative components —
     // FP16 scRGB carries those to the display (QD-OLED shows them).
-    if (gamut > 1.5) {          // BT.2020 — full QD-OLED vividness
+    if (gamut > 2.5) {          // HDR off: the configured gamut -> THIS panel's primaries
+        lin = float3(
+            dot(float3(fm2.y, fm2.z, 1.0 - fm2.y - fm2.z), lin),
+            dot(float3(fm2.w, fmOff.x, 1.0 - fm2.w - fmOff.x), lin),
+            dot(float3(fmOff.y, fmOff.z, 1.0 - fmOff.y - fmOff.z), lin));
+    } else if (gamut > 1.5) {   // BT.2020 — full QD-OLED vividness
         lin = float3(
             dot(float3( 1.66049, -0.58764, -0.07285), lin),
             dot(float3(-0.12455,  1.13290, -0.00835), lin),

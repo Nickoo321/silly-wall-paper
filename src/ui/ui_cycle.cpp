@@ -60,6 +60,10 @@ void UiCycleSetEnabled(bool on) {
     CycleSetEnabled(on, true);
 }
 bool UiCycleOn() { return s_scripted ? s_scriptStatus.on : CycleState().phase != CYCLE_OFF; }
+// a peak / gamut edit in the window while cycling is the user's own value (settings.ini,
+// and the director's fallback for stages without their own [hdr] keys)
+void UiCycleNoteUserPeak(float peak) { if (!s_scripted) CycleSetUserPeak(peak); }
+void UiCycleNoteUserGamut(int gamut) { if (!s_scripted) CycleSetUserGamut(gamut); }
 
 std::wstring UiPresetsDir() {
     wchar_t dir[MAX_PATH];

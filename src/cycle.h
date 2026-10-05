@@ -189,6 +189,12 @@ struct CycleFrame {
 };
 
 extern bool g_cycleActive;         // true while the director owns the look
+// While cycling the shell globals g_hdrPeakNits / g_gamutMode hold the STAGE's
+// values. CycleUserShell gives the user's own (true = filled); the setters
+// record a pick the user makes while cycling. settings.ini only ever gets these.
+bool CycleUserShell(float& peak, int& gamut);
+void CycleSetUserPeak(float peak);
+void CycleSetUserGamut(int gamut);
 
 // ---- lifecycle (main.cpp) ---------------------------------------------------
 void CycleLoad(const wchar_t* ini);          // [cycle] + stage resolution

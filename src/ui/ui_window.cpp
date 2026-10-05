@@ -389,7 +389,9 @@ void DrawRow(int i, RowState st, const std::string& reasonIn, int jump, bool com
         bool changed = ImGui::SliderFloat("##v", &tmp, r.mn, r.mx, fmt.c_str(),
                                           ImGuiSliderFlags_NoRoundToFormat);
         if (ImGui::IsItemActivated()) { s_view.dragRow = i; s_view.dragOld = v; }
-        if (changed) UiSetValue(i, Quantize(r, tmp));
+        // Ctrl+click text entry is unclamped on purpose, but "nan", "inf" or 1e30 must not
+        // reach the sim and settings.ini (the wallpaper went black until the ini was hand-edited)
+        if (changed && std::isfinite(tmp) && fabsf(tmp) <= 1.0e6f) UiSetValue(i, Quantize(r, tmp));
         if (ImGui::IsItemDeactivatedAfterEdit() && s_view.dragRow == i) {
             UiPushKeyUndo(i, s_view.dragOld, UiValue(i));
             s_view.dragRow = -1;
@@ -1450,7 +1452,10 @@ void RenderLive() {
     if (!s_wnd || !s_imgui || IsIconic(s_wnd)) return;
     ImGui::SetCurrentContext(s_imgui);
     if (s_deviceLost) {
-        ImGui_ImplDX11_Shutdown();
+        // a failed rebuild comes back here on the next tick with the backend already shut
+        // down: a second Shutdown dereferenced null and took the wallpaper process with it
+        // (review 2026-10-04 R8)
+        if (ImGui::GetIO().BackendRendererUserData) ImGui_ImplDX11_Shutdown();
         DestroyDevice();
         ReleaseThumbs();
         if (!CreateDeviceAndSwap(s_wnd)) return;
@@ -1545,7 +1550,7 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ReleaseThumbs();
         if (s_imgui) {
             ImGui::SetCurrentContext(s_imgui);
-            ImGui_ImplDX11_Shutdown();
+            if (ImGui::GetIO().BackendRendererUserData) ImGui_ImplDX11_Shutdown();
             ImGui_ImplWin32_Shutdown();
             ImGui::DestroyContext(s_imgui);
             s_imgui = nullptr;

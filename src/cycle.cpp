@@ -612,7 +612,7 @@ void EnterDwell(FluidRenderer& r, int i) {
     r.SetCoverageWanted(IsFluid(LookStage(i)));   // dark trigger + the next hue bridge
     AttachJourney(i);
     Log("[cycle] dwelling in %d %ls (%.1f s = %.0f s +-%.0f%%)%s\n",
-        i + 1, s_cfg.stages[i].name.c_str(), s_dwellTarget, DwellOf(i), j * 100.0f,
+        i + 1, Valid(i) ? s_cfg.stages[i].name.c_str() : L"-", s_dwellTarget, DwellOf(i), j * 100.0f,
         s_journeyWasActive ? " with a journey" : "");
 }
 
@@ -940,6 +940,9 @@ int PickPrev() {
 }
 
 void GoOff(const char* why) {
+    // a fluid -> fluid lerp holds a hue-shift command until it lands; let it go
+    // here or the cycler stays parked at the bridge angle (glides home, no snap)
+    if (s_phase == CYCLE_LERP && g_renderer) g_renderer->ReleaseHueShift(false);
     s_phase = CYCLE_OFF;
     s_next = -1;
     s_fade = 1.0f;
@@ -950,6 +953,15 @@ void GoOff(const char* why) {
     s_photoLoadStage = -1;
     s_photoFile.clear();
     Log("[cycle] off (%s)\n", why);
+    // The shell globals go back to the USER's own peak / gamut: a stage's values
+    // used to stay live, and SaveSettings then wrote them into settings.ini as
+    // the user's (review 2026-10-04 R4). A preset's own [hdr] keys still win:
+    // ApplyPreset applies them after CycleManualOverride returns.
+    if (s_haveUser) {
+        g_hdrPeakNits = s_userPeak;
+        g_gamutMode = s_userGamut;
+        s_haveUser = false;                  // the next "on" captures again
+    }
     // CLOCKS pre-flight 4: the base goes back into the live config NOW --
     // ApplyPreset reads Config right after CycleManualOverride returns
     if (g_renderer) ClocksRestoreBase(g_renderer->Config(), "cycle off");
@@ -1760,6 +1772,20 @@ void CycleSetEnabled(bool on, bool persist) {
         WritePrivateProfileStringW(L"cycle", L"enabled", on ? L"1" : L"0", g_iniPath);
 }
 
+// The user's own [hdr] peak_nits / gamut while the director holds a STAGE's
+// values in the shell globals. SaveSettings writes these, so a tray toggle or
+// a Settings edit never stores a stage's peak as the user's (review 2026-10-04 R4).
+bool CycleUserShell(float& peak, int& gamut) {
+    if (!g_cycleActive || !s_haveUser) return false;
+    peak = s_userPeak;
+    gamut = s_userGamut;
+    return true;
+}
+// A peak / gamut the USER picks while cycling (tray, Settings window): it is
+// their own value from now on (stages without [hdr] keys fall back to it).
+void CycleSetUserPeak(float peak) { if (s_haveUser) s_userPeak = peak; }
+void CycleSetUserGamut(int gamut) { if (s_haveUser) s_userGamut = gamut; }
+
 std::wstring CycleStageLabel(int i) {
     if (i < 0 || i >= (int)s_cfg.stages.size()) return L"";
     const CycleStage& st = s_cfg.stages[i];
@@ -1796,6 +1822,14 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.schemeRampSec = fminf(fmaxf(c.schemeRampSec, 0.1f), 10.0f);
     s_cfg.weEvery = c.weEvery < 1 ? 1 : (c.weEvery > 12 ? 12 : c.weEvery);
     s_cfg.schemeHuePeriod = fmaxf(c.schemeHuePeriod, 0.0f);
+    // The running indices name STAGES, not list positions: note which files they
+    // point at and find them again in the new list (review 2026-10-04 R6: after a
+    // "move up" s_cur named the neighbour, so Save wrote the running look into the
+    // wrong file; a stage removed during its own transition left -1 behind and the
+    // transition then indexed stages[-1]).
+    auto pathOf = [&](int i) { return Valid(i) ? s_cfg.stages[i].path : std::wstring(); };
+    const std::wstring curPath = pathOf(s_cur), nextPath = pathOf(s_next), basePath = pathOf(s_base),
+                       fromPath = pathOf(s_fromAtBlack), photoPath = pathOf(s_photoLoadStage);
     s_cfg.stages = c.stages;
     s_queued = -1;                           // indices may have moved
     const std::wstring base = s_iniPath.empty() ? std::wstring(g_iniPath) : s_iniPath;
@@ -1803,8 +1837,31 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.oilLayout = c.oilLayout;
     s_cfg.oilLayoutPath = c.oilLayout.empty() ? std::wstring() : Resolve(c.oilLayout, base);
     if (!s_cfg.oilLayoutPath.empty() && !Exists(s_cfg.oilLayoutPath)) s_cfg.oilLayoutPath.clear();
-    if (!Valid(s_cur)) s_cur = -1;
-    if (!Valid(s_next)) s_next = -1;
+    auto remap = [&](int old, const std::wstring& path) -> int {
+        if (old < 0 || path.empty()) return -1;
+        // the same slot first, so a file listed twice stays where it was
+        if (Valid(old) && _wcsicmp(s_cfg.stages[old].path.c_str(), path.c_str()) == 0) return old;
+        for (int k = 0; k < (int)s_cfg.stages.size(); k++)
+            if (_wcsicmp(s_cfg.stages[k].path.c_str(), path.c_str()) == 0) return k;
+        return -1;
+    };
+    const bool hadCur = s_cur >= 0, hadNext = s_next >= 0;
+    s_cur = remap(s_cur, curPath);
+    s_next = remap(s_next, nextPath);
+    s_base = remap(s_base, basePath);
+    s_fromAtBlack = remap(s_fromAtBlack, fromPath);
+    s_photoLoadStage = remap(s_photoLoadStage, photoPath);
+    // A transition whose stage left the list cannot land: let go and, when the
+    // cycle stays enabled, re-enter by a clean fade (below). A DWELL on a removed
+    // stage needs nothing: s_cur = -1 is "what is on screen is not a stage".
+    bool restart = false;
+    if (s_phase != CYCLE_OFF && s_phase != CYCLE_DWELL) {
+        const bool needsNext = s_phase == CYCLE_FADE_OUT || s_phase == CYCLE_LERP || s_phase == CYCLE_SCHEME;
+        if (needsNext ? (hadNext && s_next < 0) : (hadCur && s_cur < 0)) {
+            GoOff("its stage left the list during a transition");
+            restart = c.enabled;
+        }
+    }
     s_history.clear();
     // persist the whole [cycle] section (settings.ini only, never a stage file)
     if (!g_configReadOnly && g_iniPath[0] && _wcsicmp(base.c_str(), g_iniPath) == 0) {
@@ -1860,7 +1917,7 @@ void CycleSet(const CycleConfig& c) {
         }
         if (s_cur >= 0) putI(L"current", s_cur + 1);
     }
-    if (c.enabled != wasEnabled) CycleSetEnabled(c.enabled, false);
+    if (c.enabled != wasEnabled || restart) CycleSetEnabled(c.enabled, false);
 }
 
 CycleStatus CycleState() {
@@ -2044,19 +2101,37 @@ bool CycleStageBase(FluidConfig& out) {
     if (!Valid(i) || IsPhoto(i)) return false;   // brief BY: a photo composes nothing
     float peak;
     int gamut;
+    if (IsOverlay(i)) {
+        // An overlay is not a look: its base is the look stage UNDER it plus the
+        // overlay's keys, layered the way SoftPoint does. Composed alone it was
+        // "code defaults + the mirror keys", so the Settings window counted the
+        // whole look as changes (review 2026-10-04 R7).
+        if (!Valid(s_base) || IsPhoto(s_base) || IsOverlay(s_base)) return false;
+        Compose(s_base, g_renderer->Config(), out, peak, gamut);
+        const FluidConfig shell = out;
+        LoadConfigFromFile(s_cfg.stages[i].path.c_str(), out);
+        out.simRes = shell.simRes; out.dyeRes = shell.dyeRes;
+        out.fpsLimit = shell.fpsLimit; out.mirrorSecond = shell.mirrorSecond;
+        out.acid.enabled = shell.acid.enabled;
+        out.ink.enabled = shell.ink.enabled;
+        return true;
+    }
     Compose(i, g_renderer->Config(), out, peak, gamut);
     return true;
 }
 
 std::wstring CycleStageFile() {
     // brief BY pre-flight 8: "" on a photo stage, so the UI never saves live
-    // Config into the photo ini
-    if (s_phase == CYCLE_OFF || !Valid(s_cur) || IsPhoto(s_cur)) return L"";
+    // Config into the photo ini. "" on an overlay too: Save wrote the whole
+    // look under it into the overlay's partial ini (review 2026-10-04 R7).
+    if (s_phase == CYCLE_OFF || !Valid(s_cur) || IsPhoto(s_cur) || IsOverlay(s_cur)) return L"";
     return s_cfg.stages[s_cur].path;
 }
 
 void CycleRevertStage() {
-    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur) || IsPhoto(s_cur)) return;
+    // not on an overlay: Compose(overlay) alone is "code defaults + the overlay keys",
+    // which swapped the look under it for stock WE fluid on a visible frame (R7)
+    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur) || IsPhoto(s_cur) || IsOverlay(s_cur)) return;
     FluidConfig c;
     float peak;
     int gamut;

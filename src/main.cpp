@@ -62,6 +62,13 @@
 //                      photos folder, so identity never depends on the user's
 //                      photos). A photo stage's decode is JOINED at the black
 //                      point under --shot (frame-deterministic).
+//   --shot-time0 S     start the master clock at S seconds of uptime (what a look does after
+//                      hours: time-driven effects, float precision); default 0
+//   --test-device-lost T  self-test of the GPU device-loss recovery (review 2026-10-04 R3):
+//                      ID3D12Device5::RemoveDevice() at wallpaper time T, then the live
+//                      loop's rebuild (Shutdown + soft init, same config), rendering on to
+//                      the capture; [devlost] lines in the shot log. Without it a real
+//                      device loss in a --shot run stays fatal.
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -117,7 +124,8 @@ void Fail(const char* what, HRESULT hr) {
     WpLog("FATAL %s  %s", buf, fgd);
     // The box below can sit unseen for hours (a fullscreen game covers it) while the last
     // presented frame stays frozen on the OLED. Hide our windows first, so the shell's own
-    // wallpaper shows instead (review 2026-10-04 R3; a real device-lost recovery is still open).
+    // wallpaper shows instead (review 2026-10-04 R3). A GPU device loss in the live wallpaper
+    // never gets here any more: the renderer flags it and the main loop rebuilds the device.
     for (HWND w : g_wallpaperWnds)
         if (w && IsWindow(w)) ShowWindow(w, SW_HIDE);
     MessageBoxA(nullptr, buf, "Fluid Wallpaper - fatal error", MB_ICONERROR);
@@ -1209,6 +1217,31 @@ static std::wstring PresetMetaBase(const std::wstring& path) {
     return base;
 }
 
+// The [meta] base chain UNDER a preset, root first (the file itself not included), up to
+// maxDepth files -- the same walk and the same limit (4) as MergePresetChain. The ONE
+// resolver the cycle (ResolveStage) and the Settings reset target (RecomputeTarget) share,
+// so a "Save as" on top of a chained preset composes the same everywhere: they followed
+// one level while the tray apply followed four (review 2026-10-04 R18). A missing file
+// ends the walk, as in PresetMetaBase; *missing (optional) is set when it was a dangling
+// base= that ended it, so a cycle stage can refuse it the way it refuses a missing base.
+std::vector<std::wstring> PresetBaseChain(const std::wstring& path, int maxDepth, bool* missing) {
+    std::vector<std::wstring> chain;
+    if (missing) *missing = false;
+    std::wstring cur = path;
+    for (int d = 0; d < maxDepth; d++) {
+        const std::wstring base = PresetMetaBase(cur);
+        if (base.empty()) {
+            wchar_t b[MAX_PATH] = {};
+            GetPrivateProfileStringW(L"meta", L"base", L"", b, MAX_PATH, cur.c_str());
+            if (b[0] && missing) *missing = true;
+            break;
+        }
+        chain.insert(chain.begin(), base);
+        cur = base;
+    }
+    return chain;
+}
+
 static int PresetLookGroup(const wchar_t* path, int depth = 0) {
     wchar_t sec[512] = {};
     if (GetPrivateProfileSectionW(L"look", sec, 512, path) == 0) {
@@ -1732,11 +1765,30 @@ static void EnsureBuiltinPresets() {
 // so after applying one, the resolved state must be written out in full).
 // includeShell=false skips the machine/shell keys (sim_res, dye_res,
 // fps_limit, mirror_second) — used for mood files, which never touch them.
+// "%.*f" at the key's usual decimals, unless that loses the value: then the shortest %g that
+// reads back as the same float. A full dump is a preset now (Save as self-contained), and a
+// value such as 0.0125 written at 3 decimals did not reproduce the look (review 2026-10-04 R15).
+static void FormatLossless(wchar_t* b, size_t n, float v, int dec) {
+    swprintf_s(b, n, L"%.*f", dec, v);
+    for (int p = 6; p <= 9 && (float)_wtof(b) != v; p++) swprintf_s(b, n, L"%.*g", p, v);
+}
+
+static void WriteConfigKeys(const wchar_t* path, const FluidConfig& c, bool includeShell);
 void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShell) {
     if (!path || !path[0] || g_configReadOnly) return;
+    WriteConfigKeys(path, c, includeShell);
+}
+// The Settings window's self-contained "Save as": the full look dump, never the machine keys.
+// Its own MayWrite() guards the path (the headless test folder is writable under --ui-shot,
+// where g_configReadOnly blocks WriteConfigToIni) (review 2026-10-04 R15).
+void WriteLookToIni(const wchar_t* path, const FluidConfig& c) {
+    if (path && path[0]) WriteConfigKeys(path, c, false);
+}
+
+static void WriteConfigKeys(const wchar_t* path, const FluidConfig& c, bool includeShell) {
     auto putF = [path](const wchar_t* sec, const wchar_t* key, float v, int dec) {
         wchar_t b[48];
-        swprintf_s(b, L"%.*f", dec, v);
+        FormatLossless(b, 48, v, dec);
         WritePrivateProfileStringW(sec, key, b, path);
     };
     auto putI = [path](const wchar_t* sec, const wchar_t* key, int v) {
@@ -1818,12 +1870,21 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     putF(L"sim", L"gravity", c.gravity, 3);
     putF(L"sim", L"gravity_pow", c.gravityPow, 3);
     putF(L"sim", L"gravity_blur", c.gravityBlur, 3);
+    // colour triples / the 12-float palettes: each number lossless as well (R15)
+    auto fmtList = [](const float* v, int n) {
+        std::wstring s;
+        for (int k = 0; k < n; k++) {
+            wchar_t b[64];   // %.4f of a float up to FLT_MAX is 46 chars: 32 could abort in swprintf_s
+            FormatLossless(b, 64, v[k], 4);
+            if (k) s += L' ';
+            s += b;
+        }
+        return s;
+    };
     for (int ci = 0; ci < 5; ci++) {
-        wchar_t key[32], val[64];
+        wchar_t key[32];
         swprintf_s(key, L"splat_color_%d", ci + 1);
-        swprintf_s(val, L"%.4f %.4f %.4f",
-                   c.splatColors[ci * 3], c.splatColors[ci * 3 + 1], c.splatColors[ci * 3 + 2]);
-        WritePrivateProfileStringW(L"color", key, val, path);
+        WritePrivateProfileStringW(L"color", key, fmtList(&c.splatColors[ci * 3], 3).c_str(), path);
     }
     // ---- the render LOOK and its three sections ---------------------------
     // Without these a saved preset silently dropped the look: it round-tripped
@@ -1833,10 +1894,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     // it); the [ink]/[drops]/[liquid_acid] blocks below are written in full,
     // because a preset that carries a look must carry the tuning that makes
     // that look look like anything.
-    auto putRgb = [path](const wchar_t* sec, const wchar_t* key, const float* c3) {
-        wchar_t b[64];
-        swprintf_s(b, L"%.4f %.4f %.4f", c3[0], c3[1], c3[2]);
-        WritePrivateProfileStringW(sec, key, b, path);
+    auto putRgb = [path, &fmtList](const wchar_t* sec, const wchar_t* key, const float* c3) {
+        WritePrivateProfileStringW(sec, key, fmtList(c3, 3).c_str(), path);
     };
     WritePrivateProfileStringW(L"look", L"style",
                                c.ink.enabled ? L"ink" : (c.acid.enabled ? L"liquid_acid"
@@ -2230,7 +2289,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
                    ? a.sweepCount : LiquidAcidConfig::kSweepPairs;
             if (nw > LiquidAcidConfig::kSweepMax) nw = LiquidAcidConfig::kSweepMax;
             for (int ci = 0; ci < LiquidAcidConfig::kSweepMax; ci++) {
-                wchar_t key[40], b[160];
+                wchar_t key[40];
                 swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
                 WritePrivateProfileStringW(S, key, nullptr, path);
                 swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
@@ -2238,12 +2297,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
                 swprintf_s(key, L"sweep_oil_%d", ci + 1);
                 if (ci >= nw) { WritePrivateProfileStringW(S, key, nullptr, path); }
                 else if (a.sweepOilFullSet[ci]) {
-                    const float* f = &a.sweepOilFull[ci * 12];
-                    swprintf_s(b, L"%.4f %.4f %.4f %.4f %.4f %.4f "
-                                  L"%.4f %.4f %.4f %.4f %.4f %.4f",
-                               f[0], f[1], f[2], f[3], f[4], f[5],
-                               f[6], f[7], f[8], f[9], f[10], f[11]);
-                    WritePrivateProfileStringW(S, key, b, path);
+                    WritePrivateProfileStringW(S, key, fmtList(&a.sweepOilFull[ci * 12], 12).c_str(), path);
                 } else {
                     putRgb(S, key, &a.sweepOil[ci * 3]);
                 }
@@ -2431,6 +2485,11 @@ struct ShotOpts {
     bool     sdrArgBad = false;        // --sdr-gamut / --panel-primaries did not parse: refuse the run
     bool     mouseNone = true;
     int      yieldMs = 2;              // --shot-yield ms: sleep per simulated frame
+    double   time0 = 0.0;              // --shot-time0: the master clock's start (seconds of uptime)
+    // --test-device-lost T (review 2026-10-04 R3): remove the device at wallpaper time T
+    float    devLostAt = -1.0f;
+    bool     devLostRemoved = false;
+    bool     devLostAwaitFirst = false;   // re-init done, the next good frame is logged
     // --shot-pour X,Y,START,DUR : hold LMB at (X,Y) px from START for DUR seconds,
     // with a slow circular drift (radius 40 px, 0.5 rev/s) like a resting hand.
     bool     pour = false;
@@ -3063,6 +3122,10 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
+            } else if (wcscmp(argv[i], L"--shot-time0") == 0 && i + 1 < argc) {
+                o.time0 = _wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--test-device-lost") == 0 && i + 1 < argc) {
+                o.devLostAt = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--photos") == 0 && i + 1 < argc) {
                 o.photosDir = argv[++i];
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
@@ -3168,7 +3231,13 @@ static int RunShotMode() {
 
     FluidRenderer::SetRandomSeed(o.seed);
     FluidRenderer renderer;
+    // --test-device-lost: survive the loss like the live wallpaper; otherwise it stays fatal
+    if (o.devLostAt >= 0.0f) renderer.SetSurviveDeviceLoss(true);
     renderer.InitOffscreen(o.width, o.height, cfg);
+    if (o.time0 > 0.0) {
+        renderer.SetClock(o.time0);
+        ShotLog("[shot] master clock starts at %.0f s (%.2f h of uptime)\n", o.time0, o.time0 / 3600.0);
+    }
     g_renderer = &renderer;
     // [hdr] sdr_gamut headless: the ini's mode (or --sdr-gamut); the panel
     // primaries only from --panel-primaries (no display is queried), so without
@@ -3332,6 +3401,13 @@ static int RunShotMode() {
                         renderer.Config().ink.enabled ? "ink"
                         : (renderer.Config().acid.enabled ? "liquid_acid" : "fluid"));
             }
+            // --test-device-lost: the removal; the next GPU call in the frame path sees it
+            if (o.devLostAt >= 0.0f && !o.devLostRemoved && frames / 144.0f >= o.devLostAt) {
+                o.devLostRemoved = true;
+                const bool removed = renderer.SimulateDeviceRemoved();
+                ShotLog("[devlost] removed at t=%.2fs (frame %lld): %s\n", frames / 144.0f, frames,
+                        removed ? "ID3D12Device5::RemoveDevice()" : "FAILED, no ID3D12Device5");
+            }
             if (o.drop && !o.dropFired && frames / 144.0f >= o.dropAt) {
                 renderer.QueueDrop(o.dropX, o.dropY, o.dropVy);
                 o.dropFired = true;
@@ -3399,6 +3475,38 @@ static int RunShotMode() {
             renderer.SetFade(o.fixedFade >= 0.0f ? o.fixedFade : cf.fade);
             renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
+            // --test-device-lost: the renderer-level half of the live loop's recovery
+            // (suspendRenderer + resumeRenderer): Shutdown, then a soft init with the same
+            // config and the same backoff, and on with the run (review 2026-10-04 R3)
+            if (o.devLostAt >= 0.0f && renderer.DeviceLost()) {
+                ShotLog("[devlost] detected hr=0x%08lX at t=%.2fs (frame %lld)\n",
+                        (unsigned long)renderer.DeviceLostHr(), frames / 144.0f, frames);
+                const FluidConfig keep = renderer.Config();
+                renderer.Shutdown();
+                ShotLog("[devlost] shutdown ok\n");
+                bool ok = false;
+                for (int attempt = 1; attempt <= 8 && !ok; attempt++) {
+                    ok = renderer.TryInitOffscreen(o.width, o.height, keep);
+                    if (!ok) {
+                        const DWORD back = 250u << (attempt - 1);
+                        ShotLog("[devlost] re-init attempt %d failed, retrying in %lu ms\n",
+                                attempt, (unsigned long)back);
+                        Sleep(back);
+                    }
+                }
+                if (!ok) {
+                    ShotLog("[devlost] ERROR: re-init failed 8 times\n");
+                    CoUninitialize();
+                    return 5;
+                }
+                renderer.SetCoverageWanted(CycleCoverageWanted());   // as resumeRenderer does
+                ShotLog("[devlost] re-init ok\n");
+                o.devLostAwaitFirst = true;
+            } else if (o.devLostAwaitFirst) {
+                o.devLostAwaitFirst = false;
+                ShotLog("[devlost] first frame after recovery ok (t=%.2fs, frame %lld)\n",
+                        frames / 144.0f, frames);
+            }
             {   // brief BY pre-flight 34 (see ftRing above)
                 LARGE_INTEGER qpc1;
                 QueryPerformanceCounter(&qpc1);
@@ -3729,6 +3837,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                g_monitor2Rect.right, g_monitor2Rect.bottom);
 
     FluidRenderer renderer;
+    // A removed / reset GPU device (driver update or crash) is survived, not fatal: the
+    // loop below rebuilds it (review 2026-10-04 R3). --shot keeps it fatal.
+    renderer.SetSurviveDeviceLoss(true);
     // STARTUP uses TryInit for the same reason the resume does. Both fatal
     // dialogs the user hit were a swap chain refused while a game owned the
     // output -- once on a resume, once on a launch. A wallpaper that cannot
@@ -3881,6 +3992,31 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         if (!g_running) break;
 
+        // GPU device removed / reset (driver update, driver crash / TDR, Win+Ctrl+Shift+B):
+        // the renderer has stopped touching the GPU and raised DeviceLost(). Tear it down
+        // exactly like a long fullscreen pause and let the resume backoff below build a new
+        // device on the same window; the cycle director and the config wait in memory, the
+        // mirror comes back through its lifecycle. This used to be a fatal box + exit
+        // (review 2026-10-04 R3). Checked before PresentBroken: a dead device is not a lost
+        // window, and a reattach onto it could only fail.
+        if (!g_suspended && renderer.DeviceLost()) {
+            WpLog("device lost (hr=0x%08lX): renderer torn down, rebuilding through the resume backoff",
+                  (unsigned long)renderer.DeviceLostHr());
+            suspendRenderer("GPU device lost");
+            fsPausedSince = 0;
+            resumeFails = 0;
+            if (g_fsPaused) {
+                // a game in front (its own crash, likely): leave it the GPU and come back when
+                // it exits, the way the fullscreen suspend does
+                fsSuspended = true;
+                resumeWanted = false;
+            } else {
+                fsSuspended = false;
+                resumeWanted = true;
+                nextResumeTry = 0;
+            }
+        }
+
         // Survive Explorer restarts: wait for the new shell, then re-hook.
         // PresentBroken covers the race where the window died mid-frame
         // before its WM_DESTROY reached us.
@@ -3946,6 +4082,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                     EnumDisplayMonitors(nullptr, nullptr, FindSecondMonitor, 0);
                     HWND host2 = FindWallpaperHost();
                     if (g_monitor2 && host2) {
+                        // a suspend (Shutdown) drops the mirror chain but not its window:
+                        // without this each resume leaked one window (review U16a)
+                        if (mirrorWnd && IsWindow(mirrorWnd)) {
+                            g_destroyingMirror = true;
+                            DestroyWindow(mirrorWnd);
+                            g_destroyingMirror = false;
+                        }
+                        mirrorWnd = nullptr;
                         int w2 = g_monitor2Rect.right - g_monitor2Rect.left;
                         int h2 = g_monitor2Rect.bottom - g_monitor2Rect.top;
                         mirrorWnd = CreateWallpaperWindowAt(host2, g_monitor2Rect.left,

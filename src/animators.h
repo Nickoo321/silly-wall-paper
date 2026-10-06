@@ -76,7 +76,7 @@ bool  CyclePaused();
 float CyclePauseRemainingSec();
 // CycleState() (cycle.h): stage, next, phase, remaining, transitioning, fade.
 // The COMPOSED BASE of the current stage: FluidConfig{} + stage_N_base +
-// stage_N_file, shell keys (sim/dye res, fps, mirror) from the live config.
+// [cycle] oil_layout (oil stages) + stage_N_file + scheme_hue_period, shell keys (sim/dye res, fps, mirror) from the live config.
 // What "dirty" is measured against, and what Revert reloads. false when the
 // director is off or has no current stage.
 bool  CycleStageBase(FluidConfig& out);

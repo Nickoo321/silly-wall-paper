@@ -71,6 +71,9 @@ void         UiCycleReplaceFile(const std::wstring& oldPath, const std::wstring&
 // composed base of the current stage (what "dirty" is measured against), its file, revert
 bool         UiCycleStageBase(FluidConfig& out);
 std::wstring UiCycleStageFile();
+// the running stage composes a stage base / oil_layout / scheme_hue_period its file does not
+// name: "Save as, only my changes" saves self-contained instead (review 2026-10-04 R17)
+bool         UiCycleStageComposesBeyondFile();
 void         UiCycleRevertStage();
 // window open => dwell timer paused (auto-resume after 10 min without input); close => resume
 void         UiCyclePauseForEditing();

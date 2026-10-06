@@ -15,7 +15,13 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   window writes config live.
 - Useful flags: `--console` (diagnostics console; note it re-attaches stdout so
   shell redirection goes silent), `--calibrate N` (quiz pattern pages),
-  `--gradient`, `--stats`, `--force-render`.
+  `--gradient`, `--stats`, `--force-render`. Shot-mode extras: `--shot-time0 S` (start the master
+  clock at S s of uptime: what a look does after hours), `--test-device-lost T` (self-test of the
+  GPU device-lost recovery: RemoveDevice at T, then the rebuild; `[devlost]` lines in the shot log).
+- A lost GPU device (driver update / TDR / Win+Ctrl+Shift+B) is survived by the live wallpaper:
+  the renderer flags it, the main loop tears down and rebuilds through the fullscreen-suspend
+  backoff (review 2026-10-04 R3). A plain `--shot` stays fatal on a real loss, so headless runs
+  cannot hang.
 
 ## Hard constraints (user directives)
 

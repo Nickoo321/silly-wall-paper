@@ -16,9 +16,53 @@ using Microsoft::WRL::ComPtr;
 extern void Fail(const char* what, HRESULT hr);   // main.cpp
 extern void WpLog(const char* fmt, ...);          // main.cpp: rolling log file
 extern void ForegroundDesc(char* out, size_t cap);
-#define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) Fail(#expr, _hr); } while (0)
+// Every failed HRESULT goes through HrFailed(): Fail() as always, EXCEPT a GPU device
+// loss (driver update / crash / TDR, Win+Ctrl+Shift+B) in a renderer told to survive
+// one -- that only raises m_deviceLost and the caller rebuilds (review 2026-10-04 R3).
+// Members only: every HR() site is inside a FluidRenderer method.
+#define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) HrFailed(#expr, _hr); } while (0)
 
-// Must match cbuffer CB in shaders.h (22 DWORDs).
+// Thrown by HrFailed() only while TryInit/TryReattach run (m_softInit) and caught
+// there: a device that dies half-way through CreateDevice leaves null objects behind
+// that the next lines would use, and unwinding is the one way out that cannot miss
+// one. Nothing else in the renderer throws (review 2026-10-04 R3).
+struct DeviceLostInInit { HRESULT hr; };
+
+bool FluidRenderer::IsDeviceLossHr(HRESULT hr) const {
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+        hr == DXGI_ERROR_DEVICE_HUNG || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+        return true;
+    return m_device && FAILED(m_device->GetDeviceRemovedReason());
+}
+
+// Logged once per loss; everything after it in the frame path returns early.
+void FluidRenderer::NoteDeviceLost(const char* what, HRESULT hr) {
+    if (m_deviceLost) return;
+    m_deviceLost = true;
+    m_deviceLostHr = hr;
+    m_recoveringDevice = true;
+    const HRESULT why = m_device ? m_device->GetDeviceRemovedReason() : S_OK;
+    WpLog("GPU device lost at %s: hr=0x%08lX, removed reason 0x%08lX -- tearing the renderer "
+          "down and rebuilding it", what, (unsigned long)hr, (unsigned long)why);
+    printf("GPU device lost at %s (hr=0x%08lX, reason 0x%08lX)\n",
+           what, (unsigned long)hr, (unsigned long)why);
+}
+
+void FluidRenderer::HrFailed(const char* what, HRESULT hr) {
+    const bool lost = IsDeviceLossHr(hr);
+    // (Re)creation under TryInit: a loss -- or, while recovering from one, ANY failure
+    // (the driver can still be restarting) -- makes TryInit return false and the
+    // caller's backoff try again, instead of a fatal box.
+    if (m_surviveDeviceLoss && m_softInit && (lost || m_recoveringDevice)) {
+        if (lost) NoteDeviceLost(what, hr);
+        else WpLog("device rebuild: %s failed hr=0x%08lX (will retry)", what, (unsigned long)hr);
+        throw DeviceLostInInit{ hr };
+    }
+    if (!m_surviveDeviceLoss || !lost) Fail(what, hr);   // unchanged for everything else
+    NoteDeviceLost(what, hr);
+}
+
+// Must match cbuffer CB in shaders.h (24 DWORDs, see the static_assert below).
 struct SimCB {
     float texelW, texelH;
     float dt;
@@ -170,21 +214,47 @@ bool FluidRenderer::CreateSwapChainSoft(HWND hwnd, const DXGI_SWAP_CHAIN_DESC1& 
 bool FluidRenderer::TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg) {
     m_softInit = true;
     m_initHr = S_OK;
-    InitCommon(hwnd, width, height, cfg);
+    try {
+        InitCommon(hwnd, width, height, cfg);
+    } catch (const DeviceLostInInit& e) {   // review 2026-10-04 R3: see HrFailed()
+        m_initHr = e.hr;
+    }
     m_softInit = false;
     if (FAILED(m_initHr)) {
         Shutdown();       // releases whatever CreateDevice managed to build
         return false;
     }
+    m_recoveringDevice = false;   // a device stands again: failures are fatal as before
     return true;
+}
+
+// The headless twin of TryInit, for the --test-device-lost self-test: the same
+// recovery the live loop runs (Shutdown, then a soft init with the same config).
+bool FluidRenderer::TryInitOffscreen(int width, int height, const FluidConfig& cfg) {
+    m_headless = true;
+    return TryInit(nullptr, width, height, cfg);
 }
 
 bool FluidRenderer::TryReattach(HWND hwnd) {
     m_softInit = true;
     m_initHr = S_OK;
-    Reattach(hwnd);
+    try {
+        Reattach(hwnd);
+    } catch (const DeviceLostInInit& e) {   // review 2026-10-04 R3: see HrFailed()
+        m_initHr = e.hr;
+    }
     m_softInit = false;
-    return SUCCEEDED(m_initHr);
+    // a lost device cannot be reattached: the caller's DeviceLost() check rebuilds it
+    return SUCCEEDED(m_initHr) && !m_deviceLost;
+}
+
+// --test-device-lost: the D3D12 way to fake a removal (driver crash / update) on our
+// own device only, so the recovery can be exercised headless (review 2026-10-04 R3).
+bool FluidRenderer::SimulateDeviceRemoved() {
+    ComPtr<ID3D12Device5> d5;
+    if (!m_device || FAILED(m_device.As(&d5))) return false;
+    d5->RemoveDevice();
+    return true;
 }
 
 void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
@@ -206,6 +276,15 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     DXGI_ADAPTER_DESC1 adesc = {};
     adapter->GetDesc1(&adesc);
     printf("GPU: %ls\n", adesc.Description);
+    // Rebuilding after a device loss while the driver is being replaced, the only
+    // adapter left can be the Microsoft Basic Render Driver: a 4K sim on the CPU.
+    // Not ready yet -- the caller's backoff tries again (review 2026-10-04 R3).
+    if (m_softInit && m_recoveringDevice && (adesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+        WpLog("device rebuild: only the software adapter (%ls) is there, retrying later",
+              adesc.Description);
+        m_initHr = DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+        return;
+    }
 
     HR(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)));
 
@@ -487,7 +566,7 @@ void FluidRenderer::MakeGraphicsPso(const char* src,
 // SetResolutions does, then compile. Both branches are no-ops once built, so
 // this is safe to call on every preset apply and every checkbox click.
 void FluidRenderer::EnsureLookResources() {
-    if (!m_device) return;
+    if (!m_device || m_deviceLost) return;   // lost: the rebuild compiles it (R3)
     const bool needAcid = m_cfg.acid.enabled && !m_psoLiquidAcid;
     const bool needInk  = m_cfg.ink.enabled  && !m_psoInk;
     m_lastLookCompileMs = 0.0;
@@ -496,6 +575,7 @@ void FluidRenderer::EnsureLookResources() {
     QueryPerformanceFrequency(&qf);
     QueryPerformanceCounter(&q0);
     WaitForGpuIdle();
+    if (m_deviceLost) return;
     if (needAcid) {
         MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
         m_acidSeeded = false;          // Frame() reseeds under the current keys
@@ -692,20 +772,38 @@ void FluidRenderer::UavBarrier(ID3D12Resource* res) {
     m_cmd->ResourceBarrier(1, &b);
 }
 
-void FluidRenderer::BeginFrame() {
+// false = the device is lost (review 2026-10-04 R3): the caller records nothing and
+// returns; the shell sees DeviceLost() and rebuilds the renderer.
+bool FluidRenderer::BeginFrame() {
+    if (m_deviceLost) return false;
+    // Not every call on a removed device fails: after RemoveDevice() the allocator /
+    // list Reset, Close and Signal all came back S_OK and only Map() refused, so the
+    // removed reason is asked once per frame. Only by a renderer that survives the loss
+    // (live, --test-device-lost): a plain --shot never calls it (review 2026-10-04 R3).
+    if (m_surviveDeviceLoss) {
+        const HRESULT why = m_device->GetDeviceRemovedReason();
+        if (FAILED(why)) {
+            NoteDeviceLost("GetDeviceRemovedReason", why);
+            return false;
+        }
+    }
     const UINT i = m_frameIndex;
     if (m_fence->GetCompletedValue() < m_fenceValues[i]) {
         HR(m_fence->SetEventOnCompletion(m_fenceValues[i], m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);
     }
     HR(m_allocators[i]->Reset());
     HR(m_cmd->Reset(m_allocators[i].Get(), nullptr));
+    if (m_deviceLost) return false;
     ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
     m_cmd->SetDescriptorHeaps(1, heaps);
+    return true;
 }
 
 void FluidRenderer::EndFrameAndPresent() {
+    if (m_deviceLost) return;   // lost while recording: nothing to submit (R3)
     HR(m_cmd->Close());
+    if (m_deviceLost) return;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     if (m_headless) {
@@ -718,6 +816,12 @@ void FluidRenderer::EndFrameAndPresent() {
     // Present fails (not fatally) when Explorer tears our window down
     // mid-frame â€” flag it so the shell can rebuild instead of dying.
     HRESULT phr = m_swapChain->Present(1, 0);
+    // A removed / reset device is not a lost window: no reattach onto the dead device
+    // and no Signal on its queue -- the shell rebuilds the device instead (R3).
+    if (FAILED(phr) && m_surviveDeviceLoss && IsDeviceLossHr(phr)) {
+        NoteDeviceLost("m_swapChain->Present", phr);
+        return;
+    }
     if (FAILED(phr)) {
         if (!m_presentBroken)
             printf("Present failed (0x%08lX) - wallpaper window lost, awaiting reattach\n",
@@ -727,6 +831,10 @@ void FluidRenderer::EndFrameAndPresent() {
     if (m_mirrorChain) {
         // interval 0: the main chain already provides vsync pacing
         HRESULT mhr = m_mirrorChain->Present(0, 0);
+        if (FAILED(mhr) && m_surviveDeviceLoss && IsDeviceLossHr(mhr)) {
+            NoteDeviceLost("m_mirrorChain->Present", mhr);
+            return;
+        }
         if (FAILED(mhr)) m_mirrorBroken = true;
     }
     m_fenceValues[m_frameIndex] = m_nextFence;
@@ -741,7 +849,9 @@ void FluidRenderer::EndFrameAndPresent() {
 // value comes from the same m_nextFence counter, so the coverage/velocity
 // readbacks that stamped m_nextFence this frame see it signalled as usual.
 void FluidRenderer::EndFrameNoPresent() {
+    if (m_deviceLost) return;   // R3, as in EndFrameAndPresent
     HR(m_cmd->Close());
+    if (m_deviceLost) return;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     m_fenceValues[m_frameIndex] = m_nextFence;
@@ -999,6 +1109,9 @@ void FluidRenderer::EnsurePostTex() {
     m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, m_postState,
                                          nullptr, IID_PPV_ARGS(&m_postTex)));
+    // a device lost right here (survive mode: HR only flags it) leaves no texture; no views
+    // on null and no "done" stamp, the frame's post pass skips, the rebuild makes it again
+    if (!m_postTex) return;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += (SIZE_T)(kFrames * 2 + 1) * m_rtvStride;
     m_device->CreateRenderTargetView(m_postTex.Get(), nullptr, rtv);
@@ -1020,7 +1133,7 @@ void FluidRenderer::EnsurePostTex() {
 
 D3D12_CPU_DESCRIPTOR_HANDLE FluidRenderer::BeginPostTarget() {
     EnsurePostTex();
-    if (m_postState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+    if (m_postTex && m_postState != D3D12_RESOURCE_STATE_RENDER_TARGET) {   // no barrier on null
         D3D12_RESOURCE_BARRIER b = {};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         b.Transition.pResource = m_postTex.Get();
@@ -1039,6 +1152,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE FluidRenderer::BeginPostTarget() {
 // Radii are authored in px at 1440p and scaled with the frame height, so the
 // preview and the panel agree; the shader takes them in texels of this frame.
 void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
+    if (!m_postTex) return;              // lost the device while making it: nothing to run on
     D3D12_RESOURCE_BARRIER b = {};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition.pResource = m_postTex.Get();
@@ -1349,6 +1463,7 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
 
     HR(m_allocators[0]->Reset());
     HR(m_cmd->Reset(m_allocators[0].Get(), nullptr));
+    if (m_deviceLost) return false;   // R3: only reachable under --test-device-lost
 
     D3D12_RESOURCE_BARRIER b = {};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1372,9 +1487,11 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
     m_cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
     HR(m_cmd->Close());
+    if (m_deviceLost) return false;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     WaitForGpuIdle();
+    if (m_deviceLost) return false;
 
     uint8_t* data = nullptr;
     D3D12_RANGE range = { 0, (SIZE_T)m_shotPitch * m_height };
@@ -1756,6 +1873,7 @@ bool FluidRenderer::ReadAnalyzerFrame(std::vector<float>& out) {
 
 void FluidRenderer::EnableMirror(HWND hwnd, int width, int height) {
     DisableMirror();
+    if (m_deviceLost) return;   // R3: the rebuilt device brings the mirror back
     m_mirrorW = width;
     m_mirrorH = height;
 
@@ -1786,6 +1904,11 @@ void FluidRenderer::EnableMirror(HWND hwnd, int width, int height) {
     rtv.ptr += (SIZE_T)(kFrames + 1) * m_rtvStride;
     for (UINT i = 0; i < kFrames; i++) {
         HR(m_mirrorChain->GetBuffer(i, IID_PPV_ARGS(&m_mirrorBuffers[i])));
+        if (m_deviceLost) {   // R3: no half-built mirror on a dead device
+            for (UINT k = 0; k < kFrames; k++) m_mirrorBuffers[k].Reset();
+            m_mirrorChain.Reset();
+            return;
+        }
         m_device->CreateRenderTargetView(m_mirrorBuffers[i].Get(), nullptr, rtv);
         rtv.ptr += m_rtvStride;
     }
@@ -1883,7 +2006,7 @@ void FluidRenderer::RenderGradient(float timeSec) {
 // touched: m_time, the dye and the blob population all resume untouched.
 void FluidRenderer::PresentBlack() {
     if (m_headless || !m_swapChain || m_presentBroken) return;
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost (R3)
     const UINT i = m_frameIndex;
     const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     D3D12_RESOURCE_BARRIER b = {};
@@ -1932,7 +2055,7 @@ void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameI
     AdvanceClock(dt);
     AccumFrozen(dt);   // animators.h freezes; no-op unless something is frozen
 
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost: the shell rebuilds the renderer (R3)
 
     if (m_cfg.gradientMode || m_cfg.calibratePage > 0) {
         RenderGradient(m_time);
@@ -2135,7 +2258,7 @@ void FluidRenderer::SimOnlyStep(float dt) {
     if (m_photoMode) return;                // brief BY: no sim under a photo
     AdvanceClock(dt);
     AccumFrozen(dt);
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost (R3)
     FrameSim(dt, FrameInput{});
     if (m_headless) EndFrameAndPresent();   // headless: fence + ring, no Present
     else            EndFrameNoPresent();
@@ -2731,11 +2854,15 @@ void FluidRenderer::WaitForGpuIdle() {
     // refused before CreateFence) has run no command list: nothing to wait for. Without
     // this the unwind in Shutdown() died on the null fence (review 2026-10-04 R2).
     if (!m_queue || !m_fence || !m_fenceEvent) return;
+    // A lost device runs nothing any more, so there is nothing to wait for either, and
+    // Shutdown() must be able to release it without reaching Fail() (review 2026-10-04 R3).
+    if (m_deviceLost) return;
     const UINT64 v = m_nextFence++;
     HR(m_queue->Signal(m_fence.Get(), v));
+    if (m_deviceLost) return;
     if (m_fence->GetCompletedValue() < v) {
         HR(m_fence->SetEventOnCompletion(v, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);
     }
 }
 
@@ -2872,6 +2999,7 @@ void FluidRenderer::Shutdown() {
     m_nextFence = 1;
     m_firstFrame = true;      // re-clear sim textures + startup splat burst
     m_presentBroken = false;
+    m_deviceLost = false;     // R3: everything of the lost device is gone now
 }
 
 // ---------------------------------------------------------------------------
@@ -2923,6 +3051,7 @@ void FluidRenderer::PickSplatColor(float hueOffset, float out[3]) {
 // sim textures, and the fluid state all survive.
 void FluidRenderer::Reattach(HWND hwnd) {
     if (!m_device) return;   // suspended: the resume does a full Init instead
+    if (m_deviceLost) return;   // R3: TryReattach reports it; the shell rebuilds the device
     DisableMirror();   // its window died with the old WorkerW; shell re-enables
     WaitForGpuIdle();
     for (UINT i = 0; i < kFrames; i++) {
@@ -2962,7 +3091,7 @@ void FluidRenderer::Reattach(HWND hwnd) {
 void FluidRenderer::SetResolutions(int simRes, int dyeRes) {
     m_cfg.simRes = simRes;
     m_cfg.dyeRes = dyeRes;
-    if (!m_device) return;   // suspended: takes effect at the resume Init
+    if (!m_device || m_deviceLost) return;   // suspended / lost (R3): takes effect at the resume Init
     WaitForGpuIdle();
     m_covPending = false;
     m_readbackPending = false;
@@ -3235,7 +3364,7 @@ struct AcidParamsGPU {
     float p33[4];
     // brief AG-b: per-mass dye variation (the cbuffer was full again).
     float p34[4];
-    // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
+    // brief BR: dye_core (.x); .y/.z film_hue3_share/film_equal_load (BV), .w film_hue2_seam (BW) -- see acid_slots.h.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
     // laP38: .x film_equal_load_patches (brief BW); .yzw grey heart (brief BX).
@@ -3785,7 +3914,7 @@ void FluidRenderer::UpdateVelocityReadback() {
     if (m_headless && m_velPending && m_time - m_lastVelTime >= kVelPeriod &&
         m_fence->GetCompletedValue() < m_velFence) {
         HR(m_fence->SetEventOnCompletion(m_velFence, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);   // R3
     }
     if (m_velPending && m_fence->GetCompletedValue() >= m_velFence &&
         (!m_headless || m_time - m_lastVelTime >= kVelPeriod)) {
@@ -5494,7 +5623,7 @@ void FluidRenderer::EnsureOilMask() {
     makeCS("CSOilMask", m_psoOilMask);
     makeCS("CSOilDrag", m_psoOilDrag);
     makeCS("CSOilDyeBlock", m_psoOilDyeBlock);
-    m_oilMaskMade = true;
+    m_oilMaskMade = m_psoOilMask && m_psoOilDrag && m_psoOilDyeBlock;   // a lost device: retry after the rebuild
 }
 
 void FluidRenderer::StepOilDrag(float dt) {
@@ -6918,7 +7047,7 @@ void FluidRenderer::UpdateCoverage() {
     if (m_headless && m_covPending && m_time - m_lastCovTime >= 1.0f &&
         m_fence->GetCompletedValue() < m_covFence) {
         HR(m_fence->SetEventOnCompletion(m_covFence, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);   // R3
     }
     // harvest a finished readback (issued a frame or more ago; 1 Hz cadence
     // makes the staleness irrelevant and avoids any GPU sync)

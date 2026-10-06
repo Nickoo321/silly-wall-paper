@@ -3,6 +3,7 @@
 #pragma once
 #include <windows.h>
 #include <string>
+#include <vector>
 #include "fluid.h"
 
 extern bool     g_pauseOnFullscreen;
@@ -27,6 +28,13 @@ void PersistFullConfigNow();        // full live config -> settings.ini
 // full-config ini writer (main.cpp). includeShell=false skips the machine/
 // shell keys moods must not carry: sim_res, dye_res, fps_limit, mirror_second.
 void WriteConfigToIni(const wchar_t* path, const FluidConfig& cfg, bool includeShell);
+// the same dump without the machine keys and without the read-only gate: the Settings
+// window's self-contained Save as, whose caller guards the path (review 2026-10-04 R15)
+void WriteLookToIni(const wchar_t* path, const FluidConfig& cfg);
+// [meta] base chain under a preset, root first, the file itself not included; the tray's
+// walk (depth 4, relative to each file's folder). Shared by the cycle and the Settings
+// reset target (review 2026-10-04 R18). *missing = a base= named a file that is not there.
+std::vector<std::wstring> PresetBaseChain(const std::wstring& path, int maxDepth = 4, bool* missing = nullptr);
 
 extern wchar_t  g_iniPath[MAX_PATH];
 // Where config VALUES are read from. Identical to g_iniPath in normal mode;

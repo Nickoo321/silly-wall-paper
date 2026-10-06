@@ -1613,6 +1613,20 @@ public:
     // try again; the caller backs off and retries.
     bool TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg);
     bool TryReattach(HWND hwnd);
+    // GPU device removed / reset (driver update or crash / TDR, Win+Ctrl+Shift+B), review
+    // 2026-10-04 R3. With SetSurviveDeviceLoss(true) (the live wallpaper; the
+    // --test-device-lost shot) a device-loss HRESULT no longer reaches Fail(): it raises
+    // DeviceLost(), the frame path stops touching the GPU, and the caller rebuilds with
+    // Shutdown() + TryInit() (a loss DURING that TryInit makes it return false). Off (a
+    // plain --shot) a loss stays fatal, so a headless run cannot hang on it.
+    void SetSurviveDeviceLoss(bool on) { m_surviveDeviceLoss = on; }
+    bool DeviceLost() const { return m_deviceLost; }
+    HRESULT DeviceLostHr() const { return m_deviceLostHr; }   // the HRESULT that showed it
+    bool TryInitOffscreen(int width, int height, const FluidConfig& cfg);   // headless TryInit
+    bool SimulateDeviceRemoved();   // --test-device-lost: ID3D12Device5::RemoveDevice()
+    // --shot-time0: start the master clock at an uptime of `seconds`, so a headless shot can
+    // show what a look does after hours of running (time-driven effects, float precision).
+    void SetClock(double seconds) { m_timeD = seconds; m_time = (float)seconds; }
     // Headless capture mode (--shot): device WITHOUT a swap chain, no window.
     // The display pass renders into an FP16 (R16G16B16A16_FLOAT) offscreen RT
     // of the requested size; CaptureOffscreen() reads it back as linear scRGB.
@@ -1889,6 +1903,16 @@ private:
     // records its HRESULT in m_initHr and unwinds instead of calling Fail().
     bool     m_softInit = false;
     HRESULT  m_initHr = S_OK;
+    // Device loss (review 2026-10-04 R3): see SetSurviveDeviceLoss(). HR() routes every
+    // failure through HrFailed(); m_recoveringDevice stays set from a loss until a TryInit
+    // succeeds, and makes ANY failure of that rebuild a retry instead of a fatal box.
+    bool     m_surviveDeviceLoss = false;
+    bool     m_deviceLost = false;
+    bool     m_recoveringDevice = false;
+    HRESULT  m_deviceLostHr = S_OK;
+    void HrFailed(const char* what, HRESULT hr);
+    bool IsDeviceLossHr(HRESULT hr) const;
+    void NoteDeviceLost(const char* what, HRESULT hr);
     void CreateDevice(HWND hwnd, int width, int height);
     void CreateOffscreenTarget();      // headless render target + readback
     // One display/gradient graphics PSO from `src`, optionally with defines.
@@ -1910,7 +1934,7 @@ private:
     Tex  CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot);
     void Transition(Tex& t, D3D12_RESOURCE_STATES to);
     void UavBarrier(ID3D12Resource* res);
-    void BeginFrame();
+    bool BeginFrame();                 // false = device lost: record nothing (R3)
     void EndFrameAndPresent();
     void EndFrameNoPresent();          // SimOnlyStep: execute + fence, no Present
     void FrameSim(float dt, const FrameInput& input);   // the sim half of Frame()

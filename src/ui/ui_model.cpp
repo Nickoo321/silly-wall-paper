@@ -349,20 +349,26 @@ void RecomputeTarget() {
         // -1 as the target every preset without [hdr] showed a permanent "1 change", and Save
         // wrote the global peak into the preset (review 2026-10-04 R16)
         s_peakTarget = g_hdrPeakNits;
-        // a partial "Save as" names the preset it sits on: [meta] base= loads first
-        std::wstring base = UiPresetBase(s_activePreset);
-        if (!base.empty() && GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES)
-            LoadConfigFromFile(base.c_str(), s_target);
-        LoadConfigFromFile(s_activePreset.c_str(), s_target);
+        // a partial "Save as" names the preset it sits on: the whole [meta] base chain loads
+        // first, root first, the walk the tray's apply does (one level here made the reset
+        // target miss the deeper bases: review 2026-10-04 R18)
+        std::vector<std::wstring> files = PresetBaseChain(s_activePreset);
+        files.push_back(s_activePreset);
+        for (const std::wstring& f : files) LoadConfigFromFile(f.c_str(), s_target);
         // composed base: the applied overlays (Mirror - *) are part of what "unchanged" means
         for (const std::wstring& ov : s_overlays)
             if (GetFileAttributesW(ov.c_str()) != INVALID_FILE_ATTRIBUTES) LoadConfigFromFile(ov.c_str(), s_target);
-        wchar_t bb[64] = {}, buf[64] = {};
-        if (!base.empty()) GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", bb, 64, base.c_str());
-        GetPrivateProfileStringW(L"hdr", L"peak_nits", bb, buf, 64, s_activePreset.c_str());
-        if (buf[0]) s_peakTarget = (float)_wtof(buf);
-        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, s_activePreset.c_str());
-        if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
+        // [hdr] along the same chain, file over base, over the user's own values: what
+        // ApplyPresetShellChain leaves after an apply, so Revert can put exactly that back
+        // (a preset without gamut= no longer means BT.2020) (R15 / R18)
+        s_gamutTarget = g_gamutMode;
+        for (const std::wstring& f : files) {
+            wchar_t buf[64] = {};
+            GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, f.c_str());
+            if (buf[0]) s_peakTarget = (float)_wtof(buf);
+            int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, f.c_str());
+            if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
+        }
     }
 }
 
@@ -809,6 +815,58 @@ void UiApplyPresetHeadless(const std::wstring& path) {
     *s_cfg = fresh;
     if (s_hooks.ensureLook) s_hooks.ensureLook();
     UiEndWholeChange(path);
+}
+
+// Revert with the cycle off: the composed base the dirty count is measured against
+// (defaults + [meta] base chain + the preset + overlays) goes back as ONE whole-change undo
+// entry. Re-applying the file merged it over the live config, so a key a partial preset does
+// not carry stayed changed and the header kept counting it (review 2026-10-04 R15). The live
+// machine keys stay, the peak / gamut go back to their targets.
+// A preset chain with no [look] and no base is a partial over SOME look (colours only, a
+// mirror fold): its composed base would be code defaults + the partial, so Revert re-merges
+// the file over the live look instead, as it always did (review 2026-10-05).
+static bool PartialOverLiveLook(const std::wstring& path) {
+    if (!PresetBaseChain(path).empty()) return false;
+    for (const wchar_t* k : { L"style", L"liquid_acid", L"ink" }) {
+        wchar_t lk[32] = {};
+        GetPrivateProfileStringW(L"look", k, L"", lk, 32, path.c_str());
+        if (lk[0]) return false;
+    }
+    return true;
+}
+
+void UiRevertToComposedBase() {
+    if (!s_cfg || UiCycleOn()) return;
+    // no preset file = no composed base (code defaults): nothing to revert to
+    if (s_activePreset.empty() || GetFileAttributesW(s_activePreset.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    if (PartialOverLiveLook(s_activePreset)) { UiApplyPresetFile(s_activePreset); return; }
+    Snapshot before = TakeSnapshot();
+    FluidConfig& c = *s_cfg;
+    FluidConfig fresh = s_target;
+    fresh.simRes = c.simRes;              // machine / shell: never from a preset (ApplyPreset)
+    fresh.dyeRes = c.dyeRes;
+    fresh.fpsLimit = c.fpsLimit;
+    fresh.mirrorSecond = c.mirrorSecond;
+    fresh.gradientMode = c.gradientMode;  // CLI debug switches (Compose keeps them too)
+    fresh.calibratePage = c.calibratePage;
+    fresh.stats = c.stats;
+    fresh.hdrPeakNits = c.hdrPeakNits;
+    fresh.gamutMode = c.gamutMode;
+    c = fresh;
+    g_hdrPeakNits = s_peakTarget;
+    g_gamutMode = s_gamutTarget;
+    if (s_hooks.reinitWanderers) s_hooks.reinitWanderers();
+    if (s_hooks.ensureLook) s_hooks.ensureLook();
+    if (!g_configReadOnly && g_iniPath[0]) {
+        WriteConfigToIni(g_iniPath, c, true);
+        PersistShellSettings();
+    }
+    UndoEntry e;
+    e.whole = true;
+    e.before = before;
+    e.after = TakeSnapshot();
+    PushUndo(std::move(e));
+    RecomputeTarget();
 }
 
 bool UiAutostartCached() { return s_autostart; }

@@ -241,7 +241,7 @@ int LookOf(const CycleStage& st) {
         ink  = GetPrivateProfileIntW(L"look", L"ink", ink ? 1 : 0, ini.c_str()) != 0;
         if (ink) acid = false;
     };
-    apply(st.basePath);
+    for (const std::wstring& b : st.baseChain) apply(b);   // the whole chain, root first (R18)
     apply(st.path);
     return ink ? CYCLE_LOOK_INK : (acid ? CYCLE_LOOK_ACID : CYCLE_LOOK_FLUID);
 }
@@ -253,6 +253,7 @@ void ResolveStage(CycleStage& st, const std::wstring& ini) {
     if (HasSection(st.path, L"photo")) st.photo = true;
     if (st.photo) {
         st.basePath.clear();
+        st.baseChain.clear();
         st.name = Stem(st.file);
         st.ok = Exists(st.path);
         st.overlay = false;
@@ -267,18 +268,32 @@ void ResolveStage(CycleStage& st, const std::wstring& ini) {
         const std::wstring mb = IniStr(L"meta", L"base", st.path.c_str());
         if (!mb.empty()) st.basePath = Resolve(mb, st.path);
     }
+    // The base's own [meta] base chain composes under it, as the tray's MergePresetChain
+    // does (3 more levels: 4 files under the stage file, the tray's limit). stage_N_base
+    // still wins over the file's [meta] base, as before. No shipped base carries a base of
+    // its own, so every existing config composes the same files (review 2026-10-04 R18).
+    st.baseChain.clear();
+    bool chainMissing = false;
+    if (!st.basePath.empty()) {
+        if (Exists(st.basePath)) st.baseChain = PresetBaseChain(st.basePath, 3, &chainMissing);
+        st.baseChain.push_back(st.basePath);
+    }
     st.name = Stem(st.file);
-    st.ok = Exists(st.path) && (st.basePath.empty() || Exists(st.basePath));
+    // ok only if every file of the chain is there (a dangling base= half-composes the look)
+    st.ok = Exists(st.path) && !chainMissing;
+    for (const std::wstring& b : st.baseChain) st.ok = st.ok && Exists(b);
     st.look = st.ok ? LookOf(st) : CYCLE_LOOK_FLUID;
     // can a tamed burst land here? the palette clock must turn the film
     // (hue_rotate_period on) and the sweep must be off (the landing maths
-    // assumes the film's own hue is oil_color_1's) -- file over base
+    // assumes the film's own hue is oil_color_1's) -- file over its base chain
     float rot = LiquidAcidConfig{}.hueRotatePeriod, sweep = LiquidAcidConfig{}.hueSweepPeriod;
-    for (const std::wstring* p : { &st.basePath, &st.path }) {
-        if (p->empty() || !Exists(*p)) continue;
-        std::wstring v = IniStr(L"liquid_acid", L"hue_rotate_period", p->c_str());
+    std::vector<std::wstring> files = st.baseChain;
+    files.push_back(st.path);
+    for (const std::wstring& p : files) {
+        if (p.empty() || !Exists(p)) continue;
+        std::wstring v = IniStr(L"liquid_acid", L"hue_rotate_period", p.c_str());
         if (!v.empty()) rot = (float)_wtof(v.c_str());
-        v = IniStr(L"liquid_acid", L"hue_sweep_period", p->c_str());
+        v = IniStr(L"liquid_acid", L"hue_sweep_period", p.c_str());
         if (!v.empty()) sweep = (float)_wtof(v.c_str());
     }
     st.burstOk = st.ok && !st.overlay && st.look == CYCLE_LOOK_ACID && rot > 0.01f && !(sweep > 0.01f);
@@ -486,7 +501,7 @@ void ComposeFiles(const CycleStage& st, FluidConfig& c) {
         c.acid.enabled = acid;
         c.ink.enabled = ink;
     };
-    if (!st.basePath.empty()) LoadConfigFromFile(st.basePath.c_str(), c);
+    for (const std::wstring& b : st.baseChain) LoadConfigFromFile(b.c_str(), c);   // root first (R18)
     if (layout) loadLayout();
     LoadConfigFromFile(st.path.c_str(), c);
     if (s_cfg.schemeHuePeriod > 0.0f && oil &&
@@ -519,11 +534,13 @@ void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int&
     // carries one (file over base), else the user's own setting
     peak = s_userPeak;
     gamut = s_userGamut;
-    for (const std::wstring* ini : { &st.basePath, &st.path }) {
-        if (ini->empty()) continue;
-        std::wstring pk = IniStr(L"hdr", L"peak_nits", ini->c_str());
+    std::vector<std::wstring> files = st.baseChain;      // the whole base chain, then the file (R18)
+    files.push_back(st.path);
+    for (const std::wstring& ini : files) {
+        if (ini.empty()) continue;
+        std::wstring pk = IniStr(L"hdr", L"peak_nits", ini.c_str());
         if (!pk.empty()) peak = (float)_wtof(pk.c_str());
-        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, ini->c_str());
+        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, ini.c_str());
         if (gm >= 0 && gm <= 2) gamut = gm;
     }
 }
@@ -1801,6 +1818,23 @@ const CycleConfig& CycleGet() { return s_cfg; }
 
 void CycleComposeStageFiles(int stage, FluidConfig& c) {
     if (stage >= 0 && stage < (int)s_cfg.stages.size()) ComposeFiles(s_cfg.stages[stage], c);
+}
+
+bool CycleStageComposesBeyondFile(int stage) {
+    if (stage < 0 || stage >= (int)s_cfg.stages.size()) return false;
+    const CycleStage& st = s_cfg.stages[stage];
+    if (!st.base.empty()) return true;                       // stage_N_base: not in the file
+    const bool oil = st.look == CYCLE_LOOK_ACID && !st.overlay;
+    if (!oil) return false;
+    if (!s_cfg.oilLayoutPath.empty()) return true;           // ComposeFiles' loadLayout()
+    // the scheme_hue_period override, under the same test ComposeFiles applies it with
+    if (s_cfg.schemeHuePeriod > 0.0f) {
+        FluidConfig c;
+        ComposeFiles(st, c);
+        return c.acid.hueRotatePeriod == s_cfg.schemeHuePeriod &&
+               IniStr(L"liquid_acid", L"hue_rotate_period", st.path.c_str()).empty();
+    }
+    return false;
 }
 
 void CycleSet(const CycleConfig& c) {

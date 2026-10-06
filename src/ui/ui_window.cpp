@@ -974,8 +974,12 @@ void DrawPresetStrip(unsigned look) {
         bool enter = ImGui::InputText("##name", s_view.saveAsName, sizeof(s_view.saveAsName), ImGuiInputTextFlags_EnterReturnsTrue);
         std::string baseName = running.empty() ? std::string("(none)") : UiNarrow(UiStemOf(running));
         std::string r1 = "Only my changes, on top of " + baseName;
+        // a stage composed from more than its file cannot be named as a base: say so (R17)
+        if (UiCycleOn() && UiCycleStageComposesBeyondFile())
+            r1 = "Only my changes -- this stage adds a stage base / oil layout / hue period, "
+                 "so it saves self-contained";
         if (ImGui::RadioButton(r1.c_str(), s_view.saveAsChanges)) s_view.saveAsChanges = true;
-        if (ImGui::RadioButton("Self-contained (every key that differs from the code defaults)", !s_view.saveAsChanges))
+        if (ImGui::RadioButton("Self-contained (the whole look, the same on any look)", !s_view.saveAsChanges))
             s_view.saveAsChanges = false;
         if (ImGui::Button("Save") || enter) {
             std::vector<std::string> log;
@@ -1339,12 +1343,13 @@ void DrawHeader() {
     ImGui::BeginDisabled(target.empty() || h.dirty == 0);
     if (ImGui::Button("Revert")) {
         if (cs.on) { UiCycleRevertStage(); UiRecomputeTarget(); }
-        else UiApplyPresetFile(target);
+        else UiRevertToComposedBase();   // not a re-merge of the file (review 2026-10-04 R15)
         s_view.status = "Reverted to " + h.preset;
     }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip(cs.on ? "Put the current stage back to its file (in memory)" : "Re-apply the active preset (undoable)");
+        ImGui::SetTooltip(cs.on ? "Put the current stage back to its file (in memory)"
+                                : "Put every key back to the active preset (undoable)");
     ImGui::SameLine(0, 18);
     if (ImGui::Button(IsManualPaused() ? "Resume wallpaper" : "Pause wallpaper")) { if (s_view.live) TogglePause(); }
     if (cs.on && cs.paused) {
@@ -1516,8 +1521,10 @@ LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         if (s_swap && wp != SIZE_MINIMIZED) {
             ReleaseRtv();
-            s_swap->ResizeBuffers(0, LOWORD(lp), HIWORD(lp), DXGI_FORMAT_UNKNOWN, 0);
-            CreateRtv();
+            // a failed resize (device removed) leaves no RTV: rebuild instead of clearing a null one
+            if (FAILED(s_swap->ResizeBuffers(0, LOWORD(lp), HIWORD(lp), DXGI_FORMAT_UNKNOWN, 0)))
+                s_deviceLost = true;
+            else CreateRtv();
             RenderLive();
         }
         return 0;
@@ -1797,6 +1804,9 @@ std::string RunScript(const std::wstring& script, std::vector<std::string>& log)
                 std::wstring p = UiLibraryDir() + L"\\" + UiWide(cmd.substr(10)) + L".ini";
                 if (GetFileAttributesW(p.c_str()) == INVALID_FILE_ATTRIBUTES) res = "no such preset";
                 else { UiApplyPresetFile(p); s_view.selPath = p; }
+            } else if (cmd == "revert") {                      // the Revert button, cycle off (R15)
+                if (UiCycleOn()) res = "cycling: revert is the stage's";
+                else UiRevertToComposedBase();
             } else if (cmd == "save") {
                 std::vector<std::string> l;
                 if (!UiSavePartial(UiSaveTarget(), &l)) res = "save refused";

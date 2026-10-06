@@ -3641,7 +3641,7 @@ float3 Emulsion(float3 d, float3 nz, float amt, float sdr,
     return max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
 }
 
-// Uniform disc, 19 taps (centre + 6 at r/2 + 12 at r): the circle of confusion
+// Uniform disc, 31 taps (centre + 6/10/14 at 0.41/0.71/0.91 r): the circle of confusion
 // of a defocused lens is a flat disc, not a Gaussian, which is why a defocused
 // hairline becomes a soft band of the same darkness spread wider rather than
 // a faint smear. Bilinear taps between texels make it smoother than its count.
@@ -4688,8 +4688,13 @@ R"hlsl(
                 float fj = (float)j;
                 float s0 = PHash21(float2(tq * 1.7 + 3.3, fj * 7.1 + 1.3));
                 if (s0 > saturate(pp3.z)) continue;
+                // The sideways drift runs on the time INSIDE this slot's window (up to
+                // +-3 px/s over per*3 s). It used to run on the total uptime t, so the
+                // offset grew to +-3t px and the scratches left the frame for good:
+                // all on screen in a short shot, ~12% after an hour, ~0.5% after a day
+                // (review 2026-10-04 R13).
                 float xc = PHash21(float2(tq + 13.7, fj * 2.9)) * Wx
-                         + (PHash21(float2(tq + 19.1, fj * 5.3)) - 0.5) * 6.0 * t
+                         + (PHash21(float2(tq + 19.1, fj * 5.3)) - 0.5) * 6.0 * (ph * per * 3.0)
                          + 2.0 * sin(P.y * 0.004 + s0 * 6.2831853);
                 float wd = 0.35 + 0.80 * PHash21(float2(tq + 23.3, fj * 3.7));
                 float y0 = PHash21(float2(tq + 29.9, fj * 11.3)) * Hy * 0.6;

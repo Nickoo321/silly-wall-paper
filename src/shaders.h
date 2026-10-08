@@ -2088,21 +2088,23 @@ R"hlsl(
     // ---- DYE THE DARK MASSES (brief AG / AM) -----------------------------
     // TRACE (2026-09-22, branch dye4) -- where a dark-mass pixel gets its
     // final colour in ink_mode=water, end to end:
-    //   1. src\shaders.h, acid display literal, ~line 2096:
+    //   1. src\shaders.h, acid display literal, further down past this block:
     //      `float3 col = lerp(inkC, oilC, alpha);`  -- inside a mass the oil
     //      field is BELOW the threshold, so alpha -> 0 and the pixel IS inkC.
-    //   2. same file, ~line 1618:  `if (LA_INK_WATER > 0.5) inkC = InkWater(C0,..)`
+    //   2. same file, top of the LIQUID_ACID block ("restyle the parity colour
+    //      C as INK"): `if (LA_INK_WATER > 0.5) inkC = InkWater(C0,..)`
     //      LA_INK_WATER = (ink_mode == water) (src\acid_slots.h).
     //      acid-rise-12 sets ink_mode=water, so the whole `else` bands branch
     //      under it is dead code for this preset.
-    //   3. InkWater (~line 919) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
+    //   3. InkWater() (the shared INK block) returns
+    //      `lerp(ikPaper.rgb, tint*.., op)`. In a
     //      mass the sim dye density is ~0, so op ~= 0 and the pixel is
     //      ikPaper.rgb = [ink] paper_color = 0 0 0. THAT is the black.
     //   4. laInk[] (= effInk, the ramp the first two attempts dyed on the CPU)
     //      is read in exactly TWO places in this whole shader: the bands
-    //      branch at ~line 1634 (dead here) and the toe_tint lift at ~line
-    //      2589, gated on LA_TOE_TINT = toe_tint, which acid-rise-12 leaves at its
-    //      0 default. So dyeing effInk could not change one bit of this preset
+    //      branch's `rampC` (dead here) and the toe_tint lift (the
+    //      `if (LA_TOE_TINT > 0.001)` block), gated on LA_TOE_TINT = toe_tint,
+    //      which acid-rise-12 leaves at its 0 default. So dyeing effInk could not change one bit of this preset
     //      -- which is what the byte-identical four-hue sheet was measuring,
     //      and why both earlier fixes read delta 0.
     // So the dye is applied HERE, on inkC, as a deep translucent wax:

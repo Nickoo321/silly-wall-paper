@@ -401,8 +401,10 @@ float Smooth(float x) {
 // ---- the absorbed conductor transition (was moods.cpp LerpLook/FlipDiscrete)
 float L(float a, float b, float t) { return a + (b - a) * t; }
 
-// Whitelisted look floats -- lerped across the whole transition. Everything
-// not listed here (bools, ints, palette array) flips at the midpoint.
+// Whitelisted look floats -- lerped across the whole transition. FlipDiscrete's
+// fields (bools, ints, palette array) flip at t = 0.4. Every other field
+// (gravity*, post.*, [mirror], ...) keeps the from-stage value and snaps at t = 1,
+// when FinishLerp composes the stage exactly (review 2026-10-04 U37).
 void LerpLook(FluidConfig& o, const FluidConfig& a, const FluidConfig& b, float t) {
     o.densityDissipation  = L(a.densityDissipation,  b.densityDissipation,  t);
     o.velocityDissipation = L(a.velocityDissipation, b.velocityDissipation, t);
@@ -451,7 +453,7 @@ void LerpLook(FluidConfig& o, const FluidConfig& a, const FluidConfig& b, float 
     o.hsOffTime           = L(a.hsOffTime,           b.hsOffTime,           t);
 }
 
-// Discrete look fields -- flipped at the transition midpoint.
+// Discrete look fields -- flipped at t = 0.4 (LERP_SHIFT -> LERP_EMIT, as the hue bridge lands).
 void FlipDiscrete(FluidRenderer& r, const FluidConfig& t) {
     FluidConfig& c = r.Config();
     c.colorful           = t.colorful;
@@ -1765,12 +1767,19 @@ void CycleSetEnabled(bool on, bool persist) {
             CaptureUserShell();
             if (!s_rngSeeded) SeedRng();
             // whatever is on screen is not a stage: leave it by a fade
-            const int start = Valid(s_saved) && s_cur < 0 ? s_saved : PickNext();
+            int start = Valid(s_saved) && s_cur < 0 ? s_saved : PickNext();
+            // s_cur is -1 below, so BeginSwitch refuses an overlay (nothing to fold) and
+            // the director sat idle: start on the next look stage instead, as CycleBoot
+            // does, and let a switch that is still refused retry at the next tick
+            // (review 2026-10-04 U19)
+            for (int k = 0; k < (int)s_cfg.stages.size() && IsOverlay(start); k++)
+                start = (start + 1) % (int)s_cfg.stages.size();
             s_cur = -1;
-            if (Valid(start)) {
+            if (Valid(start) && !IsOverlay(start)) {
                 g_cycleActive = true;
                 s_phase = CYCLE_DWELL;
                 s_dwellT = 0.0f;
+                s_dwellTarget = 0.0f;
                 Log("[cycle] on\n");
                 BeginSwitch(*g_renderer, start);
             }

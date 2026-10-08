@@ -731,10 +731,32 @@ bool UiFileHasLookSection(const std::wstring& path) {
     return n > 0;
 }
 
+// Does the preset or its [meta] base chain (PresetCarriesLook's walk) carry one of the
+// overlay's own sections ([meta] aside)? Then the apply replaced the overlay's values.
+static bool ChainCarriesOverlay(const std::vector<std::wstring>& chain, const std::wstring& overlay) {
+    std::vector<wchar_t> names(4096);
+    const DWORD n = GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), overlay.c_str());
+    for (DWORD p = 0; p < n && names[p]; p += (DWORD)wcslen(&names[p]) + 1) {
+        if (!_wcsicmp(&names[p], L"meta")) continue;
+        wchar_t buf[64] = {};
+        for (const std::wstring& f : chain)
+            if (GetPrivateProfileSectionW(&names[p], buf, 64, f.c_str()) > 0) return true;
+    }
+    return false;
+}
+
 void UiNotifyPresetApplied(const std::wstring& path) {
     if (UiFileHasLookSection(path)) {
         s_activePreset = path;
-        s_overlays.clear();
+        // A look preset merges over the live config, so an overlay it does not carry stays
+        // on screen: it stays in the list too, or the header dropped it and counted its
+        // keys as changes (review 2026-10-04 U28)
+        std::vector<std::wstring> chain = PresetBaseChain(path);
+        chain.push_back(path);
+        for (size_t k = 0; k < s_overlays.size();) {
+            if (ChainCarriesOverlay(chain, s_overlays[k])) s_overlays.erase(s_overlays.begin() + k);
+            else k++;
+        }
     } else {
         // overlay (full path): one per family ("Mirror - quad" replaces "Mirror - off")
         std::wstring name = Stem(path);

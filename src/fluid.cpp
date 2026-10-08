@@ -5889,6 +5889,16 @@ void FluidRenderer::StepCameraRig(float dt) {
     // jump is eased in StepHueField, so they re-form over a second rather
     // than cutting.
     m_mixPhaseTarget += 3.0f + rf() * 5.0f;
+    // ...which only ever grows: past ~1000 both move down by the SAME multiple of
+    // 20*pi, so the glide between them is untouched and every sine that reads the
+    // phase (m and 0.7*m: 20*pi is a whole turn of both) is unchanged. Only the
+    // value-noise offset of the seed rows jumps, on the move that re-lays them
+    // anyway (review 2026-10-04 U33).
+    if (m_mixPhaseTarget > 1000.0f) {
+        const float wrap = 62.831853f * floorf(m_mixPhase / 62.831853f);
+        m_mixPhase -= wrap;
+        m_mixPhaseTarget -= wrap;
+    }
     m_lidTargX = (rf() * 2.0f - 1.0f) * 0.10f;
     m_lidTargY = (rf() * 2.0f - 1.0f) * 0.08f;
     m_lidTargR = (rf() * 2.0f - 1.0f) * 0.9f;

@@ -2433,17 +2433,24 @@ static void SaveCurrentAsPreset() {
     // ini = live state (the clocks' base). Cycling: in memory only, as in ApplyPreset --
     // the composed stage is not the user's own base (review 2026-10-04 R4).
     if (g_renderer && !g_cycleActive) SaveFullConfig(snap);
-    for (int n = 1; n < 100; n++) {
+    wchar_t name[64] = {};
+    for (int n = 1; n < 100 && !name[0]; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
-        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            if (g_renderer) WriteConfigToIni(path, snap, false);
-            if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
-            wchar_t msg[128];
-            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
-            ShowTrayBalloon(L"Preset saved", msg);
-            return;
-        }
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) swprintf_s(name, L"Preset %d", n);
     }
+    // Preset 1..99 all taken: a timestamped name, so a save always lands
+    // (review 2026-10-04 U15).
+    if (!name[0]) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        swprintf_s(name, L"Preset %04u%02u%02u-%02u%02u%02u", st.wYear, st.wMonth, st.wDay,
+                   st.wHour, st.wMinute, st.wSecond);
+        swprintf_s(path, L"%s\\%s.ini", dir, name);
+    }
+    if (g_renderer) WriteConfigToIni(path, snap, false);
+    if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
+    wchar_t msg[160];
+    swprintf_s(msg, L"Saved as \"%s\" — rename the file in the presets folder if you like.", name);
+    ShowTrayBalloon(L"Preset saved", msg);
 }
 
 // wrappers for the scenes window (the statics above stay file-local)

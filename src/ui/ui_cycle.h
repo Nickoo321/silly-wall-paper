@@ -15,6 +15,8 @@ bool   UiCycleIsPtr(const void* p);  // one of the four above (pointer-exception
 float  UiCycleDefault(const void* p);// code default for one of the four
 void   UiCycleSetEnabled(bool on);   // persists + starts / lets go of the director
 bool   UiCycleOn();                  // the director is running
+void   UiCycleNoteUserPeak(float peak);    // peak / gamut edited by the user while cycling
+void   UiCycleNoteUserGamut(int gamut);
 
 std::wstring UiPresetsDir();         // the one preset folder (%APPDATA%\FluidWallpaper\presets)
 void   UiPresetsRescan();            // after a Save / Save as (no-op: nothing caches it)
@@ -69,6 +71,9 @@ void         UiCycleReplaceFile(const std::wstring& oldPath, const std::wstring&
 // composed base of the current stage (what "dirty" is measured against), its file, revert
 bool         UiCycleStageBase(FluidConfig& out);
 std::wstring UiCycleStageFile();
+// the running stage composes a stage base / oil_layout / scheme_hue_period its file does not
+// name: "Save as, only my changes" saves self-contained instead (review 2026-10-04 R17)
+bool         UiCycleStageComposesBeyondFile();
 void         UiCycleRevertStage();
 // window open => dwell timer paused (auto-resume after 10 min without input); close => resume
 void         UiCyclePauseForEditing();

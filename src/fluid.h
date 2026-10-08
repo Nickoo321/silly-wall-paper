@@ -1613,6 +1613,20 @@ public:
     // try again; the caller backs off and retries.
     bool TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg);
     bool TryReattach(HWND hwnd);
+    // GPU device removed / reset (driver update or crash / TDR, Win+Ctrl+Shift+B), review
+    // 2026-10-04 R3. With SetSurviveDeviceLoss(true) (the live wallpaper; the
+    // --test-device-lost shot) a device-loss HRESULT no longer reaches Fail(): it raises
+    // DeviceLost(), the frame path stops touching the GPU, and the caller rebuilds with
+    // Shutdown() + TryInit() (a loss DURING that TryInit makes it return false). Off (a
+    // plain --shot) a loss stays fatal, so a headless run cannot hang on it.
+    void SetSurviveDeviceLoss(bool on) { m_surviveDeviceLoss = on; }
+    bool DeviceLost() const { return m_deviceLost; }
+    HRESULT DeviceLostHr() const { return m_deviceLostHr; }   // the HRESULT that showed it
+    bool TryInitOffscreen(int width, int height, const FluidConfig& cfg);   // headless TryInit
+    bool SimulateDeviceRemoved();   // --test-device-lost: ID3D12Device5::RemoveDevice()
+    // --shot-time0: start the master clock at an uptime of `seconds`, so a headless shot can
+    // show what a look does after hours of running (time-driven effects, float precision).
+    void SetClock(double seconds) { m_timeD = seconds; m_time = (float)seconds; }
     // Headless capture mode (--shot): device WITHOUT a swap chain, no window.
     // The display pass renders into an FP16 (R16G16B16A16_FLOAT) offscreen RT
     // of the requested size; CaptureOffscreen() reads it back as linear scRGB.
@@ -1823,6 +1837,30 @@ public:
         m_mirrorPeakNits = peakNits;
         m_mirrorHdrActive = hdrActive;   // the MIRROR monitor's own Windows HDR state
     }
+    // [hdr] sdr_gamut (HDR OFF only; HDR on never reads it): how the configured
+    // gamut is put on an SDR desktop. 0 = plain sRGB (no stretch), 1 = MATCH HDR:
+    // convert the gamut to the panel's own primaries (xy of R,G,B from
+    // DXGI_OUTPUT_DESC1 = EDID; a wide-gamut panel shows SDR values in its native
+    // gamut, so this lands on the colours HDR shows), 2 = the HDR stretch itself,
+    // clipped by DWM (a monitor in an sRGB-clamped SDR mode).
+    // sdrManaged: Windows colour-manages this SDR desktop (auto colour management /
+    // "wide colour gamut" mode): DWM then reads our scRGB as BT.709 and maps it to the
+    // panel itself, exactly as under HDR, so the HDR stretch is sent and sdr_gamut is
+    // not used (the panel matrix would be converted a second time).
+    void SetSdrGamut(int mode, const float primXY[6], bool primValid, bool sdrManaged) {
+        m_sdrGamutMode = mode;
+        m_sdrManaged = sdrManaged;
+        m_panelPrimValid = primValid && primXY;
+        if (m_panelPrimValid) memcpy(m_panelPrim, primXY, sizeof(m_panelPrim));
+    }
+    void SetMirrorPrimaries(const float primXY[6], bool primValid, bool sdrManaged) {
+        m_mirrorSdrManaged = sdrManaged;
+        m_mirrorPrimValid = primValid && primXY;
+        if (m_mirrorPrimValid) memcpy(m_mirrorPrim, primXY, sizeof(m_mirrorPrim));
+    }
+    // The gamut-3 matrix (row-major 3x3) from gamutMode (1 P3, 2 BT.2020) to the
+    // panel primaries, D65 both sides; false when the primaries are not usable.
+    static bool SdrMatchMatrix(int gamutMode, const float primXY[6], float out[9]);
 
     // mood-conductor primitives
     // Directed hue-shift glide to targetDeg over durationSec; holds at the
@@ -1865,6 +1903,16 @@ private:
     // records its HRESULT in m_initHr and unwinds instead of calling Fail().
     bool     m_softInit = false;
     HRESULT  m_initHr = S_OK;
+    // Device loss (review 2026-10-04 R3): see SetSurviveDeviceLoss(). HR() routes every
+    // failure through HrFailed(); m_recoveringDevice stays set from a loss until a TryInit
+    // succeeds, and makes ANY failure of that rebuild a retry instead of a fatal box.
+    bool     m_surviveDeviceLoss = false;
+    bool     m_deviceLost = false;
+    bool     m_recoveringDevice = false;
+    HRESULT  m_deviceLostHr = S_OK;
+    void HrFailed(const char* what, HRESULT hr);
+    bool IsDeviceLossHr(HRESULT hr) const;
+    void NoteDeviceLost(const char* what, HRESULT hr);
     void CreateDevice(HWND hwnd, int width, int height);
     void CreateOffscreenTarget();      // headless render target + readback
     // One display/gradient graphics PSO from `src`, optionally with defines.
@@ -1886,7 +1934,7 @@ private:
     Tex  CreateTex(int w, int h, DXGI_FORMAT fmt, int heapSlot);
     void Transition(Tex& t, D3D12_RESOURCE_STATES to);
     void UavBarrier(ID3D12Resource* res);
-    void BeginFrame();
+    bool BeginFrame();                 // false = device lost: record nothing (R3)
     void EndFrameAndPresent();
     void EndFrameNoPresent();          // SimOnlyStep: execute + fence, no Present
     void FrameSim(float dt, const FrameInput& input);   // the sim half of Frame()
@@ -1931,7 +1979,7 @@ private:
     void RenderMirror();
     void BuildDisplayConstants(float out[32]);
     void BuildDisplayConstantsEx(float out[32], int w, int h, float sdrScale, float peakNits,
-                                 bool hdrActive);
+                                 bool hdrActive, const float* primXY, bool sdrManaged);
     void MaybeRenderAnalyzer();
     void CreateAnalyzerResources();
     void RenderGradient(float timeSec);
@@ -2066,7 +2114,21 @@ private:
     FluidConfig m_cfg;
     int m_width = 0, m_height = 0;
     int m_simW = 0, m_simH = 0, m_dyeW = 0, m_dyeH = 0;
+    // The master clock. As a lone float accumulator it lost the frame step as it grew: at
+    // 144 fps it ran 12.5% fast from 2^15 s and stopped for good at 2^17 s (36.4 h of
+    // rendering), and every animator, readback gate and the OLED pixel-shift orbit stopped
+    // with it (review 2026-10-04 R1). The double carries the time now; m_time is the float
+    // view everything reads. Below kClockFloatSec the float is still summed exactly as
+    // before (the double follows it), so every --shot run and identity baseline stays bit
+    // for bit; above it m_time is the rounded double: right on average for ever, in steps
+    // of one float ulp (1 ms at 3 h, 16 ms at 36 h, 62 ms at 6 days).
+    static constexpr double kClockFloatSec = 8192.0;
+    double m_timeD = 0.0;
     float m_time = 0.0f;
+    void AdvanceClock(float dt) {
+        if (m_timeD < kClockFloatSec) { m_time += dt; m_timeD = (double)m_time; }
+        else { m_timeD += (double)dt; m_time = (float)m_timeD; }
+    }
     float m_emitScale = 1.0f;   // dt / (1/60): keeps per-second dye emission fps-independent
     float m_sdrScale = 1.0f;
     float m_globalHue = 0.0f;
@@ -2178,6 +2240,10 @@ private:
     int   m_mirrorW = 0, m_mirrorH = 0;
     float m_mirrorSdrScale = 1.0f, m_mirrorPeakNits = 0.0f;
     bool  m_mirrorHdrActive = false;
+    int   m_sdrGamutMode = 1;            // [hdr] sdr_gamut (shell)
+    float m_panelPrim[6] = {}, m_mirrorPrim[6] = {};
+    bool  m_panelPrimValid = false, m_mirrorPrimValid = false;
+    bool  m_sdrManaged = false, m_mirrorSdrManaged = false;
     bool  m_mirrorBroken = false;
     struct Wanderer {
         float x, y, heading, turn;   // random-wander state

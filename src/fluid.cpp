@@ -16,9 +16,53 @@ using Microsoft::WRL::ComPtr;
 extern void Fail(const char* what, HRESULT hr);   // main.cpp
 extern void WpLog(const char* fmt, ...);          // main.cpp: rolling log file
 extern void ForegroundDesc(char* out, size_t cap);
-#define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) Fail(#expr, _hr); } while (0)
+// Every failed HRESULT goes through HrFailed(): Fail() as always, EXCEPT a GPU device
+// loss (driver update / crash / TDR, Win+Ctrl+Shift+B) in a renderer told to survive
+// one -- that only raises m_deviceLost and the caller rebuilds (review 2026-10-04 R3).
+// Members only: every HR() site is inside a FluidRenderer method.
+#define HR(expr) do { HRESULT _hr = (expr); if (FAILED(_hr)) HrFailed(#expr, _hr); } while (0)
 
-// Must match cbuffer CB in shaders.h (22 DWORDs).
+// Thrown by HrFailed() only while TryInit/TryReattach run (m_softInit) and caught
+// there: a device that dies half-way through CreateDevice leaves null objects behind
+// that the next lines would use, and unwinding is the one way out that cannot miss
+// one. Nothing else in the renderer throws (review 2026-10-04 R3).
+struct DeviceLostInInit { HRESULT hr; };
+
+bool FluidRenderer::IsDeviceLossHr(HRESULT hr) const {
+    if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET ||
+        hr == DXGI_ERROR_DEVICE_HUNG || hr == DXGI_ERROR_DRIVER_INTERNAL_ERROR)
+        return true;
+    return m_device && FAILED(m_device->GetDeviceRemovedReason());
+}
+
+// Logged once per loss; everything after it in the frame path returns early.
+void FluidRenderer::NoteDeviceLost(const char* what, HRESULT hr) {
+    if (m_deviceLost) return;
+    m_deviceLost = true;
+    m_deviceLostHr = hr;
+    m_recoveringDevice = true;
+    const HRESULT why = m_device ? m_device->GetDeviceRemovedReason() : S_OK;
+    WpLog("GPU device lost at %s: hr=0x%08lX, removed reason 0x%08lX -- tearing the renderer "
+          "down and rebuilding it", what, (unsigned long)hr, (unsigned long)why);
+    printf("GPU device lost at %s (hr=0x%08lX, reason 0x%08lX)\n",
+           what, (unsigned long)hr, (unsigned long)why);
+}
+
+void FluidRenderer::HrFailed(const char* what, HRESULT hr) {
+    const bool lost = IsDeviceLossHr(hr);
+    // (Re)creation under TryInit: a loss -- or, while recovering from one, ANY failure
+    // (the driver can still be restarting) -- makes TryInit return false and the
+    // caller's backoff try again, instead of a fatal box.
+    if (m_surviveDeviceLoss && m_softInit && (lost || m_recoveringDevice)) {
+        if (lost) NoteDeviceLost(what, hr);
+        else WpLog("device rebuild: %s failed hr=0x%08lX (will retry)", what, (unsigned long)hr);
+        throw DeviceLostInInit{ hr };
+    }
+    if (!m_surviveDeviceLoss || !lost) Fail(what, hr);   // unchanged for everything else
+    NoteDeviceLost(what, hr);
+}
+
+// Must match cbuffer CB in shaders.h (24 DWORDs, see the static_assert below).
 struct SimCB {
     float texelW, texelH;
     float dt;
@@ -170,21 +214,47 @@ bool FluidRenderer::CreateSwapChainSoft(HWND hwnd, const DXGI_SWAP_CHAIN_DESC1& 
 bool FluidRenderer::TryInit(HWND hwnd, int width, int height, const FluidConfig& cfg) {
     m_softInit = true;
     m_initHr = S_OK;
-    InitCommon(hwnd, width, height, cfg);
+    try {
+        InitCommon(hwnd, width, height, cfg);
+    } catch (const DeviceLostInInit& e) {   // review 2026-10-04 R3: see HrFailed()
+        m_initHr = e.hr;
+    }
     m_softInit = false;
     if (FAILED(m_initHr)) {
         Shutdown();       // releases whatever CreateDevice managed to build
         return false;
     }
+    m_recoveringDevice = false;   // a device stands again: failures are fatal as before
     return true;
+}
+
+// The headless twin of TryInit, for the --test-device-lost self-test: the same
+// recovery the live loop runs (Shutdown, then a soft init with the same config).
+bool FluidRenderer::TryInitOffscreen(int width, int height, const FluidConfig& cfg) {
+    m_headless = true;
+    return TryInit(nullptr, width, height, cfg);
 }
 
 bool FluidRenderer::TryReattach(HWND hwnd) {
     m_softInit = true;
     m_initHr = S_OK;
-    Reattach(hwnd);
+    try {
+        Reattach(hwnd);
+    } catch (const DeviceLostInInit& e) {   // review 2026-10-04 R3: see HrFailed()
+        m_initHr = e.hr;
+    }
     m_softInit = false;
-    return SUCCEEDED(m_initHr);
+    // a lost device cannot be reattached: the caller's DeviceLost() check rebuilds it
+    return SUCCEEDED(m_initHr) && !m_deviceLost;
+}
+
+// --test-device-lost: the D3D12 way to fake a removal (driver crash / update) on our
+// own device only, so the recovery can be exercised headless (review 2026-10-04 R3).
+bool FluidRenderer::SimulateDeviceRemoved() {
+    ComPtr<ID3D12Device5> d5;
+    if (!m_device || FAILED(m_device.As(&d5))) return false;
+    d5->RemoveDevice();
+    return true;
 }
 
 void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
@@ -206,6 +276,15 @@ void FluidRenderer::CreateDevice(HWND hwnd, int width, int height) {
     DXGI_ADAPTER_DESC1 adesc = {};
     adapter->GetDesc1(&adesc);
     printf("GPU: %ls\n", adesc.Description);
+    // Rebuilding after a device loss while the driver is being replaced, the only
+    // adapter left can be the Microsoft Basic Render Driver: a 4K sim on the CPU.
+    // Not ready yet -- the caller's backoff tries again (review 2026-10-04 R3).
+    if (m_softInit && m_recoveringDevice && (adesc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+        WpLog("device rebuild: only the software adapter (%ls) is there, retrying later",
+              adesc.Description);
+        m_initHr = DXGI_ERROR_NOT_CURRENTLY_AVAILABLE;
+        return;
+    }
 
     HR(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_device)));
 
@@ -487,7 +566,7 @@ void FluidRenderer::MakeGraphicsPso(const char* src,
 // SetResolutions does, then compile. Both branches are no-ops once built, so
 // this is safe to call on every preset apply and every checkbox click.
 void FluidRenderer::EnsureLookResources() {
-    if (!m_device) return;
+    if (!m_device || m_deviceLost) return;   // lost: the rebuild compiles it (R3)
     const bool needAcid = m_cfg.acid.enabled && !m_psoLiquidAcid;
     const bool needInk  = m_cfg.ink.enabled  && !m_psoInk;
     m_lastLookCompileMs = 0.0;
@@ -496,6 +575,7 @@ void FluidRenderer::EnsureLookResources() {
     QueryPerformanceFrequency(&qf);
     QueryPerformanceCounter(&q0);
     WaitForGpuIdle();
+    if (m_deviceLost) return;
     if (needAcid) {
         MakeGraphicsPso(kDisplaySrc, m_psoLiquidAcid, kAcidSlotMacros);
         m_acidSeeded = false;          // Frame() reseeds under the current keys
@@ -692,20 +772,38 @@ void FluidRenderer::UavBarrier(ID3D12Resource* res) {
     m_cmd->ResourceBarrier(1, &b);
 }
 
-void FluidRenderer::BeginFrame() {
+// false = the device is lost (review 2026-10-04 R3): the caller records nothing and
+// returns; the shell sees DeviceLost() and rebuilds the renderer.
+bool FluidRenderer::BeginFrame() {
+    if (m_deviceLost) return false;
+    // Not every call on a removed device fails: after RemoveDevice() the allocator /
+    // list Reset, Close and Signal all came back S_OK and only Map() refused, so the
+    // removed reason is asked once per frame. Only by a renderer that survives the loss
+    // (live, --test-device-lost): a plain --shot never calls it (review 2026-10-04 R3).
+    if (m_surviveDeviceLoss) {
+        const HRESULT why = m_device->GetDeviceRemovedReason();
+        if (FAILED(why)) {
+            NoteDeviceLost("GetDeviceRemovedReason", why);
+            return false;
+        }
+    }
     const UINT i = m_frameIndex;
     if (m_fence->GetCompletedValue() < m_fenceValues[i]) {
         HR(m_fence->SetEventOnCompletion(m_fenceValues[i], m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);
     }
     HR(m_allocators[i]->Reset());
     HR(m_cmd->Reset(m_allocators[i].Get(), nullptr));
+    if (m_deviceLost) return false;
     ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
     m_cmd->SetDescriptorHeaps(1, heaps);
+    return true;
 }
 
 void FluidRenderer::EndFrameAndPresent() {
+    if (m_deviceLost) return;   // lost while recording: nothing to submit (R3)
     HR(m_cmd->Close());
+    if (m_deviceLost) return;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     if (m_headless) {
@@ -718,6 +816,12 @@ void FluidRenderer::EndFrameAndPresent() {
     // Present fails (not fatally) when Explorer tears our window down
     // mid-frame â€” flag it so the shell can rebuild instead of dying.
     HRESULT phr = m_swapChain->Present(1, 0);
+    // A removed / reset device is not a lost window: no reattach onto the dead device
+    // and no Signal on its queue -- the shell rebuilds the device instead (R3).
+    if (FAILED(phr) && m_surviveDeviceLoss && IsDeviceLossHr(phr)) {
+        NoteDeviceLost("m_swapChain->Present", phr);
+        return;
+    }
     if (FAILED(phr)) {
         if (!m_presentBroken)
             printf("Present failed (0x%08lX) - wallpaper window lost, awaiting reattach\n",
@@ -727,6 +831,10 @@ void FluidRenderer::EndFrameAndPresent() {
     if (m_mirrorChain) {
         // interval 0: the main chain already provides vsync pacing
         HRESULT mhr = m_mirrorChain->Present(0, 0);
+        if (FAILED(mhr) && m_surviveDeviceLoss && IsDeviceLossHr(mhr)) {
+            NoteDeviceLost("m_mirrorChain->Present", mhr);
+            return;
+        }
         if (FAILED(mhr)) m_mirrorBroken = true;
     }
     m_fenceValues[m_frameIndex] = m_nextFence;
@@ -741,7 +849,9 @@ void FluidRenderer::EndFrameAndPresent() {
 // value comes from the same m_nextFence counter, so the coverage/velocity
 // readbacks that stamped m_nextFence this frame see it signalled as usual.
 void FluidRenderer::EndFrameNoPresent() {
+    if (m_deviceLost) return;   // R3, as in EndFrameAndPresent
     HR(m_cmd->Close());
+    if (m_deviceLost) return;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     m_fenceValues[m_frameIndex] = m_nextFence;
@@ -999,6 +1109,9 @@ void FluidRenderer::EnsurePostTex() {
     m_postState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     HR(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, m_postState,
                                          nullptr, IID_PPV_ARGS(&m_postTex)));
+    // a device lost right here (survive mode: HR only flags it) leaves no texture; no views
+    // on null and no "done" stamp, the frame's post pass skips, the rebuild makes it again
+    if (!m_postTex) return;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
     rtv.ptr += (SIZE_T)(kFrames * 2 + 1) * m_rtvStride;
     m_device->CreateRenderTargetView(m_postTex.Get(), nullptr, rtv);
@@ -1020,7 +1133,7 @@ void FluidRenderer::EnsurePostTex() {
 
 D3D12_CPU_DESCRIPTOR_HANDLE FluidRenderer::BeginPostTarget() {
     EnsurePostTex();
-    if (m_postState != D3D12_RESOURCE_STATE_RENDER_TARGET) {
+    if (m_postTex && m_postState != D3D12_RESOURCE_STATE_RENDER_TARGET) {   // no barrier on null
         D3D12_RESOURCE_BARRIER b = {};
         b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         b.Transition.pResource = m_postTex.Get();
@@ -1039,6 +1152,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE FluidRenderer::BeginPostTarget() {
 // Radii are authored in px at 1440p and scaled with the frame height, so the
 // preview and the panel agree; the shader takes them in texels of this frame.
 void FluidRenderer::RunPostPass(D3D12_CPU_DESCRIPTOR_HANDLE dst) {
+    if (!m_postTex) return;              // lost the device while making it: nothing to run on
     D3D12_RESOURCE_BARRIER b = {};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     b.Transition.pResource = m_postTex.Get();
@@ -1349,6 +1463,7 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
 
     HR(m_allocators[0]->Reset());
     HR(m_cmd->Reset(m_allocators[0].Get(), nullptr));
+    if (m_deviceLost) return false;   // R3: only reachable under --test-device-lost
 
     D3D12_RESOURCE_BARRIER b = {};
     b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1372,9 +1487,11 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
     m_cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
     HR(m_cmd->Close());
+    if (m_deviceLost) return false;
     ID3D12CommandList* lists[] = { m_cmd.Get() };
     m_queue->ExecuteCommandLists(1, lists);
     WaitForGpuIdle();
+    if (m_deviceLost) return false;
 
     uint8_t* data = nullptr;
     D3D12_RANGE range = { 0, (SIZE_T)m_shotPitch * m_height };
@@ -1396,13 +1513,70 @@ bool FluidRenderer::CaptureOffscreen(std::vector<float>& out) {
 }
 
 void FluidRenderer::BuildDisplayConstants(float out[32]) {
-    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits, m_hdrActive);
+    BuildDisplayConstantsEx(out, m_width, m_height, m_sdrScale, m_cfg.hdrPeakNits, m_hdrActive,
+                            m_panelPrimValid ? m_panelPrim : nullptr, m_sdrManaged);
+}
+
+// RGB -> XYZ of a set of primaries (xy of R, G, B) with a D65 white. false when
+// the triangle is degenerate.
+static bool PrimariesToXyz(const float p[6], double m[9]) {
+    double c[9];
+    for (int k = 0; k < 3; k++) {
+        const double x = p[2 * k], y = p[2 * k + 1];
+        if (!(y > 1e-4)) return false;
+        c[k] = x / y; c[3 + k] = 1.0; c[6 + k] = (1.0 - x - y) / y;
+    }
+    const double wx = 0.3127, wy = 0.3290;
+    const double W[3] = { wx / wy, 1.0, (1.0 - wx - wy) / wy };
+    const double det = c[0] * (c[4] * c[8] - c[5] * c[7]) - c[1] * (c[3] * c[8] - c[5] * c[6]) +
+                       c[2] * (c[3] * c[7] - c[4] * c[6]);
+    if (fabs(det) < 1e-9) return false;
+    const double inv[9] = {
+        (c[4] * c[8] - c[5] * c[7]) / det, (c[2] * c[7] - c[1] * c[8]) / det, (c[1] * c[5] - c[2] * c[4]) / det,
+        (c[5] * c[6] - c[3] * c[8]) / det, (c[0] * c[8] - c[2] * c[6]) / det, (c[2] * c[3] - c[0] * c[5]) / det,
+        (c[3] * c[7] - c[4] * c[6]) / det, (c[1] * c[6] - c[0] * c[7]) / det, (c[0] * c[4] - c[1] * c[3]) / det };
+    double S[3];
+    for (int r = 0; r < 3; r++) S[r] = inv[3 * r] * W[0] + inv[3 * r + 1] * W[1] + inv[3 * r + 2] * W[2];
+    for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) m[3 * r + k] = c[3 * r + k] * S[k];
+    return true;
+}
+
+// [hdr] sdr_gamut = 1: the configured gamut (1 P3, 2 BT.2020) expressed in the
+// PANEL's primaries. A wide-gamut panel shows an SDR desktop's values in its
+// native gamut, so sending these coordinates puts the same chromaticity on the
+// glass that HDR does (colours outside the panel clip in DWM, as they clip in
+// the monitor under HDR). Rows sum to 1: white stays white.
+bool FluidRenderer::SdrMatchMatrix(int gamutMode, const float primXY[6], float out[9]) {
+    static const float kP3[6]   = { 0.680f, 0.320f, 0.265f, 0.690f, 0.150f, 0.060f };
+    static const float k2020[6] = { 0.708f, 0.292f, 0.170f, 0.797f, 0.131f, 0.046f };
+    if (!primXY || gamutMode < 1 || gamutMode > 2) return false;
+    // plausibility: a real panel sits between a little under sRGB and BT.2020
+    for (int k = 0; k < 6; k++) if (!(primXY[k] > 0.01f && primXY[k] < 0.90f)) return false;
+    const double area = 0.5 * fabs(primXY[0] * (primXY[3] - primXY[5]) + primXY[2] * (primXY[5] - primXY[1]) +
+                                   primXY[4] * (primXY[1] - primXY[3]));
+    if (area < 0.085 || area > 0.225) return false;       // sRGB 0.112, BT.2020 0.212
+    double src[9], pan[9];
+    if (!PrimariesToXyz(gamutMode == 2 ? k2020 : kP3, src) || !PrimariesToXyz(primXY, pan)) return false;
+    const double det = pan[0] * (pan[4] * pan[8] - pan[5] * pan[7]) - pan[1] * (pan[3] * pan[8] - pan[5] * pan[6]) +
+                       pan[2] * (pan[3] * pan[7] - pan[4] * pan[6]);
+    if (fabs(det) < 1e-9) return false;
+    const double inv[9] = {
+        (pan[4] * pan[8] - pan[5] * pan[7]) / det, (pan[2] * pan[7] - pan[1] * pan[8]) / det, (pan[1] * pan[5] - pan[2] * pan[4]) / det,
+        (pan[5] * pan[6] - pan[3] * pan[8]) / det, (pan[0] * pan[8] - pan[2] * pan[6]) / det, (pan[2] * pan[3] - pan[0] * pan[5]) / det,
+        (pan[3] * pan[7] - pan[4] * pan[6]) / det, (pan[1] * pan[6] - pan[0] * pan[7]) / det, (pan[0] * pan[4] - pan[1] * pan[3]) / det };
+    for (int r = 0; r < 3; r++)
+        for (int k = 0; k < 3; k++)
+            out[3 * r + k] = (float)(inv[3 * r] * src[k] + inv[3 * r + 1] * src[3 + k] + inv[3 * r + 2] * src[6 + k]);
+    return true;
 }
 
 // hdrActive = the Windows HDR state of the monitor this frame goes to (the
-// primary's for the wallpaper, the second monitor's own for the mirror).
+// primary's for the wallpaper, the second monitor's own for the mirror);
+// primXY = that monitor's primaries (null = unknown); sdrManaged = Windows
+// colour-manages its SDR desktop (see SetSdrGamut).
 void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
-                                            float sdrScale, float peakNits, bool hdrActive) {
+                                            float sdrScale, float peakNits, bool hdrActive,
+                                            const float* primXY, bool sdrManaged) {
     // CSS-filter chain parameters. The shader evaluates them primitive by
     // primitive with a clamp after each (Chromium/Skia behaviour); see
     // kDisplaySrc. Canvas filter: saturate -> brightness -> contrast ->
@@ -1420,12 +1594,28 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
         peakGain = fmaxf(1.0f, peakNits / fmaxf(sdrWhiteNits, 1.0f));
     }
 
-    // The gamut stretch (P3 / BT.2020) only while Windows HDR is on. With HDR
-    // off the desktop is sRGB: DWM clips the stretched (negative / over-1)
-    // channels, and the panel's own SDR mode already widens sRGB, so the
-    // stretch made SDR harsher than HDR instead of equal to it (user
-    // 2026-10-03: "it should switch between BT.2020 and SDR when I toggle").
-    float gamut = hdrActive ? (float)m_cfg.gamutMode : 0.0f;
+    // HDR on: the gamut stretch (P3 / BT.2020), shown colour-accurately.
+    // HDR off: the desktop is sRGB-coded, DWM clips what leaves it, and the
+    // panel then shows those values in ITS OWN gamut. [hdr] sdr_gamut says what
+    // to send (user 2026-10-03: "it should switch between BT.2020 and SDR when
+    // I toggle"; 2026-10-04: plain sRGB alone left SDR visibly less saturated
+    // than HDR in the reds / oranges / magentas on the X27U):
+    //   1 (default) the gamut converted to the panel's primaries = the colours
+    //     HDR shows (gamut 3 + the matrix); primaries unknown -> the P3 stretch
+    //     for a BT.2020 config (X27U: mean ~0.003, worst ~0.017 u'v' at the
+    //     blue-violets), plain for a P3 config;
+    //   0 plain sRGB;   2 the HDR stretch itself, clipped (sRGB-mode monitors).
+    // An SDR desktop that Windows colour-manages (sdrManaged) is the HDR case:
+    // DWM maps our scRGB to the panel, so the stretch goes out untouched.
+    float gamut = (float)m_cfg.gamutMode;
+    float gm[9] = {};
+    if (!hdrActive && !sdrManaged && m_cfg.gamutMode > 0) {
+        if (m_sdrGamutMode == 0) gamut = 0.0f;
+        else if (m_sdrGamutMode == 1) {
+            if (SdrMatchMatrix(m_cfg.gamutMode, primXY, gm)) gamut = 3.0f;
+            else gamut = m_cfg.gamutMode == 2 ? 1.0f : 0.0f;
+        }
+    }
 
     // Cycle fade: sdrScale above is the UNFADED scale (so peakGain does not
     // grow as the frame dims); the constant the shader multiplies by carries
@@ -1436,8 +1626,8 @@ void FluidRenderer::BuildDisplayConstantsEx(float out[32], int w, int h,
                          fmaxf(m_cfg.maxBrightness, m_cfg.hdrKnee + 0.05f),
                          m_cfg.hdrSaturation, m_cfg.hdrBrightness, m_cfg.hdrContrast, hdrOn,
                          hue, m_cfg.postSaturation, m_cfg.postBrightness, m_cfg.postContrast,
-                         m_cfg.postHue, 0, 0, 0,
-                         0, 0, 0, 0,
+                         m_cfg.postHue, gm[0], gm[1], gm[3],
+                         gm[4], gm[6], gm[7], 0,
                          m_cfg.curveEnabled ? 1.0f : 0.0f,
                          m_cfg.curveCenter, m_cfg.curveWidth, m_cfg.curveHeight,
                          m_cfg.shadowFloor, m_cfg.shadowKnee, 0.0f, 0.0f };
@@ -1683,6 +1873,7 @@ bool FluidRenderer::ReadAnalyzerFrame(std::vector<float>& out) {
 
 void FluidRenderer::EnableMirror(HWND hwnd, int width, int height) {
     DisableMirror();
+    if (m_deviceLost) return;   // R3: the rebuilt device brings the mirror back
     m_mirrorW = width;
     m_mirrorH = height;
 
@@ -1713,6 +1904,11 @@ void FluidRenderer::EnableMirror(HWND hwnd, int width, int height) {
     rtv.ptr += (SIZE_T)(kFrames + 1) * m_rtvStride;
     for (UINT i = 0; i < kFrames; i++) {
         HR(m_mirrorChain->GetBuffer(i, IID_PPV_ARGS(&m_mirrorBuffers[i])));
+        if (m_deviceLost) {   // R3: no half-built mirror on a dead device
+            for (UINT k = 0; k < kFrames; k++) m_mirrorBuffers[k].Reset();
+            m_mirrorChain.Reset();
+            return;
+        }
         m_device->CreateRenderTargetView(m_mirrorBuffers[i].Get(), nullptr, rtv);
         rtv.ptr += m_rtvStride;
     }
@@ -1755,7 +1951,8 @@ void FluidRenderer::RenderMirror() {
     m_cmd->SetPipelineState(DisplayPso());
     float consts[32];
     BuildDisplayConstantsEx(consts, m_mirrorW, m_mirrorH, m_mirrorSdrScale, m_mirrorPeakNits,
-                            m_mirrorHdrActive);
+                            m_mirrorHdrActive, m_mirrorPrimValid ? m_mirrorPrim : nullptr,
+                            m_mirrorSdrManaged);
     m_cmd->SetGraphicsRoot32BitConstants(0, 32, consts, 0);
     m_cmd->SetGraphicsRootDescriptorTable(1, m_dye.read->srv);
     BindAcid();
@@ -1809,7 +2006,7 @@ void FluidRenderer::RenderGradient(float timeSec) {
 // touched: m_time, the dye and the blob population all resume untouched.
 void FluidRenderer::PresentBlack() {
     if (m_headless || !m_swapChain || m_presentBroken) return;
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost (R3)
     const UINT i = m_frameIndex;
     const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
     D3D12_RESOURCE_BARRIER b = {};
@@ -1855,10 +2052,10 @@ void FluidRenderer::ReassertColorSpace() {
 void FluidRenderer::Frame(float dt, float sdrScale, bool hdrActive, const FrameInput& input) {
     m_hdrActive = hdrActive;
     m_sdrScale = sdrScale;
-    m_time += dt;
+    AdvanceClock(dt);
     AccumFrozen(dt);   // animators.h freezes; no-op unless something is frozen
 
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost: the shell rebuilds the renderer (R3)
 
     if (m_cfg.gradientMode || m_cfg.calibratePage > 0) {
         RenderGradient(m_time);
@@ -2059,9 +2256,9 @@ void FluidRenderer::FrameSim(float dt, const FrameInput& input) {
 void FluidRenderer::SimOnlyStep(float dt) {
     if (!m_device || m_cfg.gradientMode || m_cfg.calibratePage > 0) return;
     if (m_photoMode) return;                // brief BY: no sim under a photo
-    m_time += dt;
+    AdvanceClock(dt);
     AccumFrozen(dt);
-    BeginFrame();
+    if (!BeginFrame()) return;   // device lost (R3)
     FrameSim(dt, FrameInput{});
     if (m_headless) EndFrameAndPresent();   // headless: fence + ring, no Present
     else            EndFrameNoPresent();
@@ -2653,11 +2850,19 @@ void FluidRenderer::ReportStats() {
 }
 
 void FluidRenderer::WaitForGpuIdle() {
+    // A device that never got its fence (the soft-fail TryInit path: the swap chain was
+    // refused before CreateFence) has run no command list: nothing to wait for. Without
+    // this the unwind in Shutdown() died on the null fence (review 2026-10-04 R2).
+    if (!m_queue || !m_fence || !m_fenceEvent) return;
+    // A lost device runs nothing any more, so there is nothing to wait for either, and
+    // Shutdown() must be able to release it without reaching Fail() (review 2026-10-04 R3).
+    if (m_deviceLost) return;
     const UINT64 v = m_nextFence++;
     HR(m_queue->Signal(m_fence.Get(), v));
+    if (m_deviceLost) return;
     if (m_fence->GetCompletedValue() < v) {
         HR(m_fence->SetEventOnCompletion(v, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);
     }
 }
 
@@ -2794,6 +2999,7 @@ void FluidRenderer::Shutdown() {
     m_nextFence = 1;
     m_firstFrame = true;      // re-clear sim textures + startup splat burst
     m_presentBroken = false;
+    m_deviceLost = false;     // R3: everything of the lost device is gone now
 }
 
 // ---------------------------------------------------------------------------
@@ -2845,6 +3051,7 @@ void FluidRenderer::PickSplatColor(float hueOffset, float out[3]) {
 // sim textures, and the fluid state all survive.
 void FluidRenderer::Reattach(HWND hwnd) {
     if (!m_device) return;   // suspended: the resume does a full Init instead
+    if (m_deviceLost) return;   // R3: TryReattach reports it; the shell rebuilds the device
     DisableMirror();   // its window died with the old WorkerW; shell re-enables
     WaitForGpuIdle();
     for (UINT i = 0; i < kFrames; i++) {
@@ -2884,7 +3091,7 @@ void FluidRenderer::Reattach(HWND hwnd) {
 void FluidRenderer::SetResolutions(int simRes, int dyeRes) {
     m_cfg.simRes = simRes;
     m_cfg.dyeRes = dyeRes;
-    if (!m_device) return;   // suspended: takes effect at the resume Init
+    if (!m_device || m_deviceLost) return;   // suspended / lost (R3): takes effect at the resume Init
     WaitForGpuIdle();
     m_covPending = false;
     m_readbackPending = false;
@@ -3157,7 +3364,7 @@ struct AcidParamsGPU {
     float p33[4];
     // brief AG-b: per-mass dye variation (the cbuffer was full again).
     float p34[4];
-    // brief BR: dye_core (.x); .y/.z free for BB/BH, .w for BQ.
+    // brief BR: dye_core (.x); .y/.z film_hue3_share/film_equal_load (BV), .w film_hue2_seam (BW) -- see acid_slots.h.
     float p35[4];
     // brief BU: lamp grey (p36 + p37.w) and the split tone's add (p37.xyz).
     // laP38: .x film_equal_load_patches (brief BW); .yzw grey heart (brief BX).
@@ -3498,7 +3705,11 @@ void FluidRenderer::SeedAcidBlobs() {
         b.baseR = drawR(a.bubbleMin, a.bubbleMax, a.sizeBias);
         setCol(b, (k % 3 == 0) ? 1 : 3);
         if (k > 0 && rng.f() < 0.45f) {          // cluster on an earlier bubble
-            const AcidBlob& par = m_acidBlobs[idx - 1 - (int)(rng.f() * 3.0f) % 3];
+            // same draw as ever; only an index before the first blob is clamped (with
+            // disc + web <= 1 it read heap bytes before the vector: review 2026-10-04 R12)
+            int parIdx = idx - 1 - (int)(rng.f() * 3.0f) % 3;
+            if (parIdx < 0) parIdx = 0;
+            const AcidBlob& par = m_acidBlobs[parIdx];
             float ang = rng.f(0.0f, TWO_PI);
             float d = (par.baseR + b.baseR) * rng.f(1.15f, 4.0f);
             place(b, par.x + cosf(ang) * d, par.y + sinf(ang) * d);
@@ -3703,7 +3914,7 @@ void FluidRenderer::UpdateVelocityReadback() {
     if (m_headless && m_velPending && m_time - m_lastVelTime >= kVelPeriod &&
         m_fence->GetCompletedValue() < m_velFence) {
         HR(m_fence->SetEventOnCompletion(m_velFence, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);   // R3
     }
     if (m_velPending && m_fence->GetCompletedValue() >= m_velFence &&
         (!m_headless || m_time - m_lastVelTime >= kVelPeriod)) {
@@ -5412,7 +5623,7 @@ void FluidRenderer::EnsureOilMask() {
     makeCS("CSOilMask", m_psoOilMask);
     makeCS("CSOilDrag", m_psoOilDrag);
     makeCS("CSOilDyeBlock", m_psoOilDyeBlock);
-    m_oilMaskMade = true;
+    m_oilMaskMade = m_psoOilMask && m_psoOilDrag && m_psoOilDyeBlock;   // a lost device: retry after the rebuild
 }
 
 void FluidRenderer::StepOilDrag(float dt) {
@@ -5678,6 +5889,16 @@ void FluidRenderer::StepCameraRig(float dt) {
     // jump is eased in StepHueField, so they re-form over a second rather
     // than cutting.
     m_mixPhaseTarget += 3.0f + rf() * 5.0f;
+    // ...which only ever grows: past ~1000 both move down by the SAME multiple of
+    // 20*pi, so the glide between them is untouched and every sine that reads the
+    // phase (m and 0.7*m: 20*pi is a whole turn of both) is unchanged. Only the
+    // value-noise offset of the seed rows jumps, on the move that re-lays them
+    // anyway (review 2026-10-04 U33).
+    if (m_mixPhaseTarget > 1000.0f) {
+        const float wrap = 62.831853f * floorf(m_mixPhase / 62.831853f);
+        m_mixPhase -= wrap;
+        m_mixPhaseTarget -= wrap;
+    }
     m_lidTargX = (rf() * 2.0f - 1.0f) * 0.10f;
     m_lidTargY = (rf() * 2.0f - 1.0f) * 0.08f;
     m_lidTargR = (rf() * 2.0f - 1.0f) * 0.9f;
@@ -6836,7 +7057,7 @@ void FluidRenderer::UpdateCoverage() {
     if (m_headless && m_covPending && m_time - m_lastCovTime >= 1.0f &&
         m_fence->GetCompletedValue() < m_covFence) {
         HR(m_fence->SetEventOnCompletion(m_covFence, m_fenceEvent));
-        WaitForSingleObject(m_fenceEvent, INFINITE);
+        if (!m_deviceLost) WaitForSingleObject(m_fenceEvent, INFINITE);   // R3
     }
     // harvest a finished readback (issued a frame or more ago; 1 Hz cadence
     // makes the staleness irrelevant and avoids any GPU sync)

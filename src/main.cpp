@@ -35,6 +35,9 @@
 //   --hdr on|off       set the HDR state instead of querying the display
 //   --sdr-white <nits> SDR-content brightness for HDR mode (default 240)
 //   --panel-max <nits> stands in for the DXGI-reported max (peak_nits=-1 only)
+//   --sdr-gamut 0|1|2  [hdr] sdr_gamut for this run (HDR off only: 0 plain sRGB, 1 match HDR on the
+//                      panel, 2 the HDR stretch); --panel-primaries rx,ry,gx,gy,bx,by stands in for
+//                      the DXGI-reported primaries (without it mode 1 uses the P3 stand-in)
 //   --mouse-none       no mouse splats (the default in shot mode)
 //   --shot-png-only    write only <out>.png (the md5 file; stats still logged)
 //   --cycle            force the [cycle] director on (it reads [cycle] from --ini)
@@ -59,6 +62,13 @@
 //                      photos folder, so identity never depends on the user's
 //                      photos). A photo stage's decode is JOINED at the black
 //                      point under --shot (frame-deterministic).
+//   --shot-time0 S     start the master clock at S seconds of uptime (what a look does after
+//                      hours: time-driven effects, float precision); default 0
+//   --test-device-lost T  self-test of the GPU device-loss recovery (review 2026-10-04 R3):
+//                      ID3D12Device5::RemoveDevice() at wallpaper time T, then the live
+//                      loop's rebuild (Shutdown + soft init, same config), rendering on to
+//                      the capture; [devlost] lines in the shot log. Without it a real
+//                      device loss in a --shot run stays fatal.
 //
 // Cycle control of a RUNNING instance (posts WM_COMMAND and exits; never
 // starts a wallpaper): --cycle-next | --cycle-prev | --cycle-on | --cycle-off
@@ -97,6 +107,7 @@
 using Microsoft::WRL::ComPtr;
 
 void WpLog(const char* fmt, ...);            // defined below; used by Fail()
+static HWND g_wallpaperWnds[4] = {};          // our WorkerW children (main + mirror), for Fail()
 void ForegroundDesc(char* out, size_t cap);
 
 void Fail(const char* what, HRESULT hr) {
@@ -111,6 +122,12 @@ void Fail(const char* what, HRESULT hr) {
     char fgd[256];
     ForegroundDesc(fgd, sizeof(fgd));
     WpLog("FATAL %s  %s", buf, fgd);
+    // The box below can sit unseen for hours (a fullscreen game covers it) while the last
+    // presented frame stays frozen on the OLED. Hide our windows first, so the shell's own
+    // wallpaper shows instead (review 2026-10-04 R3). A GPU device loss in the live wallpaper
+    // never gets here any more: the renderer flags it and the main loop rebuilds the device.
+    for (HWND w : g_wallpaperWnds)
+        if (w && IsWindow(w)) ShowWindow(w, SW_HIDE);
     MessageBoxA(nullptr, buf, "Fluid Wallpaper - fatal error", MB_ICONERROR);
     ExitProcess(1);
 }
@@ -125,6 +142,16 @@ bool            g_pauseOnFullscreen = true;   // shared with settings.cpp
 bool            g_pauseOnMaximized = true;
 float           g_hdrPeakNits = -1.0f;        // -1 = panel max (auto), 0 = off, else nits
 int             g_gamutMode = 2;              // 0 sRGB, 1 P3, 2 BT.2020
+// [hdr] sdr_gamut: what the gamut becomes while Windows HDR is OFF (FluidRenderer::SetSdrGamut):
+// 0 plain sRGB, 1 match HDR on this panel (gamut -> the panel's primaries; default), 2 the HDR stretch.
+int             g_sdrGamutMode = 1;
+static float    g_panelPrim[6] = {};          // xy of R, G, B of the wallpaper's monitor (DXGI / EDID)
+static bool     g_panelPrimValid = false;     // last GOOD read: a missed lookup never clears it
+static bool     g_sdrManaged = false;         // Windows colour-manages the SDR desktop (ACM / WCG)
+static float    g_mirrorPrim[6] = {};         // the same three for the second-monitor mirror
+static bool     g_mirrorPrimValid = false;
+static bool     g_mirrorSdrManaged = false;
+static bool     g_mirrorStale = false;        // the mirror's monitor went away, came back or moved
 FluidRenderer*  g_renderer = nullptr;
 static bool     g_forceRender = false;
 static bool     g_testSuspend = false;   // --test-suspend: scripted suspend/resume cycle
@@ -165,7 +192,9 @@ void WpLog(const char* fmt, ...) {
     _vsnprintf_s(line + n, sizeof(line) - n, _TRUNCATE, fmt, ap);
     va_end(ap);
     strcat_s(line, "\r\n");
-    HANDLE h = CreateFileW(g_logPath, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    // write-data access, not append-only: SetEndOfFile below needs it (with
+    // FILE_APPEND_DATA alone the truncate was refused and the log never rolled)
+    HANDLE h = CreateFileW(g_logPath, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return;
     LARGE_INTEGER sz = {};
@@ -175,6 +204,7 @@ void WpLog(const char* fmt, ...) {
         SetFilePointer(h, 0, nullptr, FILE_BEGIN);
         SetEndOfFile(h);
     }
+    SetFilePointer(h, 0, nullptr, FILE_END);
     DWORD wrote = 0;
     WriteFile(h, line, (DWORD)strlen(line), &wrote, nullptr);
     CloseHandle(h);
@@ -215,6 +245,8 @@ static void LoadSettings() {
     g_hdrPeakNits = (float)_wtof(buf);
     g_gamutMode = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, g_configIniPath);
     if (g_gamutMode < 0 || g_gamutMode > 2) g_gamutMode = 2;
+    g_sdrGamutMode = (int)GetPrivateProfileIntW(L"hdr", L"sdr_gamut", 1, g_configIniPath);
+    if (g_sdrGamutMode < 0 || g_sdrGamutMode > 2) g_sdrGamutMode = 1;
 }
 
 static void SaveSettings() {
@@ -223,11 +255,17 @@ static void SaveSettings() {
                                g_pauseOnFullscreen ? L"1" : L"0", g_iniPath);
     WritePrivateProfileStringW(L"general", L"pause_on_maximized",
                                g_pauseOnMaximized ? L"1" : L"0", g_iniPath);
+    // cycling: the globals hold the current STAGE's peak / gamut; the file keeps the user's own
+    float peak = g_hdrPeakNits;
+    int gamut = g_gamutMode;
+    CycleUserShell(peak, gamut);
     wchar_t buf[32];
-    swprintf_s(buf, L"%.0f", g_hdrPeakNits);
+    swprintf_s(buf, L"%.0f", peak);
     WritePrivateProfileStringW(L"hdr", L"peak_nits", buf, g_iniPath);
-    swprintf_s(buf, L"%d", g_gamutMode);
+    swprintf_s(buf, L"%d", gamut);
     WritePrivateProfileStringW(L"hdr", L"gamut", buf, g_iniPath);
+    swprintf_s(buf, L"%d", g_sdrGamutMode);
+    WritePrivateProfileStringW(L"hdr", L"sdr_gamut", buf, g_iniPath);
 }
 
 // Full config from an ini file — every value the settings window writes.
@@ -923,6 +961,8 @@ static HWND CreateWallpaperWindowAt(HWND host, int screenX, int screenY,
         WS_POPUP, 0, 0, width, height,
         nullptr, nullptr, wc.hInstance, nullptr);
     if (!hwnd) Fail("CreateWindowExW", HRESULT_FROM_WIN32(GetLastError()));
+    for (HWND& w : g_wallpaperWnds)              // remembered for Fail(); dead slots are reused
+        if (!w || !IsWindow(w)) { w = hwnd; break; }
 
     SetParent(hwnd, host);
     POINT origin = { screenX, screenY };
@@ -1003,7 +1043,9 @@ static float g_sdrWhiteNits = 80.0f;
 // The user's "SDR content brightness" slider (HDR mode only). SDR content —
 // which is what the reference wallpaper was — renders at this level, so we
 // match it for parity. 1000 units == 80 nits.
-static float GetSdrWhiteNits(HMONITOR mon) {
+// *ok (optional): false when the lookup missed and the 80 is only the fallback.
+static float GetSdrWhiteNits(HMONITOR mon, bool* ok = nullptr) {
+    if (ok) *ok = false;
     MONITORINFOEXW mi = {};
     mi.cbSize = sizeof(mi);
     if (!GetMonitorInfoW(mon, &mi)) return 80.0f;
@@ -1032,12 +1074,58 @@ static float GetSdrWhiteNits(HMONITOR mon) {
         wl.header.adapterId = paths[i].targetInfo.adapterId;
         wl.header.id = paths[i].targetInfo.id;
         if (DisplayConfigGetDeviceInfo(&wl.header) != ERROR_SUCCESS) break;
+        if (ok) *ok = true;
         return wl.SDRWhiteLevel / 1000.0f * 80.0f;
     }
     return 80.0f;
 }
 
-static bool QueryHDR(HMONITOR mon, float* maxNits) {
+// Windows' active colour mode for the monitor: 0 SDR, 1 WCG (an SDR desktop under auto
+// colour management: DWM colour-manages it like HDR), 2 HDR; -1 unknown.
+// DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 (Windows 11 24H2; declared locally so older SDKs
+// build), else the older info's advancedColorEnabled bit.
+static int QueryColorMode(HMONITOR mon) {
+    MONITORINFOEXW mi = {};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi)) return -1;
+    UINT32 numPath = 0, numMode = 0;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &numPath, &numMode) != ERROR_SUCCESS) return -1;
+    std::vector<DISPLAYCONFIG_PATH_INFO> paths(numPath);
+    std::vector<DISPLAYCONFIG_MODE_INFO> modes(numMode);
+    if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &numPath, paths.data(),
+                           &numMode, modes.data(), nullptr) != ERROR_SUCCESS)
+        return -1;
+    for (UINT32 i = 0; i < numPath; i++) {
+        DISPLAYCONFIG_SOURCE_DEVICE_NAME src = {};
+        src.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+        src.header.size = sizeof(src);
+        src.header.adapterId = paths[i].sourceInfo.adapterId;
+        src.header.id = paths[i].sourceInfo.id;
+        if (DisplayConfigGetDeviceInfo(&src.header) != ERROR_SUCCESS) continue;
+        if (wcscmp(src.viewGdiDeviceName, mi.szDevice) != 0) continue;
+        struct { DISPLAYCONFIG_DEVICE_INFO_HEADER header; UINT32 value, colorEncoding, bitsPerColorChannel,
+                 activeColorMode; } i2 = {};
+        i2.header.type = (DISPLAYCONFIG_DEVICE_INFO_TYPE)15;   // GET_ADVANCED_COLOR_INFO_2
+        i2.header.size = sizeof(i2);
+        i2.header.adapterId = paths[i].targetInfo.adapterId;
+        i2.header.id = paths[i].targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&i2.header) == ERROR_SUCCESS && i2.activeColorMode <= 2)
+            return (int)i2.activeColorMode;
+        struct { DISPLAYCONFIG_DEVICE_INFO_HEADER header; UINT32 value, colorEncoding, bitsPerColorChannel; } i1 = {};
+        i1.header.type = (DISPLAYCONFIG_DEVICE_INFO_TYPE)9;    // GET_ADVANCED_COLOR_INFO
+        i1.header.size = sizeof(i1);
+        i1.header.adapterId = paths[i].targetInfo.adapterId;
+        i1.header.id = paths[i].targetInfo.id;
+        if (DisplayConfigGetDeviceInfo(&i1.header) != ERROR_SUCCESS) return -1;
+        return (i1.value & 2) ? 1 : 0;      // advancedColorEnabled: colour-managed (HDR is told apart by DXGI)
+    }
+    return -1;
+}
+
+// primXY (optional): xy of the output's R, G, B primaries as DXGI reports them (EDID);
+// *primValid false when the output was not found.
+static bool QueryHDR(HMONITOR mon, float* maxNits, float* primXY = nullptr, bool* primValid = nullptr) {
+    if (primValid) *primValid = false;
     ComPtr<IDXGIFactory6> factory;
     if (FAILED(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)))) return g_hdrActive;
     for (UINT ai = 0; ; ai++) {
@@ -1051,6 +1139,12 @@ static bool QueryHDR(HMONITOR mon, float* maxNits) {
             if (SUCCEEDED(output.As(&output6)) && SUCCEEDED(output6->GetDesc1(&desc)) &&
                 desc.Monitor == mon) {
                 if (maxNits) *maxNits = desc.MaxLuminance;
+                if (primXY) {
+                    primXY[0] = desc.RedPrimary[0];   primXY[1] = desc.RedPrimary[1];
+                    primXY[2] = desc.GreenPrimary[0]; primXY[3] = desc.GreenPrimary[1];
+                    primXY[4] = desc.BluePrimary[0];  primXY[5] = desc.BluePrimary[1];
+                    if (primValid) *primValid = true;
+                }
                 return desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
             }
         }
@@ -1083,6 +1177,7 @@ enum TrayCmd : UINT {
     CMD_PEAK_OFF = 10, CMD_PEAK_AUTO = 11, CMD_PEAK_300 = 12, CMD_PEAK_600 = 13,
     CMD_PEAK_800 = 15, CMD_PEAK_1000 = 14,
     CMD_GAMUT_SRGB = 20, CMD_GAMUT_P3 = 21, CMD_GAMUT_2020 = 22,
+    CMD_SDRGAMUT_PLAIN = 23, CMD_SDRGAMUT_MATCH = 24, CMD_SDRGAMUT_STRETCH = 25,   // [hdr] sdr_gamut 0 / 1 / 2
 };
 
 static NOTIFYICONDATAW g_nid = {};
@@ -1120,6 +1215,31 @@ static std::wstring PresetMetaBase(const std::wstring& path) {
     if (GetFullPathNameW(base.c_str(), MAX_PATH * 2, full, nullptr)) base = full;
     if (GetFileAttributesW(base.c_str()) == INVALID_FILE_ATTRIBUTES) return L"";
     return base;
+}
+
+// The [meta] base chain UNDER a preset, root first (the file itself not included), up to
+// maxDepth files -- the same walk and the same limit (4) as MergePresetChain. The ONE
+// resolver the cycle (ResolveStage) and the Settings reset target (RecomputeTarget) share,
+// so a "Save as" on top of a chained preset composes the same everywhere: they followed
+// one level while the tray apply followed four (review 2026-10-04 R18). A missing file
+// ends the walk, as in PresetMetaBase; *missing (optional) is set when it was a dangling
+// base= that ended it, so a cycle stage can refuse it the way it refuses a missing base.
+std::vector<std::wstring> PresetBaseChain(const std::wstring& path, int maxDepth, bool* missing) {
+    std::vector<std::wstring> chain;
+    if (missing) *missing = false;
+    std::wstring cur = path;
+    for (int d = 0; d < maxDepth; d++) {
+        const std::wstring base = PresetMetaBase(cur);
+        if (base.empty()) {
+            wchar_t b[MAX_PATH] = {};
+            GetPrivateProfileStringW(L"meta", L"base", L"", b, MAX_PATH, cur.c_str());
+            if (b[0] && missing) *missing = true;
+            break;
+        }
+        chain.insert(chain.begin(), base);
+        cur = base;
+    }
+    return chain;
 }
 
 static int PresetLookGroup(const wchar_t* path, int depth = 0) {
@@ -1231,6 +1351,14 @@ static void ShowTrayMenuBody(HWND hwnd, HMENU presets) {
     AppendMenuW(gamut, MF_STRING | (g_gamutMode == 2 ? MF_CHECKED : 0), CMD_GAMUT_2020, L"BT.2020 (full QD-OLED)");
     AppendMenuW(menu, MF_POPUP, (UINT_PTR)gamut, L"Color gamut");
 
+    HMENU sdrg = CreatePopupMenu();
+    AppendMenuW(sdrg, MF_STRING | (g_sdrGamutMode == 1 ? MF_CHECKED : 0), CMD_SDRGAMUT_MATCH,
+                L"Match HDR on this panel (default)");
+    AppendMenuW(sdrg, MF_STRING | (g_sdrGamutMode == 0 ? MF_CHECKED : 0), CMD_SDRGAMUT_PLAIN, L"Plain sRGB");
+    AppendMenuW(sdrg, MF_STRING | (g_sdrGamutMode == 2 ? MF_CHECKED : 0), CMD_SDRGAMUT_STRETCH,
+                L"Full stretch (monitor in sRGB mode)");
+    AppendMenuW(menu, MF_POPUP, (UINT_PTR)sdrg, L"SDR colours (HDR off)");
+
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     // Cycle director: On/Off, Next, Previous, the stage list (current checked)
@@ -1282,6 +1410,11 @@ static HFONT TrayMenuFont() {
     }
     return s_menuFont;
 }
+
+// A tray pick of peak / gamut is the USER's own value: live now, the director's
+// fallback for stages without their own [hdr] keys, and what settings.ini keeps.
+static void SetUserPeak(float nits) { g_hdrPeakNits = nits; CycleSetUserPeak(nits); SaveSettings(); }
+static void SetUserGamut(int mode)  { g_gamutMode = mode;   CycleSetUserGamut(mode); SaveSettings(); }
 
 static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // Explorer restarted: the tray was rebuilt, our icon is gone — re-add it.
@@ -1365,12 +1498,12 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SaveSettings();
             printf("pause on maximized: %s\n", g_pauseOnMaximized ? "on" : "off");
             break;
-        case CMD_PEAK_OFF:  g_hdrPeakNits = 0.0f;    SaveSettings(); break;
-        case CMD_PEAK_AUTO: g_hdrPeakNits = -1.0f;   SaveSettings(); break;
-        case CMD_PEAK_300:  g_hdrPeakNits = 300.0f;  SaveSettings(); break;
-        case CMD_PEAK_600:  g_hdrPeakNits = 600.0f;  SaveSettings(); break;
-        case CMD_PEAK_800:  g_hdrPeakNits = 800.0f;  SaveSettings(); break;
-        case CMD_PEAK_1000: g_hdrPeakNits = 1000.0f; SaveSettings(); break;
+        case CMD_PEAK_OFF:  SetUserPeak(0.0f);    break;
+        case CMD_PEAK_AUTO: SetUserPeak(-1.0f);   break;
+        case CMD_PEAK_300:  SetUserPeak(300.0f);  break;
+        case CMD_PEAK_600:  SetUserPeak(600.0f);  break;
+        case CMD_PEAK_800:  SetUserPeak(800.0f);  break;
+        case CMD_PEAK_1000: SetUserPeak(1000.0f); break;
         case CMD_SETTINGS:
             WpLog("tray: CMD_SETTINGS");
             ShowSettingsWindow();
@@ -1416,9 +1549,12 @@ static LRESULT CALLBACK TrayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 CycleJump(LOWORD(wp) - CMD_CYCLE_STAGE_BASE);
             }
             break;
-        case CMD_GAMUT_SRGB: g_gamutMode = 0; SaveSettings(); break;
-        case CMD_GAMUT_P3:   g_gamutMode = 1; SaveSettings(); break;
-        case CMD_GAMUT_2020: g_gamutMode = 2; SaveSettings(); break;
+        case CMD_GAMUT_SRGB: SetUserGamut(0); break;
+        case CMD_GAMUT_P3:   SetUserGamut(1); break;
+        case CMD_GAMUT_2020: SetUserGamut(2); break;
+        case CMD_SDRGAMUT_PLAIN:   g_sdrGamutMode = 0; SaveSettings(); WpLog("tray: sdr_gamut 0 (plain sRGB)"); break;
+        case CMD_SDRGAMUT_MATCH:   g_sdrGamutMode = 1; SaveSettings(); WpLog("tray: sdr_gamut 1 (match HDR)"); break;
+        case CMD_SDRGAMUT_STRETCH: g_sdrGamutMode = 2; SaveSettings(); WpLog("tray: sdr_gamut 2 (full stretch)"); break;
         case CMD_EXIT:
             printf("tray: exit clicked\n");
             g_running = false;
@@ -1629,11 +1765,30 @@ static void EnsureBuiltinPresets() {
 // so after applying one, the resolved state must be written out in full).
 // includeShell=false skips the machine/shell keys (sim_res, dye_res,
 // fps_limit, mirror_second) — used for mood files, which never touch them.
+// "%.*f" at the key's usual decimals, unless that loses the value: then the shortest %g that
+// reads back as the same float. A full dump is a preset now (Save as self-contained), and a
+// value such as 0.0125 written at 3 decimals did not reproduce the look (review 2026-10-04 R15).
+static void FormatLossless(wchar_t* b, size_t n, float v, int dec) {
+    swprintf_s(b, n, L"%.*f", dec, v);
+    for (int p = 6; p <= 9 && (float)_wtof(b) != v; p++) swprintf_s(b, n, L"%.*g", p, v);
+}
+
+static void WriteConfigKeys(const wchar_t* path, const FluidConfig& c, bool includeShell);
 void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShell) {
     if (!path || !path[0] || g_configReadOnly) return;
+    WriteConfigKeys(path, c, includeShell);
+}
+// The Settings window's self-contained "Save as": the full look dump, never the machine keys.
+// Its own MayWrite() guards the path (the headless test folder is writable under --ui-shot,
+// where g_configReadOnly blocks WriteConfigToIni) (review 2026-10-04 R15).
+void WriteLookToIni(const wchar_t* path, const FluidConfig& c) {
+    if (path && path[0]) WriteConfigKeys(path, c, false);
+}
+
+static void WriteConfigKeys(const wchar_t* path, const FluidConfig& c, bool includeShell) {
     auto putF = [path](const wchar_t* sec, const wchar_t* key, float v, int dec) {
         wchar_t b[48];
-        swprintf_s(b, L"%.*f", dec, v);
+        FormatLossless(b, 48, v, dec);
         WritePrivateProfileStringW(sec, key, b, path);
     };
     auto putI = [path](const wchar_t* sec, const wchar_t* key, int v) {
@@ -1715,12 +1870,21 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     putF(L"sim", L"gravity", c.gravity, 3);
     putF(L"sim", L"gravity_pow", c.gravityPow, 3);
     putF(L"sim", L"gravity_blur", c.gravityBlur, 3);
+    // colour triples / the 12-float palettes: each number lossless as well (R15)
+    auto fmtList = [](const float* v, int n) {
+        std::wstring s;
+        for (int k = 0; k < n; k++) {
+            wchar_t b[64];   // %.4f of a float up to FLT_MAX is 46 chars: 32 could abort in swprintf_s
+            FormatLossless(b, 64, v[k], 4);
+            if (k) s += L' ';
+            s += b;
+        }
+        return s;
+    };
     for (int ci = 0; ci < 5; ci++) {
-        wchar_t key[32], val[64];
+        wchar_t key[32];
         swprintf_s(key, L"splat_color_%d", ci + 1);
-        swprintf_s(val, L"%.4f %.4f %.4f",
-                   c.splatColors[ci * 3], c.splatColors[ci * 3 + 1], c.splatColors[ci * 3 + 2]);
-        WritePrivateProfileStringW(L"color", key, val, path);
+        WritePrivateProfileStringW(L"color", key, fmtList(&c.splatColors[ci * 3], 3).c_str(), path);
     }
     // ---- the render LOOK and its three sections ---------------------------
     // Without these a saved preset silently dropped the look: it round-tripped
@@ -1730,10 +1894,8 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
     // it); the [ink]/[drops]/[liquid_acid] blocks below are written in full,
     // because a preset that carries a look must carry the tuning that makes
     // that look look like anything.
-    auto putRgb = [path](const wchar_t* sec, const wchar_t* key, const float* c3) {
-        wchar_t b[64];
-        swprintf_s(b, L"%.4f %.4f %.4f", c3[0], c3[1], c3[2]);
-        WritePrivateProfileStringW(sec, key, b, path);
+    auto putRgb = [path, &fmtList](const wchar_t* sec, const wchar_t* key, const float* c3) {
+        WritePrivateProfileStringW(sec, key, fmtList(c3, 3).c_str(), path);
     };
     WritePrivateProfileStringW(L"look", L"style",
                                c.ink.enabled ? L"ink" : (c.acid.enabled ? L"liquid_acid"
@@ -2127,7 +2289,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
                    ? a.sweepCount : LiquidAcidConfig::kSweepPairs;
             if (nw > LiquidAcidConfig::kSweepMax) nw = LiquidAcidConfig::kSweepMax;
             for (int ci = 0; ci < LiquidAcidConfig::kSweepMax; ci++) {
-                wchar_t key[40], b[160];
+                wchar_t key[40];
                 swprintf_s(key, L"sweep_pair_%d_oil", ci + 1);
                 WritePrivateProfileStringW(S, key, nullptr, path);
                 swprintf_s(key, L"sweep_pair_%d_ink", ci + 1);
@@ -2135,12 +2297,7 @@ void WriteConfigToIni(const wchar_t* path, const FluidConfig& c, bool includeShe
                 swprintf_s(key, L"sweep_oil_%d", ci + 1);
                 if (ci >= nw) { WritePrivateProfileStringW(S, key, nullptr, path); }
                 else if (a.sweepOilFullSet[ci]) {
-                    const float* f = &a.sweepOilFull[ci * 12];
-                    swprintf_s(b, L"%.4f %.4f %.4f %.4f %.4f %.4f "
-                                  L"%.4f %.4f %.4f %.4f %.4f %.4f",
-                               f[0], f[1], f[2], f[3], f[4], f[5],
-                               f[6], f[7], f[8], f[9], f[10], f[11]);
-                    WritePrivateProfileStringW(S, key, b, path);
+                    WritePrivateProfileStringW(S, key, fmtList(&a.sweepOilFull[ci * 12], 12).c_str(), path);
                 } else {
                     putRgb(S, key, &a.sweepOil[ci * 3]);
                 }
@@ -2229,6 +2386,17 @@ static void ApplyPreset(const std::wstring& path) {
     // base chain first, then the file (B.4)
     FluidConfig fresh = g_renderer->Config();
     MergePresetChain(path, fresh);
+    // LIVE: the machine keys never come from a preset (AGENTS.md hard constraint:
+    // sim_res / dye_res stay at the live 256 / 4096; the cycle's Compose pins the
+    // same four). Old user presets still carry them (review 2026-10-04 R5: two with
+    // sim_res=512). --shot keeps taking them, so the identity baselines do not move.
+    if (!g_configReadOnly) {
+        const FluidConfig& live = g_renderer->Config();
+        fresh.simRes = live.simRes;
+        fresh.dyeRes = live.dyeRes;
+        fresh.fpsLimit = live.fpsLimit;
+        fresh.mirrorSecond = live.mirrorSecond;
+    }
 
     // shell globals: take the preset's value only when it specifies one
     ApplyPresetShellChain(path);
@@ -2262,18 +2430,27 @@ static void SaveCurrentAsPreset() {
     // CLOCKS pre-flight 3: a snapshot takes the BASE, never base x F
     FluidConfig snap;
     if (g_renderer) { snap = g_renderer->Config(); ClocksBaseCopy(snap); }
-    if (g_renderer) SaveFullConfig(snap);   // ini = live state (the clocks' base)
-    for (int n = 1; n < 100; n++) {
+    // ini = live state (the clocks' base). Cycling: in memory only, as in ApplyPreset --
+    // the composed stage is not the user's own base (review 2026-10-04 R4).
+    if (g_renderer && !g_cycleActive) SaveFullConfig(snap);
+    wchar_t name[64] = {};
+    for (int n = 1; n < 100 && !name[0]; n++) {
         swprintf_s(path, L"%s\\Preset %d.ini", dir, n);
-        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-            if (g_renderer) WriteConfigToIni(path, snap, false);
-            if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
-            wchar_t msg[128];
-            swprintf_s(msg, L"Saved as \"Preset %d\" — rename the file in the presets folder if you like.", n);
-            ShowTrayBalloon(L"Preset saved", msg);
-            return;
-        }
+        if (GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) swprintf_s(name, L"Preset %d", n);
     }
+    // Preset 1..99 all taken: a timestamped name, so a save always lands
+    // (review 2026-10-04 U15).
+    if (!name[0]) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        swprintf_s(name, L"Preset %04u%02u%02u-%02u%02u%02u", st.wYear, st.wMonth, st.wDay,
+                   st.wHour, st.wMinute, st.wSecond);
+        swprintf_s(path, L"%s\\%s.ini", dir, name);
+    }
+    if (g_renderer) WriteConfigToIni(path, snap, false);
+    if (!g_configReadOnly && UiModelReady()) UiNotifyPresetSaved(path);
+    wchar_t msg[160];
+    swprintf_s(msg, L"Saved as \"%s\" — rename the file in the presets folder if you like.", name);
+    ShowTrayBalloon(L"Preset saved", msg);
 }
 
 // wrappers for the scenes window (the statics above stay file-local)
@@ -2309,8 +2486,17 @@ struct ShotOpts {
     bool     hdrOn = false;
     float    sdrWhiteNits = 240.0f;
     float    panelMaxNits = 1000.0f;   // stands in for the DXGI-reported max
+    int      sdrGamut = -1;            // --sdr-gamut 0|1|2 (default: the ini's [hdr] sdr_gamut)
+    float    panelPrim[6] = {};        // --panel-primaries rx,ry,gx,gy,bx,by (stands in for DXGI)
+    bool     panelPrimSet = false;
+    bool     sdrArgBad = false;        // --sdr-gamut / --panel-primaries did not parse: refuse the run
     bool     mouseNone = true;
     int      yieldMs = 2;              // --shot-yield ms: sleep per simulated frame
+    double   time0 = 0.0;              // --shot-time0: the master clock's start (seconds of uptime)
+    // --test-device-lost T (review 2026-10-04 R3): remove the device at wallpaper time T
+    float    devLostAt = -1.0f;
+    bool     devLostRemoved = false;
+    bool     devLostAwaitFirst = false;   // re-init done, the next good frame is logged
     // --shot-pour X,Y,START,DUR : hold LMB at (X,Y) px from START for DUR seconds,
     // with a slow circular drift (radius 40 px, 0.5 rev/s) like a resting hand.
     bool     pour = false;
@@ -2881,6 +3067,16 @@ static int RunShotMode() {
                 if (const wchar_t* v = next()) o.sdrWhiteNits = (float)_wtof(v);
             } else if (wcscmp(argv[i], L"--panel-max") == 0) {
                 if (const wchar_t* v = next()) o.panelMaxNits = (float)_wtof(v);
+            } else if (wcscmp(argv[i], L"--sdr-gamut") == 0) {
+                // a typo must not render a different mode under the label that was asked for
+                const wchar_t* v = next();
+                if (v && v[0] >= L'0' && v[0] <= L'2' && v[1] == 0) o.sdrGamut = v[0] - L'0';
+                else o.sdrArgBad = true;
+            } else if (wcscmp(argv[i], L"--panel-primaries") == 0) {
+                const wchar_t* v = next();
+                o.panelPrimSet = v && swscanf_s(v, L"%f,%f,%f,%f,%f,%f", &o.panelPrim[0], &o.panelPrim[1],
+                                                &o.panelPrim[2], &o.panelPrim[3], &o.panelPrim[4], &o.panelPrim[5]) == 6;
+                if (!o.panelPrimSet) o.sdrArgBad = true;
             } else if (wcscmp(argv[i], L"--mouse-none") == 0) {
                 o.mouseNone = true;
             } else if (wcscmp(argv[i], L"--cycle") == 0) {
@@ -2933,6 +3129,10 @@ static int RunShotMode() {
                 }
             } else if (wcscmp(argv[i], L"--shot-png-only") == 0) {
                 o.pngOnly = true;
+            } else if (wcscmp(argv[i], L"--shot-time0") == 0 && i + 1 < argc) {
+                o.time0 = _wtof(argv[++i]);
+            } else if (wcscmp(argv[i], L"--test-device-lost") == 0 && i + 1 < argc) {
+                o.devLostAt = (float)_wtof(argv[++i]);
             } else if (wcscmp(argv[i], L"--photos") == 0 && i + 1 < argc) {
                 o.photosDir = argv[++i];
             } else if (wcscmp(argv[i], L"--shot-fade") == 0 && i + 1 < argc) {
@@ -2965,6 +3165,10 @@ static int RunShotMode() {
     g_shotPngOnly = o.pngOnly;
     if (o.out.empty()) {
         ShotLog("[shot] ERROR: --shot needs an output .png path\n");
+        return 2;
+    }
+    if (o.sdrArgBad) {
+        ShotLog("[shot] ERROR: --sdr-gamut needs 0, 1 or 2; --panel-primaries needs rx,ry,gx,gy,bx,by\n");
         return 2;
     }
     if (o.sdrWhiteNits < 1.0f) o.sdrWhiteNits = 80.0f;
@@ -3034,8 +3238,49 @@ static int RunShotMode() {
 
     FluidRenderer::SetRandomSeed(o.seed);
     FluidRenderer renderer;
+    // --test-device-lost: survive the loss like the live wallpaper; otherwise it stays fatal
+    if (o.devLostAt >= 0.0f) renderer.SetSurviveDeviceLoss(true);
     renderer.InitOffscreen(o.width, o.height, cfg);
+    if (o.time0 > 0.0) {
+        renderer.SetClock(o.time0);
+        ShotLog("[shot] master clock starts at %.0f s (%.2f h of uptime)\n", o.time0, o.time0 / 3600.0);
+    }
     g_renderer = &renderer;
+    // [hdr] sdr_gamut headless: the ini's mode (or --sdr-gamut); the panel
+    // primaries only from --panel-primaries (no display is queried), so without
+    // it mode 1 uses its documented stand-in (the P3 stretch for a BT.2020 config).
+    if (o.sdrGamut >= 0 && o.sdrGamut <= 2) g_sdrGamutMode = o.sdrGamut;
+    renderer.SetSdrGamut(g_sdrGamutMode, o.panelPrim, o.panelPrimSet, false);
+    {
+        float m[9];
+        const bool ok = FluidRenderer::SdrMatchMatrix(g_gamutMode, o.panelPrimSet ? o.panelPrim : nullptr, m);
+        ShotLog("[shot] sdr_gamut=%d (used only with --hdr off) panel primaries %s", g_sdrGamutMode,
+                o.panelPrimSet ? "given" : "not given");
+        if (ok) ShotLog(": matrix [%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f]",
+                        m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8]);
+        ShotLog("\n");
+    }
+    // what DXGI reports for the real outputs right now (diagnostic only; nothing is applied)
+    {
+        ComPtr<IDXGIFactory6> f6;
+        if (SUCCEEDED(CreateDXGIFactory2(0, IID_PPV_ARGS(&f6)))) {
+            for (UINT ai = 0; ; ai++) {
+                ComPtr<IDXGIAdapter1> ad;
+                if (FAILED(f6->EnumAdapters1(ai, &ad))) break;
+                for (UINT oi = 0; ; oi++) {
+                    ComPtr<IDXGIOutput> out;
+                    if (FAILED(ad->EnumOutputs(oi, &out))) break;
+                    ComPtr<IDXGIOutput6> out6;
+                    DXGI_OUTPUT_DESC1 d = {};
+                    if (SUCCEEDED(out.As(&out6)) && SUCCEEDED(out6->GetDesc1(&d)))
+                        ShotLog("[display] %ls colorspace=%d R(%.4f,%.4f) G(%.4f,%.4f) B(%.4f,%.4f) W(%.4f,%.4f) max=%.0f\n",
+                                d.DeviceName, (int)d.ColorSpace, d.RedPrimary[0], d.RedPrimary[1], d.GreenPrimary[0],
+                                d.GreenPrimary[1], d.BluePrimary[0], d.BluePrimary[1], d.WhitePoint[0], d.WhitePoint[1],
+                                d.MaxLuminance);
+                }
+            }
+        }
+    }
     renderer.SetCoverageWanted(CycleCoverageWanted());
     if (!o.coverSweep.empty()) {
         std::vector<float> b, s;
@@ -3163,6 +3408,13 @@ static int RunShotMode() {
                         renderer.Config().ink.enabled ? "ink"
                         : (renderer.Config().acid.enabled ? "liquid_acid" : "fluid"));
             }
+            // --test-device-lost: the removal; the next GPU call in the frame path sees it
+            if (o.devLostAt >= 0.0f && !o.devLostRemoved && frames / 144.0f >= o.devLostAt) {
+                o.devLostRemoved = true;
+                const bool removed = renderer.SimulateDeviceRemoved();
+                ShotLog("[devlost] removed at t=%.2fs (frame %lld): %s\n", frames / 144.0f, frames,
+                        removed ? "ID3D12Device5::RemoveDevice()" : "FAILED, no ID3D12Device5");
+            }
             if (o.drop && !o.dropFired && frames / 144.0f >= o.dropAt) {
                 renderer.QueueDrop(o.dropX, o.dropY, o.dropVy);
                 o.dropFired = true;
@@ -3230,6 +3482,38 @@ static int RunShotMode() {
             renderer.SetFade(o.fixedFade >= 0.0f ? o.fixedFade : cf.fade);
             renderer.SetBlackOut(cf.black);
             renderer.Frame(dt, sdrScale, hdrActive, fin);
+            // --test-device-lost: the renderer-level half of the live loop's recovery
+            // (suspendRenderer + resumeRenderer): Shutdown, then a soft init with the same
+            // config and the same backoff, and on with the run (review 2026-10-04 R3)
+            if (o.devLostAt >= 0.0f && renderer.DeviceLost()) {
+                ShotLog("[devlost] detected hr=0x%08lX at t=%.2fs (frame %lld)\n",
+                        (unsigned long)renderer.DeviceLostHr(), frames / 144.0f, frames);
+                const FluidConfig keep = renderer.Config();
+                renderer.Shutdown();
+                ShotLog("[devlost] shutdown ok\n");
+                bool ok = false;
+                for (int attempt = 1; attempt <= 8 && !ok; attempt++) {
+                    ok = renderer.TryInitOffscreen(o.width, o.height, keep);
+                    if (!ok) {
+                        const DWORD back = 250u << (attempt - 1);
+                        ShotLog("[devlost] re-init attempt %d failed, retrying in %lu ms\n",
+                                attempt, (unsigned long)back);
+                        Sleep(back);
+                    }
+                }
+                if (!ok) {
+                    ShotLog("[devlost] ERROR: re-init failed 8 times\n");
+                    CoUninitialize();
+                    return 5;
+                }
+                renderer.SetCoverageWanted(CycleCoverageWanted());   // as resumeRenderer does
+                ShotLog("[devlost] re-init ok\n");
+                o.devLostAwaitFirst = true;
+            } else if (o.devLostAwaitFirst) {
+                o.devLostAwaitFirst = false;
+                ShotLog("[devlost] first frame after recovery ok (t=%.2fs, frame %lld)\n",
+                        frames / 144.0f, frames);
+            }
             {   // brief BY pre-flight 34 (see ftRing above)
                 LARGE_INTEGER qpc1;
                 QueryPerformanceCounter(&qpc1);
@@ -3560,6 +3844,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                g_monitor2Rect.right, g_monitor2Rect.bottom);
 
     FluidRenderer renderer;
+    // A removed / reset GPU device (driver update or crash) is survived, not fatal: the
+    // loop below rebuilds it (review 2026-10-04 R3). --shot keeps it fatal.
+    renderer.SetSurviveDeviceLoss(true);
     // STARTUP uses TryInit for the same reason the resume does. Both fatal
     // dialogs the user hit were a swap chain refused while a game owned the
     // output -- once on a resume, once on a launch. A wallpaper that cannot
@@ -3580,8 +3867,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
     CreateTrayWindow();
 
-    g_hdrActive = QueryHDR(g_monitor, &g_maxNits);
+    g_hdrActive = QueryHDR(g_monitor, &g_maxNits, g_panelPrim, &g_panelPrimValid);
     g_sdrWhiteNits = GetSdrWhiteNits(g_monitor);
+    g_sdrManaged = !g_hdrActive && QueryColorMode(g_monitor) == 1;
+    renderer.SetSdrGamut(g_sdrGamutMode, g_panelPrim, g_panelPrimValid, g_sdrManaged);
+    {
+        float m[9];
+        const bool ok = FluidRenderer::SdrMatchMatrix(g_gamutMode, g_panelPrimValid ? g_panelPrim : nullptr, m);
+        WpLog("display: HDR %s%s, primaries %s R(%.4f,%.4f) G(%.4f,%.4f) B(%.4f,%.4f); sdr_gamut=%d, gamut=%d, "
+              "match matrix %s [%.4f %.4f %.4f | %.4f %.4f %.4f | %.4f %.4f %.4f]",
+              g_hdrActive ? "on" : "off", g_sdrManaged ? " (SDR desktop colour-managed by Windows: HDR stretch used)" : "",
+              g_panelPrimValid ? "from DXGI" : "UNKNOWN", g_panelPrim[0], g_panelPrim[1],
+              g_panelPrim[2], g_panelPrim[3], g_panelPrim[4], g_panelPrim[5], g_sdrGamutMode, g_gamutMode,
+              ok ? "ok" : "not usable (stand-in)", ok ? m[0] : 0.f, ok ? m[1] : 0.f, ok ? m[2] : 0.f, ok ? m[3] : 0.f,
+              ok ? m[4] : 0.f, ok ? m[5] : 0.f, ok ? m[6] : 0.f, ok ? m[7] : 0.f, ok ? m[8] : 0.f);
+    }
     UpdateTrayTip();
     printf("HDR live state: %s (max %.0f nits, SDR white %.0f nits)\n",
            g_hdrActive ? "ON" : "OFF", g_maxNits, g_sdrWhiteNits);
@@ -3699,6 +3999,31 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         if (!g_running) break;
 
+        // GPU device removed / reset (driver update, driver crash / TDR, Win+Ctrl+Shift+B):
+        // the renderer has stopped touching the GPU and raised DeviceLost(). Tear it down
+        // exactly like a long fullscreen pause and let the resume backoff below build a new
+        // device on the same window; the cycle director and the config wait in memory, the
+        // mirror comes back through its lifecycle. This used to be a fatal box + exit
+        // (review 2026-10-04 R3). Checked before PresentBroken: a dead device is not a lost
+        // window, and a reattach onto it could only fail.
+        if (!g_suspended && renderer.DeviceLost()) {
+            WpLog("device lost (hr=0x%08lX): renderer torn down, rebuilding through the resume backoff",
+                  (unsigned long)renderer.DeviceLostHr());
+            suspendRenderer("GPU device lost");
+            fsPausedSince = 0;
+            resumeFails = 0;
+            if (g_fsPaused) {
+                // a game in front (its own crash, likely): leave it the GPU and come back when
+                // it exits, the way the fullscreen suspend does
+                fsSuspended = true;
+                resumeWanted = false;
+            } else {
+                fsSuspended = false;
+                resumeWanted = true;
+                nextResumeTry = 0;
+            }
+        }
+
         // Survive Explorer restarts: wait for the new shell, then re-hook.
         // PresentBroken covers the race where the window died mid-frame
         // before its WM_DESTROY reached us.
@@ -3714,6 +4039,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                 lastTry = now2;
                 HWND newHost = FindWallpaperHost();
                 if (newHost) {
+                    // the window of a refused try is still there: without this each 1 s
+                    // retry left one more shown window behind (review 2026-10-04 R10).
+                    // Its WM_DESTROY only sets g_wallpaperLost, which is already set.
+                    if (IsWindow(hwnd)) DestroyWindow(hwnd);
                     hwnd = CreateWallpaperWindow(newHost, width, height);
                     g_monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
                     // suspended: skip the swapchain-only reattach — the resume
@@ -3745,7 +4074,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             bool want = !g_suspended &&
                         renderer.Config().mirrorSecond && g_monitor2 != nullptr;
 
-            if (renderer.MirrorActive() && renderer.MirrorBroken()) {
+            if (renderer.MirrorActive() && (renderer.MirrorBroken() || g_mirrorStale)) {
+                g_mirrorStale = false;
                 renderer.DisableMirror();
                 g_destroyingMirror = true;
                 if (mirrorWnd && IsWindow(mirrorWnd)) DestroyWindow(mirrorWnd);
@@ -3759,16 +4089,34 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
                     EnumDisplayMonitors(nullptr, nullptr, FindSecondMonitor, 0);
                     HWND host2 = FindWallpaperHost();
                     if (g_monitor2 && host2) {
+                        // a suspend (Shutdown) drops the mirror chain but not its window:
+                        // without this each resume leaked one window (review U16a)
+                        if (mirrorWnd && IsWindow(mirrorWnd)) {
+                            g_destroyingMirror = true;
+                            DestroyWindow(mirrorWnd);
+                            g_destroyingMirror = false;
+                        }
+                        mirrorWnd = nullptr;
                         int w2 = g_monitor2Rect.right - g_monitor2Rect.left;
                         int h2 = g_monitor2Rect.bottom - g_monitor2Rect.top;
                         mirrorWnd = CreateWallpaperWindowAt(host2, g_monitor2Rect.left,
                                                            g_monitor2Rect.top, w2, h2);
                         renderer.EnableMirror(mirrorWnd, w2, h2);
+                        if (!renderer.MirrorActive()) {      // refused: no window left behind per retry
+                            g_destroyingMirror = true;
+                            DestroyWindow(mirrorWnd);
+                            g_destroyingMirror = false;
+                            mirrorWnd = nullptr;
+                        }
                         float max2 = 0.0f;
-                        bool hdr2 = QueryHDR(g_monitor2, &max2);
+                        // a fresh mirror starts from what its monitor reports NOW (nothing kept
+                        // from a previous mirror monitor); unknown counts as not colour-managed
+                        bool hdr2 = QueryHDR(g_monitor2, &max2, g_mirrorPrim, &g_mirrorPrimValid);
                         float sdrW2 = GetSdrWhiteNits(g_monitor2);
                         float peak2 = hdr2 ? (g_hdrPeakNits < 0.0f ? max2 : g_hdrPeakNits) : 0.0f;
                         renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2, hdr2);
+                        g_mirrorSdrManaged = !hdr2 && QueryColorMode(g_monitor2) == 1;
+                        renderer.SetMirrorPrimaries(g_mirrorPrim, g_mirrorPrimValid, g_mirrorSdrManaged);
                     }
                 }
             } else if (!want && renderer.MirrorActive()) {
@@ -3789,17 +4137,67 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         }
         if (tick - lastHdrCheck >= 2000) {
             lastHdrCheck = tick;
-            bool hdr = QueryHDR(g_monitor, &g_maxNits);
-            float sdrWhite = GetSdrWhiteNits(g_monitor);
-            if (sdrWhite != g_sdrWhiteNits) g_sdrWhiteNits = sdrWhite;
+            // a display topology change (monitor re-plugged, wake from deep sleep) can hand
+            // out a new HMONITOR; with the cached one every lookup below fails silently
+            // (review 2026-10-04 R9: HDR toggles unseen, SDR white read as 80, no game pause)
+            if (HMONITOR monNow = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY)) {
+                if (monNow != g_monitor) {
+                    WpLog("display poll: monitor handle changed %p -> %p", (void*)g_monitor, (void*)monNow);
+                    g_monitor = monNow;
+                }
+            }
+            float primNow[6] = {};
+            bool primNowValid = false;
+            bool hdr = QueryHDR(g_monitor, &g_maxNits, primNow, &primNowValid);
+            if (primNowValid) {              // a missed lookup (mode change, wake) keeps the last good read
+                memcpy(g_panelPrim, primNow, sizeof(g_panelPrim));
+                g_panelPrimValid = true;
+            }
+            // a missed lookup keeps the last value (the 80-nit fallback dimmed an HDR desktop
+            // to a third until the next poll)
+            bool sdrWhiteOk = false;
+            float sdrWhite = GetSdrWhiteNits(g_monitor, &sdrWhiteOk);
+            if (sdrWhiteOk && sdrWhite != g_sdrWhiteNits) g_sdrWhiteNits = sdrWhite;
+            if (hdr) g_sdrManaged = false;       // not read while HDR is on; not queried either
+            else {
+                const int colorMode = QueryColorMode(g_monitor);
+                if (colorMode >= 0) g_sdrManaged = colorMode == 1;   // -1 (lookup missed): keep the last value
+            }
+            renderer.SetSdrGamut(g_sdrGamutMode, g_panelPrim, g_panelPrimValid, g_sdrManaged);   // + tray edits
+            // the second monitor: re-scan every poll, so one that was unplugged, re-plugged or
+            // moved is noticed (g_monitor2 was never cleared: the mirror kept rendering to a
+            // monitor that was gone). A changed one gets the mirror rebuilt for what is there now.
+            {
+                const HMONITOR was2 = g_monitor2;
+                const RECT wasRect2 = g_monitor2Rect;
+                g_monitor2 = nullptr;
+                EnumDisplayMonitors(nullptr, nullptr, FindSecondMonitor, 0);
+                if (renderer.MirrorActive() && (g_monitor2 != was2 || !EqualRect(&wasRect2, &g_monitor2Rect))) {
+                    WpLog("display poll: second monitor changed, mirror rebuilt");
+                    g_mirrorStale = true;
+                }
+            }
             // the second-monitor mirror follows ITS monitor's HDR state (review 2026-10-04:
             // it was read once, when the mirror came up, and its gamut came from the primary)
-            if (renderer.MirrorActive() && g_monitor2) {
+            if (renderer.MirrorActive() && g_monitor2 && !g_mirrorStale) {
                 float max2 = 0.0f;
-                const bool hdr2 = QueryHDR(g_monitor2, &max2);
+                float prim2[6] = {};
+                bool prim2Valid = false;
+                const bool hdr2 = QueryHDR(g_monitor2, &max2, prim2, &prim2Valid);
                 const float sdrW2 = GetSdrWhiteNits(g_monitor2);
                 const float peak2 = hdr2 ? (g_hdrPeakNits < 0.0f ? max2 : g_hdrPeakNits) : 0.0f;
                 renderer.SetMirrorHdr(hdr2 ? sdrW2 / 80.0f : 1.0f, peak2, hdr2);
+                // a missed lookup keeps the mirror's last good primaries and colour-managed flag
+                if (prim2Valid) {
+                    memcpy(g_mirrorPrim, prim2, sizeof(g_mirrorPrim));
+                    g_mirrorPrimValid = true;
+                }
+                if (hdr2) g_mirrorSdrManaged = false;
+                else {
+                    const int cm2 = QueryColorMode(g_monitor2);
+                    if (cm2 >= 0) g_mirrorSdrManaged = cm2 == 1;
+                }
+                renderer.SetMirrorPrimaries(g_mirrorPrim, g_mirrorPrimValid, g_mirrorSdrManaged);
             }
             if (hdr != g_hdrActive) {
                 g_hdrActive = hdr;

@@ -129,6 +129,8 @@ const std::wstring& UiActivePresetPath();
 bool UiSaveActivePreset();                    // overwrite the active preset file
 bool UiSavePresetAs(const std::wstring& name, std::wstring* outPath);
 void UiApplyPresetHeadless(const std::wstring& path);   // same merge as main.cpp ApplyPreset
+// Revert, cycle off: the composed base back into the live config, one undo entry (R15)
+void UiRevertToComposedBase();
 
 void UiSetLook(unsigned look);               // look radio: one undo entry, same write path
 UiHeader UiComputeHeader();

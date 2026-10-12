@@ -28,9 +28,9 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
 - **Bloom: only the keyed post bloom, default 0 (acid-rise-12 ships 0.30); never the old full-screen bloom.**
 - **sim_res/dye_res live at 256/4096** (256 = the WE grid; verified 2026-09-16 that the WE motion — droplet curls, marbled cores — only appears at 256, vorticity 48). Moods/presets must never carry them.
 - Every mood recipe is finalized only via a calibration quiz with the user
-  (protocol: CALIBRATION.md + cloud-quiz-round2-proposal.md).
+  (protocol: docs/CALIBRATION.md + docs/cloud-quiz-round2-proposal.md).
 - Everything must look good with Windows HDR **on AND off** — verify both.
-- Screenshots tone-map dark and are SDR-inaccurate (see CALIBRATION.md
+- Screenshots tone-map dark and are SDR-inaccurate (see docs/CALIBRATION.md
   anomaly); treat them as rough hue/composition checks, never luminance truth.
 - Panel: X27U W1 QD-OLED, ~1000 nits small window, ~418 full frame, ABL —
   keep hot elements small; don't chase full-screen brightness.
@@ -79,8 +79,10 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   the user's and stay untouched, nothing scans them.
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).
-- Docs: WORKLOG.md (session logs + state dumps), NOTES.md (full history),
-  CALIBRATION.md (quiz benchmarks), backup-pre-rework-2026-07-24/ (snapshot).
+- Docs: WORKLOG.md (session logs + state dumps, stays at the root); everything else in docs/:
+  NOTES.md (full history), PROGRESS.md, COLOR-AUDIT.md, OIL-REVIEW.md, resume/ (executor resume notes).
+  docs/CALIBRATION.md (quiz benchmarks). WE exports: reference/WE-PRESETS.json + WE-LIVE-PROPERTIES.json.
+  Old snapshots: archive/ (backup-pre-rework-2026-07-24/, FluidWallpaper-src-2026-07-24.zip).
 
 ## Conventions
 

@@ -4,12 +4,13 @@
 # What it does: backs up %APPDATA%\FluidWallpaper\settings.ini (once, to settings-panelcheck-backup.ini; and
 # EVERY time, before settings.ini is overwritten, to settings-panelcheck-<yyyyMMdd-HHmmss>.ini, newest 12 kept:
 # review 2026-10-04 R19, the one-time backup was from August and -Restore would have brought it back),
-# copies the chosen ini over it, stops the running FluidWallpaper.exe, and launches build2\FluidWallpaper.exe
-# (the build with the new looks). -Restore copies the backup back and relaunches build\FluidWallpaper.exe.
+# copies the chosen ini over it, stops the running FluidWallpaper.exe, and relaunches build2\live\FluidWallpaper.exe
+# (the exe that is live; -Exe swaps in another build). -Restore copies the backup back and relaunches build\FluidWallpaper.exe.
 # Wallpaper Engine is never touched. Run ONLY with the user's go-ahead: it changes what is on their screen.
 #   -InstallPresets : also copy reference\presets\*.ini into %APPDATA%\FluidWallpaper\moods (tray Presets menu)
-#   -Exe <path>     : launch a copy of THIS exe instead of build2\FluidWallpaper.exe (use a build of a COMMITTED
-#                     state: on 2026-09-17 two uncommitted work-in-progress build2 exes crashed live at startup)
+#   -Exe <path>     : copy THIS exe into build2\live and launch it (use a build of a COMMITTED state: on 2026-09-17
+#                     two uncommitted work-in-progress build2 exes crashed live at startup). Without -Exe the exe
+#                     already in build2\live is relaunched unchanged (settings-only swap).
 # NOTE: run this via a scheduled task (tools\panel-check-task.ps1) when driven from Claude Code — its
 # processes are MSIX-virtualized and their %APPDATA% writes land in a shadow folder the user never sees.
 param([string]$Ini = "", [switch]$Restore, [switch]$InstallPresets, [string]$Exe = "")
@@ -58,9 +59,13 @@ Stop-Port
 # Launch a COPY so agents can keep rebuilding build2\FluidWallpaper.exe while the live one runs
 $liveDir = Join-Path $root "build2\live"
 if (-not (Test-Path $liveDir)) { New-Item -ItemType Directory -Path $liveDir | Out-Null }
-$exeSrc = if ($Exe) { $Exe } else { Join-Path $root "build2\FluidWallpaper.exe" }
+# No -Exe: relaunch the exe that IS live (a settings-only swap must not change the build; on 2026-10-12 the
+# old default, build2\FluidWallpaper.exe, put a 9/23 build live by accident). Only a fresh build2\live
+# falls back to build2\FluidWallpaper.exe.
+$liveExe = Join-Path $liveDir "FluidWallpaper.exe"
+$exeSrc = if ($Exe) { $Exe } elseif (Test-Path $liveExe) { $liveExe } else { Join-Path $root "build2\FluidWallpaper.exe" }
 if (-not (Test-Path $exeSrc)) { Log "exe not found: $exeSrc"; exit 1 }
-Copy-Item $exeSrc (Join-Path $liveDir "FluidWallpaper.exe") -Force
+if ((Resolve-Path $exeSrc).Path -ne (Resolve-Path $liveExe -ErrorAction SilentlyContinue).Path) { Copy-Item $exeSrc $liveExe -Force }
 Get-ChildItem (Join-Path $root "build2") -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination $liveDir -Force
 Start-Process (Join-Path $liveDir "FluidWallpaper.exe") -WorkingDirectory $liveDir
 Log "live settings.ini <- $src ; launched build2\live\FluidWallpaper.exe (copy of $exeSrc, built $((Get-Item $exeSrc).LastWriteTime.ToString('HH:mm:ss')))"

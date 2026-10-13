@@ -40,7 +40,7 @@
 //   stage_K_jitter=<+- fraction of dwell, default 0.3>
 //   stage_K_weight=<relative draw weight in alternate_random, default 1>
 //   stage_K_lerp=<s, fluid->fluid transition, default 4>
-//   stage_K_journey=<journeys\<name>.txt, fluid stages only>
+//   stage_K_journey=<bare name: journeys\<name>.txt is implied, fluid stages only>
 //   early_switch_darkpct=92  min_dwell=60  (fluid stages' dark-screen trigger)
 // Phase 1: lerp exists only fluid->fluid (the absorbed conductor path); a
 // transition=lerp across looks runs as a fade (logged). The generic keys.inc
@@ -137,10 +137,13 @@ struct CycleStage {
                                    // the multiplier inside the stage's tier)
     int   tier       = CYCLE_TIER_NONE;   // stage_N_tier (CycleTier)
     float lerpSec    = -1.0f;      // -1 = [cycle] lerp (4 s)
-    std::wstring journey;          // journeys\<name>.txt; empty = the file's [journey] file=
+    std::wstring journey;          // bare <name> (journeys\<name>.txt); empty = the file's [journey] file=
     // resolved by CycleLoad / CycleSet (not persisted)
     std::wstring name;             // file stem, for menus and logs
     std::wstring path, basePath;   // absolute
+    // basePath's own [meta] base chain + basePath, root first: what composes under the file
+    // (empty with no base). One level used to be all the cycle followed (review 2026-10-04 R18).
+    std::vector<std::wstring> baseChain;
     int   look = CYCLE_LOOK_FLUID; // from the composed config
     bool  ok = false;              // the file exists
     bool  burstOk = false;         // oil, hue_rotate_period on, sweep off: a burst can land
@@ -189,6 +192,12 @@ struct CycleFrame {
 };
 
 extern bool g_cycleActive;         // true while the director owns the look
+// While cycling the shell globals g_hdrPeakNits / g_gamutMode hold the STAGE's
+// values. CycleUserShell gives the user's own (true = filled); the setters
+// record a pick the user makes while cycling. settings.ini only ever gets these.
+bool CycleUserShell(float& peak, int& gamut);
+void CycleSetUserPeak(float peak);
+void CycleSetUserGamut(int gamut);
 
 // ---- lifecycle (main.cpp) ---------------------------------------------------
 void CycleLoad(const wchar_t* ini);          // [cycle] + stage resolution
@@ -236,6 +245,10 @@ const CycleConfig& CycleGet();
 // The file chain of a stage onto c (base -> [cycle] oil_layout -> stage file, then
 // scheme_hue_period): the director's Compose without the shell keys. No renderer needed.
 void CycleComposeStageFiles(int stage, FluidConfig& c);
+// Does the stage compose more than its file's own [meta] base chain can name: a
+// stage_N_base, or [cycle] oil_layout / scheme_hue_period landing on it? Then a "Save as,
+// only my changes" with [meta] base = the file would lose that part (review 2026-10-04 R17).
+bool CycleStageComposesBeyondFile(int stage);
 void CycleSet(const CycleConfig& c);          // replace list; persisted to settings.ini
 void CycleJump(int stage);                    // 0-based; fades out to it
 CycleStatus CycleState();

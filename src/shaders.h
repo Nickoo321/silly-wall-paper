@@ -409,7 +409,8 @@ cbuffer CB : register(b0) {
     float2 texelSize;   // 1 / screen resolution (reference uses screen texels)
     float  shading;
     float  sdrScale;    // scRGB multiplier for SDR-reference white (1.0 when HDR off)
-    float  gamut;       // 0 = sRGB, 1 = Display-P3 (WE parity), 2 = BT.2020 (QD-OLED)
+    float  gamut;       // 0 = sRGB, 1 = Display-P3 (WE parity), 2 = BT.2020 (QD-OLED),
+                        // 3 = the matrix in fm2.yzw / fmOff (HDR off: gamut -> panel primaries)
     float  peakGain;    // HDR highlight expansion: peakNits / sdrWhiteNits (1 = off)
     float  knee;        // dye brightness where highlight expansion starts
     float  capBright;   // dye brightness cap (expansion reaches peakGain here)
@@ -419,7 +420,8 @@ cbuffer CB : register(b0) {
     // own colour-matrix stage, and Skia clamps after every stage).
     //   fm0 = (hdrSaturate, hdrBrightness, hdrContrast, hdrEnabled)
     //   fm1 = (hueBurstDeg, postSaturate, postBrightness, postContrast)
-    //   fm2 = (postHueDeg, 0, 0, 0)
+    //   fm2 = (postHueDeg, m00, m01, m10)   fmOff = (m11, m20, m21, 0): the first two
+    //         entries of each row of the gamut-3 matrix (each row sums to 1)
     float4 fm0;
     float4 fm1;
     float4 fm2;
@@ -799,7 +801,11 @@ float3 LampGreyY(float3 col, float gk, float gkCool, float liftMul) {
 // (BubLum(k x) = k BubLum(x), k >= 0), so a scale is one step.
 float BubLum(float3 x) {
     float3 y = x;
-    if (gamut > 1.5) {
+    if (gamut > 2.5) {
+        y = float3(dot(float3(fm2.y, fm2.z, 1.0 - fm2.y - fm2.z), x),
+                   dot(float3(fm2.w, fmOff.x, 1.0 - fm2.w - fmOff.x), x),
+                   dot(float3(fmOff.y, fmOff.z, 1.0 - fmOff.y - fmOff.z), x));
+    } else if (gamut > 1.5) {
         y = float3(dot(float3( 1.66049, -0.58764, -0.07285), x),
                    dot(float3(-0.12455,  1.13290, -0.00835), x),
                    dot(float3(-0.01815, -0.10058,  1.11873), x));
@@ -2082,21 +2088,23 @@ R"hlsl(
     // ---- DYE THE DARK MASSES (brief AG / AM) -----------------------------
     // TRACE (2026-09-22, branch dye4) -- where a dark-mass pixel gets its
     // final colour in ink_mode=water, end to end:
-    //   1. src\shaders.h, acid display literal, ~line 2096:
+    //   1. src\shaders.h, acid display literal, further down past this block:
     //      `float3 col = lerp(inkC, oilC, alpha);`  -- inside a mass the oil
     //      field is BELOW the threshold, so alpha -> 0 and the pixel IS inkC.
-    //   2. same file, ~line 1618:  `if (LA_INK_WATER > 0.5) inkC = InkWater(C0,..)`
+    //   2. same file, top of the LIQUID_ACID block ("restyle the parity colour
+    //      C as INK"): `if (LA_INK_WATER > 0.5) inkC = InkWater(C0,..)`
     //      LA_INK_WATER = (ink_mode == water) (src\acid_slots.h).
     //      acid-rise-12 sets ink_mode=water, so the whole `else` bands branch
     //      under it is dead code for this preset.
-    //   3. InkWater (~line 919) returns `lerp(ikPaper.rgb, tint*.., op)`. In a
+    //   3. InkWater() (the shared INK block) returns
+    //      `lerp(ikPaper.rgb, tint*.., op)`. In a
     //      mass the sim dye density is ~0, so op ~= 0 and the pixel is
     //      ikPaper.rgb = [ink] paper_color = 0 0 0. THAT is the black.
     //   4. laInk[] (= effInk, the ramp the first two attempts dyed on the CPU)
     //      is read in exactly TWO places in this whole shader: the bands
-    //      branch at ~line 1634 (dead here) and the toe_tint lift at ~line
-    //      2589, gated on LA_TOE_TINT = toe_tint, which acid-rise-12 leaves at its
-    //      0 default. So dyeing effInk could not change one bit of this preset
+    //      branch's `rampC` (dead here) and the toe_tint lift (the
+    //      `if (LA_TOE_TINT > 0.001)` block), gated on LA_TOE_TINT = toe_tint,
+    //      which acid-rise-12 leaves at its 0 default. So dyeing effInk could not change one bit of this preset
     //      -- which is what the byte-identical four-hue sheet was measuring,
     //      and why both earlier fixes read delta 0.
     // So the dye is applied HERE, on inkC, as a deep translucent wax:
@@ -3299,7 +3307,12 @@ R"hlsl(
     // Interpret the dye in a wider gamut and convert to the swap chain's 709
     // primaries. Out-of-gamut saturation comes out as negative components —
     // FP16 scRGB carries those to the display (QD-OLED shows them).
-    if (gamut > 1.5) {          // BT.2020 — full QD-OLED vividness
+    if (gamut > 2.5) {          // HDR off: the configured gamut -> THIS panel's primaries
+        lin = float3(
+            dot(float3(fm2.y, fm2.z, 1.0 - fm2.y - fm2.z), lin),
+            dot(float3(fm2.w, fmOff.x, 1.0 - fm2.w - fmOff.x), lin),
+            dot(float3(fmOff.y, fmOff.z, 1.0 - fmOff.y - fmOff.z), lin));
+    } else if (gamut > 1.5) {   // BT.2020 — full QD-OLED vividness
         lin = float3(
             dot(float3( 1.66049, -0.58764, -0.07285), lin),
             dot(float3(-0.12455,  1.13290, -0.00835), lin),
@@ -3630,7 +3643,7 @@ float3 Emulsion(float3 d, float3 nz, float amt, float sdr,
     return max(d + (l2 - l0) * gain * sdr, min(d, 0.0));
 }
 
-// Uniform disc, 19 taps (centre + 6 at r/2 + 12 at r): the circle of confusion
+// Uniform disc, 31 taps (centre + 6/10/14 at 0.41/0.71/0.91 r): the circle of confusion
 // of a defocused lens is a flat disc, not a Gaussian, which is why a defocused
 // hairline becomes a soft band of the same darkness spread wider rather than
 // a faint smear. Bilinear taps between texels make it smoother than its count.
@@ -4677,8 +4690,13 @@ R"hlsl(
                 float fj = (float)j;
                 float s0 = PHash21(float2(tq * 1.7 + 3.3, fj * 7.1 + 1.3));
                 if (s0 > saturate(pp3.z)) continue;
+                // The sideways drift runs on the time INSIDE this slot's window (up to
+                // +-3 px/s over per*3 s). It used to run on the total uptime t, so the
+                // offset grew to +-3t px and the scratches left the frame for good:
+                // all on screen in a short shot, ~12% after an hour, ~0.5% after a day
+                // (review 2026-10-04 R13).
                 float xc = PHash21(float2(tq + 13.7, fj * 2.9)) * Wx
-                         + (PHash21(float2(tq + 19.1, fj * 5.3)) - 0.5) * 6.0 * t
+                         + (PHash21(float2(tq + 19.1, fj * 5.3)) - 0.5) * 6.0 * (ph * per * 3.0)
                          + 2.0 * sin(P.y * 0.004 + s0 * 6.2831853);
                 float wd = 0.35 + 0.80 * PHash21(float2(tq + 23.3, fj * 3.7));
                 float y0 = PHash21(float2(tq + 29.9, fj * 11.3)) * Hy * 0.6;

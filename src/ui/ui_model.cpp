@@ -345,20 +345,30 @@ void RecomputeTarget() {
         }
     }
     if (!s_activePreset.empty() && GetFileAttributesW(s_activePreset.c_str()) != INVALID_FILE_ATTRIBUTES) {
-        // a partial "Save as" names the preset it sits on: [meta] base= loads first
-        std::wstring base = UiPresetBase(s_activePreset);
-        if (!base.empty() && GetFileAttributesW(base.c_str()) != INVALID_FILE_ATTRIBUTES)
-            LoadConfigFromFile(base.c_str(), s_target);
-        LoadConfigFromFile(s_activePreset.c_str(), s_target);
+        // the peak is the user's GLOBAL setting unless the preset carries its own (below): with
+        // -1 as the target every preset without [hdr] showed a permanent "1 change", and Save
+        // wrote the global peak into the preset (review 2026-10-04 R16)
+        s_peakTarget = g_hdrPeakNits;
+        // a partial "Save as" names the preset it sits on: the whole [meta] base chain loads
+        // first, root first, the walk the tray's apply does (one level here made the reset
+        // target miss the deeper bases: review 2026-10-04 R18)
+        std::vector<std::wstring> files = PresetBaseChain(s_activePreset);
+        files.push_back(s_activePreset);
+        for (const std::wstring& f : files) LoadConfigFromFile(f.c_str(), s_target);
         // composed base: the applied overlays (Mirror - *) are part of what "unchanged" means
         for (const std::wstring& ov : s_overlays)
             if (GetFileAttributesW(ov.c_str()) != INVALID_FILE_ATTRIBUTES) LoadConfigFromFile(ov.c_str(), s_target);
-        wchar_t bb[64] = {}, buf[64] = {};
-        if (!base.empty()) GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", bb, 64, base.c_str());
-        GetPrivateProfileStringW(L"hdr", L"peak_nits", bb, buf, 64, s_activePreset.c_str());
-        if (buf[0]) s_peakTarget = (float)_wtof(buf);
-        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", 2, s_activePreset.c_str());
-        if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
+        // [hdr] along the same chain, file over base, over the user's own values: what
+        // ApplyPresetShellChain leaves after an apply, so Revert can put exactly that back
+        // (a preset without gamut= no longer means BT.2020) (R15 / R18)
+        s_gamutTarget = g_gamutMode;
+        for (const std::wstring& f : files) {
+            wchar_t buf[64] = {};
+            GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", buf, 64, f.c_str());
+            if (buf[0]) s_peakTarget = (float)_wtof(buf);
+            int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, f.c_str());
+            if (gm >= 0 && gm <= 2) s_gamutTarget = gm;
+        }
     }
 }
 
@@ -418,7 +428,7 @@ void RestoreSnapshot(const Snapshot& s) {
         s_hooks.reinitWanderers();
     if (s_hooks.ensureLook) s_hooks.ensureLook();
     if (!g_configReadOnly && g_iniPath[0]) {
-        WriteConfigToIni(g_iniPath, c, true);
+        if (!UiCycleOn()) WriteConfigToIni(g_iniPath, c, true);   // cycling: the stage is not the user's base
         PersistShellSettings();
     }
     s_activePreset = s.preset;
@@ -625,15 +635,21 @@ void UiSetValue(int i, float v) {
     KeyRow& r = s_rows[i];
     if (r.flags & KF_SHELL) return;
     FluidConfig& c = *s_cfg;
+    // While the director owns the look, a mode knob is a live tweak of the running STAGE
+    // (Save puts it into the stage file; the next stage drops it). settings.ini is the
+    // user's own cycle-off base and is not written, the same rule as ApplyPreset
+    // (review 2026-10-04 R4: a tweak during the cycle used to change that base for good).
+    // Global / machine rows (peak, gamut, fps, mirror, [cycle] ...) always persist.
+    const bool persist = !(UiCycleOn() && !(r.flags & (KF_GLOBAL | KF_MACHINE)));
     if (r.isLook) {
         // Look switches are live and mutually exclusive (DisplayPso() would otherwise just
         // prefer acid); turning one ON may need its display PSO compiled first.
         bool on = v > 0.5f;
         *r.b = on;
-        WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
+        if (persist) WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
         if (on) {
-            if (r.b == &c.acid.enabled) { c.ink.enabled = false; WriteIniInt(L"look", L"ink", 0); }
-            else                        { c.acid.enabled = false; WriteIniInt(L"look", L"liquid_acid", 0); }
+            if (r.b == &c.acid.enabled) { c.ink.enabled = false; if (persist) WriteIniInt(L"look", L"ink", 0); }
+            else                        { c.acid.enabled = false; if (persist) WriteIniInt(L"look", L"liquid_acid", 0); }
         }
         if (s_hooks.ensureLook) s_hooks.ensureLook();
         return;
@@ -649,20 +665,22 @@ void UiSetValue(int i, float v) {
             UiCycleSetEnabled(on);   // persists + toggles the renderer's coverage readback
         } else {
             *r.b = on;
-            WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
+            if (persist) WriteIniInt(r.wsec, r.wkey, on ? 1 : 0);
         }
         return;
     }
     if (r.i) {
         *r.i = (int)lroundf(v);
         if (r.reinit && s_hooks.reinitWanderers) s_hooks.reinitWanderers();
-        WriteIniInt(r.wsec, r.wkey, *r.i);
+        if (r.i == &g_gamutMode) UiCycleNoteUserGamut(*r.i);   // the user's own value while cycling
+        if (persist) WriteIniInt(r.wsec, r.wkey, *r.i);
         return;
     }
     if (r.f) {
         *r.f = v;
         if (r.reinit && s_hooks.reinitWanderers) s_hooks.reinitWanderers();
-        WriteIniFloat(r.wsec, r.wkey, v, r.dec);
+        if (r.isPeak) UiCycleNoteUserPeak(v);
+        if (persist) WriteIniFloat(r.wsec, r.wkey, v, r.dec);
     }
 }
 
@@ -713,10 +731,32 @@ bool UiFileHasLookSection(const std::wstring& path) {
     return n > 0;
 }
 
+// Does the preset or its [meta] base chain (PresetCarriesLook's walk) carry one of the
+// overlay's own sections ([meta] aside)? Then the apply replaced the overlay's values.
+static bool ChainCarriesOverlay(const std::vector<std::wstring>& chain, const std::wstring& overlay) {
+    std::vector<wchar_t> names(4096);
+    const DWORD n = GetPrivateProfileSectionNamesW(names.data(), (DWORD)names.size(), overlay.c_str());
+    for (DWORD p = 0; p < n && names[p]; p += (DWORD)wcslen(&names[p]) + 1) {
+        if (!_wcsicmp(&names[p], L"meta")) continue;
+        wchar_t buf[64] = {};
+        for (const std::wstring& f : chain)
+            if (GetPrivateProfileSectionW(&names[p], buf, 64, f.c_str()) > 0) return true;
+    }
+    return false;
+}
+
 void UiNotifyPresetApplied(const std::wstring& path) {
     if (UiFileHasLookSection(path)) {
         s_activePreset = path;
-        s_overlays.clear();
+        // A look preset merges over the live config, so an overlay it does not carry stays
+        // on screen: it stays in the list too, or the header dropped it and counted its
+        // keys as changes (review 2026-10-04 U28)
+        std::vector<std::wstring> chain = PresetBaseChain(path);
+        chain.push_back(path);
+        for (size_t k = 0; k < s_overlays.size();) {
+            if (ChainCarriesOverlay(chain, s_overlays[k])) s_overlays.erase(s_overlays.begin() + k);
+            else k++;
+        }
     } else {
         // overlay (full path): one per family ("Mirror - quad" replaces "Mirror - off")
         std::wstring name = Stem(path);
@@ -797,6 +837,58 @@ void UiApplyPresetHeadless(const std::wstring& path) {
     *s_cfg = fresh;
     if (s_hooks.ensureLook) s_hooks.ensureLook();
     UiEndWholeChange(path);
+}
+
+// Revert with the cycle off: the composed base the dirty count is measured against
+// (defaults + [meta] base chain + the preset + overlays) goes back as ONE whole-change undo
+// entry. Re-applying the file merged it over the live config, so a key a partial preset does
+// not carry stayed changed and the header kept counting it (review 2026-10-04 R15). The live
+// machine keys stay, the peak / gamut go back to their targets.
+// A preset chain with no [look] and no base is a partial over SOME look (colours only, a
+// mirror fold): its composed base would be code defaults + the partial, so Revert re-merges
+// the file over the live look instead, as it always did (review 2026-10-05).
+static bool PartialOverLiveLook(const std::wstring& path) {
+    if (!PresetBaseChain(path).empty()) return false;
+    for (const wchar_t* k : { L"style", L"liquid_acid", L"ink" }) {
+        wchar_t lk[32] = {};
+        GetPrivateProfileStringW(L"look", k, L"", lk, 32, path.c_str());
+        if (lk[0]) return false;
+    }
+    return true;
+}
+
+void UiRevertToComposedBase() {
+    if (!s_cfg || UiCycleOn()) return;
+    // no preset file = no composed base (code defaults): nothing to revert to
+    if (s_activePreset.empty() || GetFileAttributesW(s_activePreset.c_str()) == INVALID_FILE_ATTRIBUTES) return;
+    if (PartialOverLiveLook(s_activePreset)) { UiApplyPresetFile(s_activePreset); return; }
+    Snapshot before = TakeSnapshot();
+    FluidConfig& c = *s_cfg;
+    FluidConfig fresh = s_target;
+    fresh.simRes = c.simRes;              // machine / shell: never from a preset (ApplyPreset)
+    fresh.dyeRes = c.dyeRes;
+    fresh.fpsLimit = c.fpsLimit;
+    fresh.mirrorSecond = c.mirrorSecond;
+    fresh.gradientMode = c.gradientMode;  // CLI debug switches (Compose keeps them too)
+    fresh.calibratePage = c.calibratePage;
+    fresh.stats = c.stats;
+    fresh.hdrPeakNits = c.hdrPeakNits;
+    fresh.gamutMode = c.gamutMode;
+    c = fresh;
+    g_hdrPeakNits = s_peakTarget;
+    g_gamutMode = s_gamutTarget;
+    if (s_hooks.reinitWanderers) s_hooks.reinitWanderers();
+    if (s_hooks.ensureLook) s_hooks.ensureLook();
+    if (!g_configReadOnly && g_iniPath[0]) {
+        WriteConfigToIni(g_iniPath, c, true);
+        PersistShellSettings();
+    }
+    UndoEntry e;
+    e.whole = true;
+    e.before = before;
+    e.after = TakeSnapshot();
+    PushUndo(std::move(e));
+    RecomputeTarget();
 }
 
 bool UiAutostartCached() { return s_autostart; }
@@ -893,10 +985,9 @@ float UiComposedPeak() { return s_peakTarget; }
 void  UiRecomputeTarget() { RecomputeTarget(); }
 
 std::wstring UiSaveTarget() {
-    if (UiCycleOn()) {
-        std::wstring f = UiCycleStageFile();
-        if (!f.empty()) return f;
-    }
+    // cycling: the running stage's file, or nothing (photo / overlay stage). Never the
+    // active preset: the live config is the director's stage, not that preset's look.
+    if (UiCycleOn()) return UiCycleStageFile();
     return s_activePreset;
 }
 

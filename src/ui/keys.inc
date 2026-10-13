@@ -749,7 +749,7 @@ KEY_SLIDER("Rig readjust reach", 0, 1, 0.05f, 2, &c.post.rigReadjust, nullptr, "
            G_MOTION, "FAI", "", KF_MOTION, "", "")
 KEY_SLIDER("Wanderer path", 0, 2, 1, 0, nullptr, &c.wandererMode, "behavior", "wanderer_mode", true, "Path the wanderers follow",
            G_FLUID, "FAI", "behavior.wanderers>0", 0, "enum:0=Random wander|1=Circle|2=Figure 8", "")
-KEY_SLIDER("Colour gamut", 0, 2, 1, 0, nullptr, &g_gamutMode, "hdr", "gamut", false, "Output gamut while Windows HDR is on",
+KEY_SLIDER("Colour gamut", 0, 2, 1, 0, nullptr, &g_gamutMode, "hdr", "gamut", false, "Output gamut. HDR on: shown as is. HDR off: converted for the panel (tray: SDR colours)",
            G_OUTPUT, "FAI", "", KF_MACHINE|KF_GLOBAL, "enum:0=sRGB|1=Display-P3|2=BT.2020 (QD-OLED)", "")
 KEY_SLIDER("Sim resolution", 32, 512, 1, 0, nullptr, &c.simRes, "sim", "sim_res", false, "Fluid grid size. Read-only here: 256 is the WE grid (AGENTS.md hard constraint)",
            G_FLUID, "FAI", "", KF_SHELL, "", "")

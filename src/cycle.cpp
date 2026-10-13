@@ -241,7 +241,7 @@ int LookOf(const CycleStage& st) {
         ink  = GetPrivateProfileIntW(L"look", L"ink", ink ? 1 : 0, ini.c_str()) != 0;
         if (ink) acid = false;
     };
-    apply(st.basePath);
+    for (const std::wstring& b : st.baseChain) apply(b);   // the whole chain, root first (R18)
     apply(st.path);
     return ink ? CYCLE_LOOK_INK : (acid ? CYCLE_LOOK_ACID : CYCLE_LOOK_FLUID);
 }
@@ -253,6 +253,7 @@ void ResolveStage(CycleStage& st, const std::wstring& ini) {
     if (HasSection(st.path, L"photo")) st.photo = true;
     if (st.photo) {
         st.basePath.clear();
+        st.baseChain.clear();
         st.name = Stem(st.file);
         st.ok = Exists(st.path);
         st.overlay = false;
@@ -267,18 +268,32 @@ void ResolveStage(CycleStage& st, const std::wstring& ini) {
         const std::wstring mb = IniStr(L"meta", L"base", st.path.c_str());
         if (!mb.empty()) st.basePath = Resolve(mb, st.path);
     }
+    // The base's own [meta] base chain composes under it, as the tray's MergePresetChain
+    // does (3 more levels: 4 files under the stage file, the tray's limit). stage_N_base
+    // still wins over the file's [meta] base, as before. No shipped base carries a base of
+    // its own, so every existing config composes the same files (review 2026-10-04 R18).
+    st.baseChain.clear();
+    bool chainMissing = false;
+    if (!st.basePath.empty()) {
+        if (Exists(st.basePath)) st.baseChain = PresetBaseChain(st.basePath, 3, &chainMissing);
+        st.baseChain.push_back(st.basePath);
+    }
     st.name = Stem(st.file);
-    st.ok = Exists(st.path) && (st.basePath.empty() || Exists(st.basePath));
+    // ok only if every file of the chain is there (a dangling base= half-composes the look)
+    st.ok = Exists(st.path) && !chainMissing;
+    for (const std::wstring& b : st.baseChain) st.ok = st.ok && Exists(b);
     st.look = st.ok ? LookOf(st) : CYCLE_LOOK_FLUID;
     // can a tamed burst land here? the palette clock must turn the film
     // (hue_rotate_period on) and the sweep must be off (the landing maths
-    // assumes the film's own hue is oil_color_1's) -- file over base
+    // assumes the film's own hue is oil_color_1's) -- file over its base chain
     float rot = LiquidAcidConfig{}.hueRotatePeriod, sweep = LiquidAcidConfig{}.hueSweepPeriod;
-    for (const std::wstring* p : { &st.basePath, &st.path }) {
-        if (p->empty() || !Exists(*p)) continue;
-        std::wstring v = IniStr(L"liquid_acid", L"hue_rotate_period", p->c_str());
+    std::vector<std::wstring> files = st.baseChain;
+    files.push_back(st.path);
+    for (const std::wstring& p : files) {
+        if (p.empty() || !Exists(p)) continue;
+        std::wstring v = IniStr(L"liquid_acid", L"hue_rotate_period", p.c_str());
         if (!v.empty()) rot = (float)_wtof(v.c_str());
-        v = IniStr(L"liquid_acid", L"hue_sweep_period", p->c_str());
+        v = IniStr(L"liquid_acid", L"hue_sweep_period", p.c_str());
         if (!v.empty()) sweep = (float)_wtof(v.c_str());
     }
     st.burstOk = st.ok && !st.overlay && st.look == CYCLE_LOOK_ACID && rot > 0.01f && !(sweep > 0.01f);
@@ -386,8 +401,10 @@ float Smooth(float x) {
 // ---- the absorbed conductor transition (was moods.cpp LerpLook/FlipDiscrete)
 float L(float a, float b, float t) { return a + (b - a) * t; }
 
-// Whitelisted look floats -- lerped across the whole transition. Everything
-// not listed here (bools, ints, palette array) flips at the midpoint.
+// Whitelisted look floats -- lerped across the whole transition. FlipDiscrete's
+// fields (bools, ints, palette array) flip at t = 0.4. Every other field
+// (gravity*, post.*, [mirror], ...) keeps the from-stage value and snaps at t = 1,
+// when FinishLerp composes the stage exactly (review 2026-10-04 U37).
 void LerpLook(FluidConfig& o, const FluidConfig& a, const FluidConfig& b, float t) {
     o.densityDissipation  = L(a.densityDissipation,  b.densityDissipation,  t);
     o.velocityDissipation = L(a.velocityDissipation, b.velocityDissipation, t);
@@ -436,7 +453,7 @@ void LerpLook(FluidConfig& o, const FluidConfig& a, const FluidConfig& b, float 
     o.hsOffTime           = L(a.hsOffTime,           b.hsOffTime,           t);
 }
 
-// Discrete look fields -- flipped at the transition midpoint.
+// Discrete look fields -- flipped at t = 0.4 (LERP_SHIFT -> LERP_EMIT, as the hue bridge lands).
 void FlipDiscrete(FluidRenderer& r, const FluidConfig& t) {
     FluidConfig& c = r.Config();
     c.colorful           = t.colorful;
@@ -486,7 +503,7 @@ void ComposeFiles(const CycleStage& st, FluidConfig& c) {
         c.acid.enabled = acid;
         c.ink.enabled = ink;
     };
-    if (!st.basePath.empty()) LoadConfigFromFile(st.basePath.c_str(), c);
+    for (const std::wstring& b : st.baseChain) LoadConfigFromFile(b.c_str(), c);   // root first (R18)
     if (layout) loadLayout();
     LoadConfigFromFile(st.path.c_str(), c);
     if (s_cfg.schemeHuePeriod > 0.0f && oil &&
@@ -519,11 +536,13 @@ void Compose(int i, const FluidConfig& live, FluidConfig& out, float& peak, int&
     // carries one (file over base), else the user's own setting
     peak = s_userPeak;
     gamut = s_userGamut;
-    for (const std::wstring* ini : { &st.basePath, &st.path }) {
-        if (ini->empty()) continue;
-        std::wstring pk = IniStr(L"hdr", L"peak_nits", ini->c_str());
+    std::vector<std::wstring> files = st.baseChain;      // the whole base chain, then the file (R18)
+    files.push_back(st.path);
+    for (const std::wstring& ini : files) {
+        if (ini.empty()) continue;
+        std::wstring pk = IniStr(L"hdr", L"peak_nits", ini.c_str());
         if (!pk.empty()) peak = (float)_wtof(pk.c_str());
-        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, ini->c_str());
+        int gm = (int)GetPrivateProfileIntW(L"hdr", L"gamut", -1, ini.c_str());
         if (gm >= 0 && gm <= 2) gamut = gm;
     }
 }
@@ -612,7 +631,7 @@ void EnterDwell(FluidRenderer& r, int i) {
     r.SetCoverageWanted(IsFluid(LookStage(i)));   // dark trigger + the next hue bridge
     AttachJourney(i);
     Log("[cycle] dwelling in %d %ls (%.1f s = %.0f s +-%.0f%%)%s\n",
-        i + 1, s_cfg.stages[i].name.c_str(), s_dwellTarget, DwellOf(i), j * 100.0f,
+        i + 1, Valid(i) ? s_cfg.stages[i].name.c_str() : L"-", s_dwellTarget, DwellOf(i), j * 100.0f,
         s_journeyWasActive ? " with a journey" : "");
 }
 
@@ -940,6 +959,9 @@ int PickPrev() {
 }
 
 void GoOff(const char* why) {
+    // a fluid -> fluid lerp holds a hue-shift command until it lands; let it go
+    // here or the cycler stays parked at the bridge angle (glides home, no snap)
+    if (s_phase == CYCLE_LERP && g_renderer) g_renderer->ReleaseHueShift(false);
     s_phase = CYCLE_OFF;
     s_next = -1;
     s_fade = 1.0f;
@@ -950,6 +972,15 @@ void GoOff(const char* why) {
     s_photoLoadStage = -1;
     s_photoFile.clear();
     Log("[cycle] off (%s)\n", why);
+    // The shell globals go back to the USER's own peak / gamut: a stage's values
+    // used to stay live, and SaveSettings then wrote them into settings.ini as
+    // the user's (review 2026-10-04 R4). A preset's own [hdr] keys still win:
+    // ApplyPreset applies them after CycleManualOverride returns.
+    if (s_haveUser) {
+        g_hdrPeakNits = s_userPeak;
+        g_gamutMode = s_userGamut;
+        s_haveUser = false;                  // the next "on" captures again
+    }
     // CLOCKS pre-flight 4: the base goes back into the live config NOW --
     // ApplyPreset reads Config right after CycleManualOverride returns
     if (g_renderer) ClocksRestoreBase(g_renderer->Config(), "cycle off");
@@ -1736,12 +1767,19 @@ void CycleSetEnabled(bool on, bool persist) {
             CaptureUserShell();
             if (!s_rngSeeded) SeedRng();
             // whatever is on screen is not a stage: leave it by a fade
-            const int start = Valid(s_saved) && s_cur < 0 ? s_saved : PickNext();
+            int start = Valid(s_saved) && s_cur < 0 ? s_saved : PickNext();
+            // s_cur is -1 below, so BeginSwitch refuses an overlay (nothing to fold) and
+            // the director sat idle: start on the next look stage instead, as CycleBoot
+            // does, and let a switch that is still refused retry at the next tick
+            // (review 2026-10-04 U19)
+            for (int k = 0; k < (int)s_cfg.stages.size() && IsOverlay(start); k++)
+                start = (start + 1) % (int)s_cfg.stages.size();
             s_cur = -1;
-            if (Valid(start)) {
+            if (Valid(start) && !IsOverlay(start)) {
                 g_cycleActive = true;
                 s_phase = CYCLE_DWELL;
                 s_dwellT = 0.0f;
+                s_dwellTarget = 0.0f;
                 Log("[cycle] on\n");
                 BeginSwitch(*g_renderer, start);
             }
@@ -1760,6 +1798,20 @@ void CycleSetEnabled(bool on, bool persist) {
         WritePrivateProfileStringW(L"cycle", L"enabled", on ? L"1" : L"0", g_iniPath);
 }
 
+// The user's own [hdr] peak_nits / gamut while the director holds a STAGE's
+// values in the shell globals. SaveSettings writes these, so a tray toggle or
+// a Settings edit never stores a stage's peak as the user's (review 2026-10-04 R4).
+bool CycleUserShell(float& peak, int& gamut) {
+    if (!g_cycleActive || !s_haveUser) return false;
+    peak = s_userPeak;
+    gamut = s_userGamut;
+    return true;
+}
+// A peak / gamut the USER picks while cycling (tray, Settings window): it is
+// their own value from now on (stages without [hdr] keys fall back to it).
+void CycleSetUserPeak(float peak) { if (s_haveUser) s_userPeak = peak; }
+void CycleSetUserGamut(int gamut) { if (s_haveUser) s_userGamut = gamut; }
+
 std::wstring CycleStageLabel(int i) {
     if (i < 0 || i >= (int)s_cfg.stages.size()) return L"";
     const CycleStage& st = s_cfg.stages[i];
@@ -1775,6 +1827,23 @@ const CycleConfig& CycleGet() { return s_cfg; }
 
 void CycleComposeStageFiles(int stage, FluidConfig& c) {
     if (stage >= 0 && stage < (int)s_cfg.stages.size()) ComposeFiles(s_cfg.stages[stage], c);
+}
+
+bool CycleStageComposesBeyondFile(int stage) {
+    if (stage < 0 || stage >= (int)s_cfg.stages.size()) return false;
+    const CycleStage& st = s_cfg.stages[stage];
+    if (!st.base.empty()) return true;                       // stage_N_base: not in the file
+    const bool oil = st.look == CYCLE_LOOK_ACID && !st.overlay;
+    if (!oil) return false;
+    if (!s_cfg.oilLayoutPath.empty()) return true;           // ComposeFiles' loadLayout()
+    // the scheme_hue_period override, under the same test ComposeFiles applies it with
+    if (s_cfg.schemeHuePeriod > 0.0f) {
+        FluidConfig c;
+        ComposeFiles(st, c);
+        return c.acid.hueRotatePeriod == s_cfg.schemeHuePeriod &&
+               IniStr(L"liquid_acid", L"hue_rotate_period", st.path.c_str()).empty();
+    }
+    return false;
 }
 
 void CycleSet(const CycleConfig& c) {
@@ -1796,6 +1865,14 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.schemeRampSec = fminf(fmaxf(c.schemeRampSec, 0.1f), 10.0f);
     s_cfg.weEvery = c.weEvery < 1 ? 1 : (c.weEvery > 12 ? 12 : c.weEvery);
     s_cfg.schemeHuePeriod = fmaxf(c.schemeHuePeriod, 0.0f);
+    // The running indices name STAGES, not list positions: note which files they
+    // point at and find them again in the new list (review 2026-10-04 R6: after a
+    // "move up" s_cur named the neighbour, so Save wrote the running look into the
+    // wrong file; a stage removed during its own transition left -1 behind and the
+    // transition then indexed stages[-1]).
+    auto pathOf = [&](int i) { return Valid(i) ? s_cfg.stages[i].path : std::wstring(); };
+    const std::wstring curPath = pathOf(s_cur), nextPath = pathOf(s_next), basePath = pathOf(s_base),
+                       fromPath = pathOf(s_fromAtBlack), photoPath = pathOf(s_photoLoadStage);
     s_cfg.stages = c.stages;
     s_queued = -1;                           // indices may have moved
     const std::wstring base = s_iniPath.empty() ? std::wstring(g_iniPath) : s_iniPath;
@@ -1803,8 +1880,31 @@ void CycleSet(const CycleConfig& c) {
     s_cfg.oilLayout = c.oilLayout;
     s_cfg.oilLayoutPath = c.oilLayout.empty() ? std::wstring() : Resolve(c.oilLayout, base);
     if (!s_cfg.oilLayoutPath.empty() && !Exists(s_cfg.oilLayoutPath)) s_cfg.oilLayoutPath.clear();
-    if (!Valid(s_cur)) s_cur = -1;
-    if (!Valid(s_next)) s_next = -1;
+    auto remap = [&](int old, const std::wstring& path) -> int {
+        if (old < 0 || path.empty()) return -1;
+        // the same slot first, so a file listed twice stays where it was
+        if (Valid(old) && _wcsicmp(s_cfg.stages[old].path.c_str(), path.c_str()) == 0) return old;
+        for (int k = 0; k < (int)s_cfg.stages.size(); k++)
+            if (_wcsicmp(s_cfg.stages[k].path.c_str(), path.c_str()) == 0) return k;
+        return -1;
+    };
+    const bool hadCur = s_cur >= 0, hadNext = s_next >= 0;
+    s_cur = remap(s_cur, curPath);
+    s_next = remap(s_next, nextPath);
+    s_base = remap(s_base, basePath);
+    s_fromAtBlack = remap(s_fromAtBlack, fromPath);
+    s_photoLoadStage = remap(s_photoLoadStage, photoPath);
+    // A transition whose stage left the list cannot land: let go and, when the
+    // cycle stays enabled, re-enter by a clean fade (below). A DWELL on a removed
+    // stage needs nothing: s_cur = -1 is "what is on screen is not a stage".
+    bool restart = false;
+    if (s_phase != CYCLE_OFF && s_phase != CYCLE_DWELL) {
+        const bool needsNext = s_phase == CYCLE_FADE_OUT || s_phase == CYCLE_LERP || s_phase == CYCLE_SCHEME;
+        if (needsNext ? (hadNext && s_next < 0) : (hadCur && s_cur < 0)) {
+            GoOff("its stage left the list during a transition");
+            restart = c.enabled;
+        }
+    }
     s_history.clear();
     // persist the whole [cycle] section (settings.ini only, never a stage file)
     if (!g_configReadOnly && g_iniPath[0] && _wcsicmp(base.c_str(), g_iniPath) == 0) {
@@ -1860,7 +1960,7 @@ void CycleSet(const CycleConfig& c) {
         }
         if (s_cur >= 0) putI(L"current", s_cur + 1);
     }
-    if (c.enabled != wasEnabled) CycleSetEnabled(c.enabled, false);
+    if (c.enabled != wasEnabled || restart) CycleSetEnabled(c.enabled, false);
 }
 
 CycleStatus CycleState() {
@@ -2044,19 +2144,37 @@ bool CycleStageBase(FluidConfig& out) {
     if (!Valid(i) || IsPhoto(i)) return false;   // brief BY: a photo composes nothing
     float peak;
     int gamut;
+    if (IsOverlay(i)) {
+        // An overlay is not a look: its base is the look stage UNDER it plus the
+        // overlay's keys, layered the way SoftPoint does. Composed alone it was
+        // "code defaults + the mirror keys", so the Settings window counted the
+        // whole look as changes (review 2026-10-04 R7).
+        if (!Valid(s_base) || IsPhoto(s_base) || IsOverlay(s_base)) return false;
+        Compose(s_base, g_renderer->Config(), out, peak, gamut);
+        const FluidConfig shell = out;
+        LoadConfigFromFile(s_cfg.stages[i].path.c_str(), out);
+        out.simRes = shell.simRes; out.dyeRes = shell.dyeRes;
+        out.fpsLimit = shell.fpsLimit; out.mirrorSecond = shell.mirrorSecond;
+        out.acid.enabled = shell.acid.enabled;
+        out.ink.enabled = shell.ink.enabled;
+        return true;
+    }
     Compose(i, g_renderer->Config(), out, peak, gamut);
     return true;
 }
 
 std::wstring CycleStageFile() {
     // brief BY pre-flight 8: "" on a photo stage, so the UI never saves live
-    // Config into the photo ini
-    if (s_phase == CYCLE_OFF || !Valid(s_cur) || IsPhoto(s_cur)) return L"";
+    // Config into the photo ini. "" on an overlay too: Save wrote the whole
+    // look under it into the overlay's partial ini (review 2026-10-04 R7).
+    if (s_phase == CYCLE_OFF || !Valid(s_cur) || IsPhoto(s_cur) || IsOverlay(s_cur)) return L"";
     return s_cfg.stages[s_cur].path;
 }
 
 void CycleRevertStage() {
-    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur) || IsPhoto(s_cur)) return;
+    // not on an overlay: Compose(overlay) alone is "code defaults + the overlay keys",
+    // which swapped the look under it for stock WE fluid on a visible frame (R7)
+    if (s_phase != CYCLE_DWELL || !g_renderer || !Valid(s_cur) || IsPhoto(s_cur) || IsOverlay(s_cur)) return;
     FluidConfig c;
     float peak;
     int gamut;

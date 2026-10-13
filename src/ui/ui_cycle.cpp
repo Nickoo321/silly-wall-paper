@@ -60,6 +60,10 @@ void UiCycleSetEnabled(bool on) {
     CycleSetEnabled(on, true);
 }
 bool UiCycleOn() { return s_scripted ? s_scriptStatus.on : CycleState().phase != CYCLE_OFF; }
+// a peak / gamut edit in the window while cycling is the user's own value (settings.ini,
+// and the director's fallback for stages without their own [hdr] keys)
+void UiCycleNoteUserPeak(float peak) { if (!s_scripted) CycleSetUserPeak(peak); }
+void UiCycleNoteUserGamut(int gamut) { if (!s_scripted) CycleSetUserGamut(gamut); }
 
 std::wstring UiPresetsDir() {
     wchar_t dir[MAX_PATH];
@@ -187,6 +191,11 @@ std::wstring UiCycleStageFile() {
     return (s_scriptStatus.on && Valid(s_scriptStatus.stage)) ? CycleGet().stages[s_scriptStatus.stage].path
                                                               : std::wstring();
 }
+bool UiCycleStageComposesBeyondFile() {
+    // the stage UiCycleStageFile() names (review 2026-10-04 R17)
+    if (UiCycleStageFile().empty()) return false;
+    return CycleStageComposesBeyondFile(s_scripted ? s_scriptStatus.stage : CycleState().stage);
+}
 void UiCycleRevertStage() { if (!s_scripted) CycleRevertStage(); }
 
 void UiCyclePauseForEditing() {
@@ -284,7 +293,9 @@ std::string UiCycleScript(const std::string& cmdIn, FluidConfig& cfg) {
             cfg.fpsLimit = shell.fpsLimit; cfg.mirrorSecond = shell.mirrorSecond;
             // the stage's shell globals, as the director's Compose applies them
             const CycleStage& cst = CycleGet().stages[st];
-            for (const std::wstring& f : { cst.basePath, cst.path }) {
+            std::vector<std::wstring> files = cst.baseChain;   // the whole chain, as Compose (R18)
+            files.push_back(cst.path);
+            for (const std::wstring& f : files) {
                 if (f.empty()) continue;
                 wchar_t b[64] = {};
                 GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", b, 64, f.c_str());

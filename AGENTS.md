@@ -15,16 +15,22 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   window writes config live.
 - Useful flags: `--console` (diagnostics console; note it re-attaches stdout so
   shell redirection goes silent), `--calibrate N` (quiz pattern pages),
-  `--gradient`, `--stats`, `--force-render`.
+  `--gradient`, `--stats`, `--force-render`. Shot-mode extras: `--shot-time0 S` (start the master
+  clock at S s of uptime: what a look does after hours), `--test-device-lost T` (self-test of the
+  GPU device-lost recovery: RemoveDevice at T, then the rebuild; `[devlost]` lines in the shot log).
+- A lost GPU device (driver update / TDR / Win+Ctrl+Shift+B) is survived by the live wallpaper:
+  the renderer flags it, the main loop tears down and rebuilds through the fullscreen-suspend
+  backoff (review 2026-10-04 R3). A plain `--shot` stays fatal on a real loss, so headless runs
+  cannot hang.
 
 ## Hard constraints (user directives)
 
 - **Bloom: only the keyed post bloom, default 0 (acid-rise-12 ships 0.30); never the old full-screen bloom.**
 - **sim_res/dye_res live at 256/4096** (256 = the WE grid; verified 2026-09-16 that the WE motion — droplet curls, marbled cores — only appears at 256, vorticity 48). Moods/presets must never carry them.
 - Every mood recipe is finalized only via a calibration quiz with the user
-  (protocol: CALIBRATION.md + cloud-quiz-round2-proposal.md).
+  (protocol: docs/CALIBRATION.md + docs/cloud-quiz-round2-proposal.md).
 - Everything must look good with Windows HDR **on AND off** — verify both.
-- Screenshots tone-map dark and are SDR-inaccurate (see CALIBRATION.md
+- Screenshots tone-map dark and are SDR-inaccurate (see docs/CALIBRATION.md
   anomaly); treat them as rough hue/composition checks, never luminance truth.
 - Panel: X27U W1 QD-OLED, ~1000 nits small window, ~418 full frame, ABL —
   keep hot elements small; don't chase full-screen brightness.
@@ -73,8 +79,10 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
   the user's and stay untouched, nothing scans them.
 - `src/main.cpp` — app shell: WorkerW, tray, HDR detection, ini load/save.
 - `src/settings.cpp` — Settings window (primary UI; user's taskbar is hidden).
-- Docs: WORKLOG.md (session logs + state dumps), NOTES.md (full history),
-  CALIBRATION.md (quiz benchmarks), backup-pre-rework-2026-07-24/ (snapshot).
+- Docs: WORKLOG.md (session logs + state dumps, stays at the root); everything else in docs/:
+  NOTES.md (full history), PROGRESS.md, COLOR-AUDIT.md, OIL-REVIEW.md, resume/ (executor resume notes).
+  docs/CALIBRATION.md (quiz benchmarks). WE exports: reference/WE-PRESETS.json + WE-LIVE-PROPERTIES.json.
+  Old snapshots: archive/ (backup-pre-rework-2026-07-24/, FluidWallpaper-src-2026-07-24.zip).
 
 ## Conventions
 
@@ -82,9 +90,11 @@ Single exe, no deps beyond Windows SDK libs. ONE exception (user OK 2026-09-24):
 - Hue rotation is post-process (`CssHueRotate(+m_hueAngle)`); emission
   counter-rotates while a hue command is active (WheelHue) — keep that
   invariant when touching color generation.
-- The `[hdr] gamut` stretch (P3 / BT.2020) is applied only while Windows HDR is ON; with HDR
-  off the frame is plain sRGB (user 2026-10-04). `--hdr off` shots therefore differ from
-  `--hdr on` shots in colour by design; identity baselines are `--hdr on`.
+- The `[hdr] gamut` stretch (P3 / BT.2020) goes out as is only while Windows HDR is ON. With HDR
+  off, `[hdr] sdr_gamut` decides (default 1 = the gamut converted to the PANEL's own primaries from
+  DXGI/EDID, so SDR lands on the colours HDR shows; 0 plain sRGB; 2 the HDR stretch, clipped).
+  `--hdr off` shots differ from `--hdr on` shots in colour by design (headless: the P3 stand-in
+  unless `--panel-primaries` is given); identity baselines are `--hdr on`.
 - `reference/configs/cycle-flow.ini` is the LIVE cycle (long runs: `we_every=2`,
   `scheme_hue_period=900`, 480/600 s dwells, `oil_layout` = Layout - Few giants over every oil
   stage, loaded between the stage's base and its file); `cycle-final.ini` stays the proven walk.

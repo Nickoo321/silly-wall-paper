@@ -5,11 +5,15 @@
 // else inferred from the sections it carries (a Scheme file with only [liquid_acid] is an acid
 // partial; a file with only [mirror] is an overlay = "any"). [ui] is never read from a preset.
 //
-// Save / Save as write PARTIAL overlays (never a full WriteConfigToIni dump):
+// Save and "Save as, only my changes" write PARTIAL overlays:
 //   Save     -> into the active preset (or the cycle's current stage file): ONLY the keys whose
 //               live value differs from the composed base, updated in place.
 //   Save as  -> a new file: [meta] look= + base=<the base preset's file name> + [look] style=
 //               + only the changed keys. Apply / Add-to-cycle resolve [meta] base first.
+//   Save as, self-contained -> the whole look (the full writer minus the machine keys), so it
+//               reproduces the picture whatever look it is applied over (review 2026-10-04 R15).
+//               Also what "only my changes" falls back to with no base, or on a cycle stage
+//               that composes more than its file can name as a base (R17).
 // Delete goes to the Recycle Bin (SHFileOperation FOF_ALLOWUNDO), never a hard delete.
 // Writes are refused while the config is read-only (--shot / --ui-shot) EXCEPT inside an
 // explicit headless test folder (--ui-presets-dir), so a proof run can exercise them without
@@ -39,8 +43,8 @@ std::wstring UiStemOf(const std::wstring& path);
 void UiApplyPresetFile(const std::wstring& path);
 // Save: partial update of the target file. log receives one line per written key.
 bool UiSavePartial(const std::wstring& target, std::vector<std::string>* log);
-// Save as: new partial file in the library. onlyChanges=false -> every key that differs from
-// the code defaults (self-contained, no base). Returns the new path.
+// Save as: new file in the library. onlyChanges=false -> the whole look (self-contained, no
+// base). Returns the new path.
 bool UiSaveAsPartial(const std::wstring& name, bool onlyChanges, std::wstring* outPath,
                      std::vector<std::string>* log);
 bool UiDuplicatePreset(const std::wstring& path, std::wstring* outPath);

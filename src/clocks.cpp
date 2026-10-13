@@ -942,8 +942,14 @@ void ClocksRestoreBase(FluidConfig& live, const char* why) {
         if (Bits(*p) == Bits(k.lastOut)) {
             if (Bits(*p) != Bits(k.base)) n++;
             *p = k.base;
+            k.lastOut = *p;                  // what is there now is our base: not re-adopted
+        } else {
+            // someone else wrote it: not ours. Marked as never seen, so the next tick
+            // adopts it as the new base and BaseCopy leaves it alone; keeping it as
+            // lastOut wrote the stale base back over it (review 2026-10-04 U22)
+            k.have = false;
+            k.haveOut = false;
         }
-        k.lastOut = *p;                      // what is there now is not ours to adopt back
     }
     s_x = 0.0f;                               // a later start glides in again
     s_wasActive = false;

@@ -38,6 +38,7 @@ function NewDefragEvents {
         Where-Object { $m = $_.Message; ($Drives | Where-Object { $m -match "\($($_.ToUpper()):\)" }).Count -gt 0 }
 }
 
+$svcSeenRunning = $false      # the "service stopped" fallback counts only after the service has run
 while ($true) {
     if (Test-Path $stop) { Log "stop file found, exiting (nothing shut down)"; Remove-Item $stop -Force; exit 0 }
     $now = Get-Date
@@ -49,6 +50,7 @@ while ($true) {
         Log ("defrag event {0}: {1}" -f $ev.Id, $ev.Message.Split("`n")[0])
     }
     $svcStopped = (Get-Service defragsvc).Status -eq 'Stopped'
+    if (-not $svcStopped) { $svcSeenRunning = $true }
     $busy = HddBusy
     $finished = $false
     if ($doneEvent) {
@@ -56,7 +58,9 @@ while ($true) {
         elseif ($null -eq $quietSince) { $quietSince = $now }
         elseif (($now - $quietSince).TotalMinutes -ge $QuietMinutes) { $finished = $true }
     }
-    if ($svcStopped -and -not $busy) { Log "defragsvc stopped"; $finished = $true }
+    # defragsvc is demand-start and sits in Stopped whenever idle: without "seen running" this
+    # forced a shutdown a minute after the script started, before any defrag (review 2026-10-04)
+    if ($svcSeenRunning -and $svcStopped -and -not $busy) { Log "defragsvc stopped"; $finished = $true }
 
     if ($finished) {
         Log "defrag run finished -> shutting down in 60 s"

@@ -49,7 +49,10 @@ std::wstring Lower(std::wstring s) {
     return s;
 }
 std::wstring Key(std::wstring folder) {       // bag / scan key: lower case, no trailing slash
-    while (folder.size() > 3 && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
+    // A drive root too: PhotoDraw keys "D:\" and PhotoMarkShown keys FolderOfPath's "D:",
+    // so both must land on "d:" or the shown list never fills (review 2026-10-04 U23).
+    // The key only names the map entry; Scan still reads the folder as given.
+    while (folder.size() > 1 && (folder.back() == L'\\' || folder.back() == L'/')) folder.pop_back();
     return Lower(folder);
 }
 bool Contains(const std::vector<std::wstring>& v, const std::wstring& lowerKey) {

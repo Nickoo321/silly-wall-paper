@@ -11,6 +11,8 @@
 #include "ui_model.h"
 #include "ui_cycle.h"
 #include "../app_state.h"
+#include "../app_state.h"
+#include "../cycle.h"      // CycleUserShell: the user's own peak while cycling (R15)
 
 #pragma comment(lib, "shell32.lib")
 
@@ -186,13 +188,12 @@ const std::vector<UiPresetFile>& UiLibrary(bool rescan) {
 }
 
 void UiApplyPresetFile(const std::wstring& path) {
-    std::wstring base = UiPresetBase(path);
     const UiHooks& h = UiGetHooks();
     // The shell's ApplyPreset (main.cpp) resolves [meta] base itself now
     // (FINAL-CYCLE B.4, same as the tray): one call, one undo entry.
     if (h.applyPreset) { h.applyPreset(path); return; }
-    // headless: [meta] base first (a partial "Save as" sits on it), then the file
-    if (!base.empty() && Exists(base)) UiApplyPresetHeadless(base);
+    // headless: the whole [meta] base chain first, root first, as the tray does (R18), then the file
+    for (const std::wstring& b : PresetBaseChain(path)) UiApplyPresetHeadless(b);
     UiApplyPresetHeadless(path);
 }
 
@@ -237,14 +238,22 @@ bool UiSaveAsPartial(const std::wstring& nameIn, bool onlyChanges, std::wstring*
     std::wstring basePreset = onlyChanges ? UiSaveTarget() : L"";
     if (onlyChanges && (basePreset.empty() || !Exists(basePreset))) {
         onlyChanges = false;                             // nothing to sit on: self-contained
-        if (log) log->push_back("no base preset: writing a self-contained partial instead");
+        if (log) log->push_back("no base preset: writing a self-contained preset instead");
+    }
+    // Cycling: the changes are measured against the COMPOSED stage, but [meta] base can name
+    // only the stage file, so a stage base / oil_layout / scheme_hue_period would be lost on
+    // the way back (review 2026-10-04 R17): save the whole look instead.
+    if (onlyChanges && UiCycleOn() && UiCycleStageComposesBeyondFile()) {
+        onlyChanges = false;
+        if (log) log->push_back("this cycle stage adds a stage base / oil layout / hue period its file does not "
+                                "carry: writing a self-contained preset instead");
     }
     const unsigned look = LookOfConfig(UiCfg());
     std::string comment = "; " + N(name) + ".ini -- saved by the Settings window.\r\n";
     if (onlyChanges)
         comment += "; PARTIAL overlay: only the keys that differ from [meta] base (applied first).\r\n";
     else
-        comment += "; PARTIAL overlay: every key that differs from the code defaults (self-contained).\r\n";
+        comment += "; SELF-CONTAINED: the whole look (every look key), reproduces the picture on any look.\r\n";
     if (!CreateWithComment(path, comment)) return false;
     WriteKey(path, L"meta", L"look", StyleOf(look), log);
     if (onlyChanges) {
@@ -254,25 +263,69 @@ bool UiSaveAsPartial(const std::wstring& nameIn, bool onlyChanges, std::wstring*
         WriteKey(path, L"meta", L"base", rel, log);
     }
     WriteKey(path, L"look", L"style", StyleOf(look), log);
-    static const FluidConfig kDefaults{};
     int n = 0;
-    for (int i = 0; i < UiRowCount(); i++) {
-        const KeyRow& r = UiRow(i);
-        if (r.isLook || !UiCountsForDirty(i) || UiRowAnimLocked(i, nullptr)) continue;
-        float v = UiValue(i);
-        bool write = onlyChanges ? UiDirty(i)
-                                 : (r.isPeak ? v != -1.0f
-                                             : (r.f && !r.isCheck ? fabsf(v - UiDefault(i)) > r.step * 0.5f
-                                                                  : lroundf(v) != lroundf(UiDefault(i))));
-        if (!write) continue;
-        WriteKey(path, r.wsec, r.wkey, UiIniText(i, v), log);
-        n++;
+    if (onlyChanges) {
+        for (int i = 0; i < UiRowCount(); i++) {
+            const KeyRow& r = UiRow(i);
+            if (r.isLook || !UiCountsForDirty(i) || UiRowAnimLocked(i, nullptr)) continue;
+            if (!UiDirty(i)) continue;
+            WriteKey(path, r.wsec, r.wkey, UiIniText(i, UiValue(i)), log);
+            n++;
+        }
+        WriteSplatColours(path, UiComposedBase(), log);
+    } else {
+        // SELF-CONTAINED = the complete look: every key the full writer knows, not only the rows
+        // that differ from the code defaults. A preset is merged OVER the live config, so a key
+        // the file left out (palettes, oil colours, ink stops, ~45 scalars without a row, and
+        // any row sitting at its default) came from whatever look ran before (review 2026-10-04
+        // R15). The clocks' base, never base x F; a row gliding right now goes in at the value
+        // it is gliding to. No machine keys (sim_res / dye_res / fps_limit / mirror_second).
+        FluidConfig snap = UiCfg();
+        UiClocksBaseCopy(snap);
+        for (int i = 0; i < UiRowCount(); i++) {
+            const KeyRow& r = UiRow(i);
+            float t = 0.0f;
+            if (r.off < 0 || !UiCountsForDirty(i) || !UiRowAnimLocked(i, nullptr, &t)) continue;
+            char* p = reinterpret_cast<char*>(&snap) + r.off;
+            if (r.f) *reinterpret_cast<float*>(p) = t;
+            else if (r.i) *reinterpret_cast<int*>(p) = (int)lroundf(t);
+            else *reinterpret_cast<bool*>(p) = t > 0.5f;
+        }
+        WriteLookToIni(path.c_str(), snap);
+        // [hdr] peak_nits is the user's GLOBAL setting: in only when this look's differs from
+        // it (R16), e.g. a cycle stage that carries its own; gamut is a machine key, never.
+        float userPeak = g_hdrPeakNits;
+        int userGamut = 0;
+        CycleUserShell(userPeak, userGamut);
+        // ... and a look that CARRIES its own [hdr] keys (a preset chain with peak_nits /
+        // gamut, cycle off: applying it already put them in the globals, so the row equals
+        // "the user's" here) keeps them in the copy, or the copy renders at whatever the global
+        // peak is later (review 2026-10-05).
+        bool chainPeak = false, chainGamut = false;
+        if (!UiCycleOn() && !UiActivePresetPath().empty()) {
+            std::vector<std::wstring> files = PresetBaseChain(UiActivePresetPath());
+            files.push_back(UiActivePresetPath());
+            for (const std::wstring& f : files) {
+                wchar_t b[64] = {};
+                GetPrivateProfileStringW(L"hdr", L"peak_nits", L"", b, 64, f.c_str());
+                if (b[0]) chainPeak = true;
+                if (GetPrivateProfileIntW(L"hdr", L"gamut", -1, f.c_str()) >= 0) chainGamut = true;
+            }
+        }
+        for (int i = 0; i < UiRowCount(); i++) {
+            const KeyRow& r = UiRow(i);
+            if (!r.isPeak) continue;
+            if (!chainPeak && fabsf(UiValue(i) - userPeak) <= r.step * 0.5f) continue;
+            WriteKey(path, r.wsec, r.wkey, UiIniText(i, UiValue(i)), log);
+        }
+        if (chainGamut) WriteKey(path, L"hdr", L"gamut", std::to_wstring(g_gamutMode), log);
+        if (log) log->push_back("wrote the whole look (self-contained)");
     }
-    WriteSplatColours(path, onlyChanges ? UiComposedBase() : kDefaults, log);
     UiNotifyPresetSaved(path);                           // the new file is now the active preset
     UiLibrary(true);
     if (outPath) *outPath = path;
-    printf("[ui] saved as %ls: %d key(s), %s\n", path.c_str(), n, onlyChanges ? "changes only" : "self-contained");
+    if (onlyChanges) printf("[ui] saved as %ls: %d key(s), changes only\n", path.c_str(), n);
+    else printf("[ui] saved as %ls: the whole look, self-contained\n", path.c_str());
     return true;
 }
 

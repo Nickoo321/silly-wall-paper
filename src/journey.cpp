@@ -265,6 +265,7 @@ void JourneyAttachNamed(const wchar_t* name, const wchar_t* moodPath) {
     EnsureBuiltinJourneys();
     wchar_t dir[MAX_PATH], path[MAX_PATH];
     JourneysDir(dir);
+    if (wcslen(dir) + wcslen(name) + 6 > MAX_PATH) return;   // over-long name: swprintf_s would abort
     swprintf_s(path, L"%s\\%s.txt", dir, name);
     if (!ParseJourneyFile(path)) return;   // missing/empty/bad: static mood
     // emit=1 legs restore the stub's own emission switches (absent = on)

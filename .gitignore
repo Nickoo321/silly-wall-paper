@@ -12,3 +12,5 @@ build/shots/
 build2/
 build3/
 __pycache__/
+
+dist/

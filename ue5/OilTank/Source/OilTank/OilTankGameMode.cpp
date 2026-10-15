@@ -14,6 +14,7 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "HAL/FileManager.h"
@@ -122,6 +123,11 @@ void AOilTankGameMode::BeginPlay()
 
 	ApplyCVars();
 	RemoveForeignActors();
+	if (GEngine)
+	{
+		// on-screen debug text would land in the screenshots
+		GEngine->Exec(GetWorld(), TEXT("DisableAllScreenMessages"));
+	}
 
 	SceneActor = GetWorld()->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
 	SceneRoot = NewObject<USceneComponent>(SceneActor, TEXT("OilTankRoot"));
@@ -668,7 +674,7 @@ void AOilTankGameMode::SpawnFloor()
 	auto UV = [&](double X, double Y) { return FVector2D(0.5 + Y / Vis.Y, 0.5 - X / Vis.X); };
 
 	// Clockwise from above: TL, TR, BR, BL (screen up = +X, right = +Y).
-	const TArray<FVector> V = { FVector(HX, -HY, 0), FVector(HX, HY, 0), FVector(-HX, HY, 0), FVector(-HX, -HY, 0) };
+	const TArray<FVector> V = { FVector(HX, -HY, 0.0), FVector(HX, HY, 0.0), FVector(-HX, HY, 0.0), FVector(-HX, -HY, 0.0) };
 	const TArray<int32> T = { 0, 1, 2, 0, 2, 3 };
 	const TArray<FVector> N = { FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
 	const TArray<FVector2D> UV0 = { UV(HX, -HY), UV(HX, HY), UV(-HX, HY), UV(-HX, -HY) };

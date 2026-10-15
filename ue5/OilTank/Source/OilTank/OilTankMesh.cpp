@@ -456,9 +456,11 @@ void OilTankMesh::BuildOilMesh(const TArray<float>& Grid, int32 Nx, int32 Ny, fl
 	Out.UV0.Reserve(NumTop * 2);
 	for (int32 K = 0; K < NumTop; ++K)
 	{
+		// copy first: TArray::Add asserts on a reference into its own storage
 		const FVector P = Out.Vertices[K];
+		const FVector2D UV = Out.UV0[K];
 		Out.Vertices.Add(FVector(P.X, P.Y, BottomZ[K]));
-		Out.UV0.Add(Out.UV0[K]);
+		Out.UV0.Add(UV);
 	}
 	Out.Normals.SetNumUninitialized(NumTop * 2);
 	for (int32 K = 0; K < NumTop; ++K)

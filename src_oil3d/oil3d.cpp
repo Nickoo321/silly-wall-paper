@@ -247,13 +247,27 @@ void Oil3DSim::SeedBlobs() {
         b.s1 = fr(0.0f, kTau); b.s2 = fr(0.0f, kTau); b.s3 = fr(0.0f, kTau);
     };
 
+    // Y of a free blob. With rise_respawn the 2D seeds Y on screen only, but
+    // one trip round the column is 1 + 2 x the support reach (~2.4 screen
+    // heights for a giant): the seeded batch then leaves the top together and
+    // the frame sits nearly empty until the re-entries arrive (measured in the
+    // 3D prototype, t ~ 30-45 s). Seeding over the WHOLE loop, including the
+    // parked rows under the bottom edge, starts the column in steady state.
+    const bool respawnMode = (a.riseSpeed > 1e-6f && a.riseRespawn);
+    auto seedY = [&](float r) {
+        if (!respawnMode) return fr(0.03f, 0.97f);
+        const float sup = r * a.supportScale * (1.0f + a.breathAmt) * 0.86f * m_cfg.radiusScale;
+        return fr(-sup, 1.0f + sup);
+    };
+
     int idx = 0;
     for (int k = 0; k < nDisc && idx < n; k++, idx++) {
         Blob3& b = m_blobs[idx];
         b.kind = 0; b.wgt = 1.0f;
         b.baseR = drawR(a.discMin, a.discMax, a.bigBias);
         b.colIdx = (k % 3 == 0) ? 2 : 0;
-        place(b, fr(0.03f, 0.97f) * A, fr(0.03f, 0.97f), fr(zLo, zHi));
+        const float x = fr(0.03f, 0.97f) * A;
+        place(b, x, seedY(b.baseR), fr(zLo, zHi));
     }
     // webs: a random walk of touching blobs makes connected veins
     float cx = fr(0.15f, 0.85f) * A, cy = fr(0.15f, 0.85f), cz = fr(zLo, zHi), prevR = 0.06f;
@@ -262,14 +276,14 @@ void Oil3DSim::SeedBlobs() {
         b.kind = 1; b.wgt = 1.0f;
         b.baseR = drawR(a.webMin, a.webMax, a.bigBias);
         b.colIdx = (k % 4 == 0) ? 0 : 1;
-        if (k % 9 == 0) { cx = fr(0.10f, 0.90f) * A; cy = fr(0.10f, 0.90f); cz = fr(zLo, zHi); }
+        if (k % 9 == 0) { cx = fr(0.10f, 0.90f) * A; cy = seedY(a.webMax); cz = fr(zLo, zHi); }
         else {
             float ux, uy, uz;
             unit3(ux, uy, uz);
             const float step = (prevR + b.baseR) * fr(0.75f, 1.25f);
             cx += ux * step; cy += uy * step; cz += uz * step * 0.5f;
             cx = fminf(fmaxf(cx, -0.05f * A), 1.05f * A);
-            cy = fminf(fmaxf(cy, -0.05f), 1.05f);
+            if (!respawnMode) cy = fminf(fmaxf(cy, -0.05f), 1.05f);
         }
         prevR = b.baseR;
         place(b, cx, cy, cz);
@@ -288,7 +302,8 @@ void Oil3DSim::SeedBlobs() {
             const float d = (par.baseR + b.baseR) * fr(1.15f, 4.0f);
             place(b, par.x + ux * d, par.y + uy * d, par.z + uz * d);
         } else {
-            place(b, fr(0.02f, 0.98f) * A, fr(0.02f, 0.98f), fr(zLo, zHi));
+            const float x = fr(0.02f, 0.98f) * A;
+            place(b, x, seedY(b.baseR), fr(zLo, zHi));
         }
     }
     const int positives = nDisc + nWeb;
@@ -1465,7 +1480,7 @@ void Oil3DRenderer::UploadFrame(float sdrScale) {
     set(S_MASS, pal.massRgb[0], pal.massRgb[1], pal.massRgb[2], pal.massAmt);
     set(S_MISC, a.riseBottomLight, m_cfg.cavityDark, fminf(fmaxf(a.dyeCore, 0.0f), 1.0f),
         a.postChroma);
-    set(S_MISC2, a.postLift, 0.0f, 0.0f, 0.0f);
+    set(S_MISC2, a.postLift, (float)m_cfg.debugView, 0.0f, 0.0f);
 
     // ---- display: peak gain lifts only the hot speculars; sdrScale is 1.0
     // when Windows HDR is off, and then the gain is 1 too

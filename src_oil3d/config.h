@@ -136,16 +136,16 @@ struct Oil3DConfig {
     float parallax3d = 0.5f;    // share of the 2D size parallax kept (depth gives the rest)
     // lights: direction TOWARD the light, world space (+y down, +z away)
     float light0Dir[3] = { 0.20f, 0.85f, -0.50f };   // the lamp under the column
-    float light0 = 1.00f;
+    float light0 = 0.62f;
     float light1Dir[3] = { -0.60f, -0.60f, -0.55f }; // top-left fill (the 2D rig lamp)
-    float light1 = 0.30f;
-    float wrap      = 0.45f;
-    float ambient   = 0.10f;
-    float spec      = 0.55f;    // small hot Blinn lobe
-    float specPower = 110.0f;
+    float light1 = 0.22f;
+    float wrap      = 0.30f;
+    float ambient   = 0.06f;
+    float spec      = 0.45f;    // small hot Blinn lobe
+    float specPower = 240.0f;
     float rim       = 0.60f;    // fresnel rim strength (x mass_rim when it is set)
     float rimPower  = 3.5f;
-    float sss       = 0.50f;    // thickness glow ("lit from inside")
+    float sss       = 0.30f;    // thickness glow ("lit from inside")
     float sssSigma  = 12.0f;    // per screen-height of wax
     float ao        = 0.55f;
     float fog       = 0.35f;    // depth fog toward the backdrop
@@ -162,6 +162,7 @@ struct Oil3DConfig {
     float dropletScale = 1.6f;
     float mixContrast  = 1.2f;  // hue2/hue3 patch field contrast (cover calibration)
     float hueRotateOverride = -1.0f;  // >0 replaces hue_rotate_period ([cycle] scheme_hue_period)
+    int   debugView = 0;    // 1 normal 2 hole share 3 AO 4 thickness 5 unlit fill
 
     // ---- [hdr] -------------------------------------------------------------
     float peakNits = 1000.0f;

@@ -40,8 +40,10 @@ struct Reader {
         wchar_t b[128];
         if (Str(sec, key, b, 128)) v = _wtoi(b) != 0;
     }
-    // "r g b" (the 2D form) or "r,g,b" (the ink3d form); n floats
-    int Vec(const wchar_t* sec, const wchar_t* key, float* v, int n) {
+    // "r g b" (the 2D form) or "r,g,b" (the ink3d form). Needs at least n
+    // floats; copies up to `cap` of them (cap >= n) and returns how many the
+    // value carried, so a 12-float sweep_oil_N lands whole.
+    int Vec(const wchar_t* sec, const wchar_t* key, float* v, int n, int cap = 0) {
         wchar_t b[256];
         if (!Str(sec, key, b, 256)) return 0;
         for (wchar_t* c = b; *c; c++) if (*c == L',' || *c == L'\t') *c = L' ';
@@ -56,7 +58,8 @@ struct Reader {
             s = end;
         }
         if (got < n) return got;   // too short: leave the field alone
-        for (int i = 0; i < n; i++) v[i] = f[i];
+        const int m = got < (cap > n ? cap : n) ? got : (cap > n ? cap : n);
+        for (int i = 0; i < m; i++) v[i] = f[i];
         return got;
     }
 };
@@ -138,9 +141,9 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
         wchar_t k1[40], k2[40];
         swprintf_s(k1, L"sweep_pair_%d_oil", ci + 1);
         swprintf_s(k2, L"sweep_oil_%d", ci + 1);
-        float f[12];
-        int n = r.Vec(S, k1, f, 3);
-        if (!n) n = r.Vec(S, k2, f, 3);
+        float f[12] = {};
+        int n = r.Vec(S, k1, f, 3, 12);
+        if (!n) n = r.Vec(S, k2, f, 3, 12);
         if (n >= 3) {
             for (int k = 0; k < 3; k++) a.sweepOil[ci * 3 + k] = f[k];
             a.sweepOilFullSet[ci] = (n >= 12);
@@ -271,6 +274,7 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
         r.F(O, L"droplet_scale", cfg.dropletScale);
         r.F(O, L"mix_contrast", cfg.mixContrast);
         r.F(O, L"hue_rotate_period", cfg.hueRotateOverride);
+        r.I(O, L"debug", cfg.debugView);
     }
 
     // What the file carries in [liquid_acid] / [oil3d] that was never asked

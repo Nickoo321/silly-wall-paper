@@ -55,7 +55,10 @@ cbuffer CB : register(b0) { float4 C[64]; };
 #define CB_DROP     C[29]   // xyz droplet dye (sRGB, value 1)  w amount (0 = black)
 #define CB_MASS     C[30]   // xyz mass dye (sRGB, value 1)     w amount (0 = black)
 #define CB_MISC     C[31]   // x bottom light  y cavity dark  z dye core  w post chroma
-#define CB_MISC2    C[32]   // x post lift
+#define CB_MISC2    C[32]   // x post lift  y debug view (0 off; 1 normal 2 hole share
+                            //   3 AO occlusion 4 thickness 5 unlit fill
+                            //   6 march iterations 7 ray list size; 6/7 are raw
+                            //   values in [0,1], not tone mapped)
 #define CB_DISP     C[33]   // x sdrScale  y peak gain  z knee   (display pass)
 #define CB_DISP2    C[34]   // xy 1/shot size                    (display pass)
 
@@ -223,9 +226,14 @@ float FieldFull(float3 p, uint m0, uint m1, out float3 grad, out float3 col,
         }
     }
     float sP = max(P, 1.0);
-    grad  = (P > 1.0) ? gP * (1.0 - N) - gN * P : gP - gN;
+    float3 gOil  = (P > 1.0) ? gP * (1.0 - N) : gP;
+    float3 gHole = -gN * sP;
+    grad  = gOil + gHole;
     col   = cw > 1e-20 ? cs / cw : float3(0.5, 0.5, 0.5);
-    holeK = N * sP / max(P, 1e-4);
+    // how much of the surface's SHAPE comes from the holes: ~1 on the wall of
+    // a carved pocket, ~0 on an outer surface that merely has a hole nearby
+    float lh = length(gHole), lo = length(gOil);
+    holeK = lh / max(lh + lo, 1e-6);
     return P - N * sP;
 }
 
@@ -288,6 +296,11 @@ R"hlsl(
 // dye (dye_lum > 0) and the split tone land here too: the wall and the
 // cavities are the 2D "masses".
 float3 InkWall(float2 xy, out float marbleOut) {
+    marbleOut = 0.5;
+    // the live stages: water mode, no ink ever injected, no mass dye -> the
+    // wall is the paper and none of the noise below is needed
+    [branch] if (CB_INK3.x > 0.5 && CB_INK0.w < 1e-4 && CB_MASS.w < 0.0005)
+        return CB_INK0.rgb;
     float sc = CB_INK1.w;
     float3 q = float3(xy.x * sc, (xy.y + CB_INK2.w) * sc, CB_SCREEN.w * 0.015);
     float2 warp = float2(Fbm3(q + float3(3.1, 7.7, 0.0)), Fbm3(q + float3(11.3, 1.9, 0.0)));
@@ -353,7 +366,7 @@ float NearestDrop(float3 ro, float3 rd, float tMax, out int which) {
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
 float3 ShadeWax(float3 p, float3 n, float3 v, float3 rd, float3 baseSrgb, float3 rimSrgb,
-                uint m0, uint m1, float3 grad, out float hot) {
+                uint m0, uint m1, float3 grad, out float hot, out float2 dbg) {
     float thr = CB_CAMD.w;
     float3 base = DsToLin(baseSrgb);
     float3 L0 = CB_L0.xyz, L1 = CB_L1.xyz;
@@ -371,6 +384,7 @@ float3 ShadeWax(float3 p, float3 n, float3 v, float3 rd, float3 baseSrgb, float3
     float fo  = FieldStep(p + n * h, m0, m1, lipA, dEA);
     float occ = saturate((fo - (thr - h * gl)) / (0.5 * thr));
     float aoF = 1.0 - CB_SHADE2.w * occ;
+    dbg = float2(occ, 0.0);
 
     float3 col;
     [branch] if (CB_SHADE.x > 0.5) {
@@ -384,6 +398,7 @@ float3 ShadeWax(float3 p, float3 n, float3 v, float3 rd, float3 baseSrgb, float3
             float lp, de;
             if (FieldStep(p + rd * (hs * k), m0, m1, lp, de) >= thr) tau += hs;
         }
+        dbg.y = tau;
         float glow = CB_SHADE2.y * (0.25 + 0.75 * exp(-CB_SHADE2.z * tau));
         float3 emit = base * glow * (0.6 + 0.4 * d0);
         // a SMALL hot specular (OLED: keep the hot stuff small)
@@ -442,6 +457,7 @@ float4 PSMain(float4 svp : SV_Position) : SV_Target {
 
     // ---- march: compact-support sphere tracing + bisection ---------------
     float tHit = -1.0;
+    int   iters = 0;
     [branch] if (tmax > tmin) {
         int   steps = (int)CB_MARCH.x;
         float floorStep = (tmax - tmin) / (float)steps * 0.5;
@@ -453,6 +469,7 @@ float4 PSMain(float4 svp : SV_Position) : SV_Target {
             float stepL = max(min(safe, dE + 1e-4), floorStep);
             float tn = min(t + stepL, tmax);
             float fn = FieldStep(ro + rd * tn, m0, m1, lip, dE);
+            iters++;
             if (fn >= thr) {
                 float a0 = t, a1 = tn;
                 int refine = (int)CB_MARCH.y;
@@ -469,6 +486,13 @@ float4 PSMain(float4 svp : SV_Position) : SV_Target {
 )hlsl"
 // (split: MSVC caps a single string literal at 16380 bytes)
 R"hlsl(
+    // cost views (6: march iterations / 2*steps, 7: blobs in the ray's list / 16)
+    [branch] if (CB_MISC2.y > 5.5) {
+        float v6 = (float)iters / (2.0 * CB_MARCH.x);
+        float v7 = (float)(countbits(m0) + countbits(m1)) / 16.0;
+        float v = CB_MISC2.y < 6.5 ? v6 : v7;
+        return float4(v, v, v, 0.0);
+    }
     // ---- shade -----------------------------------------------------------
     float3 massSrgb;
     float3 sky = SkyRay(ro, rd, tWall, massSrgb);
@@ -489,11 +513,21 @@ R"hlsl(
         // the edge light keeps the full palette; the film level dims the body
         rimSrgb = AcidHueShift(oilC, CB_HUED.y * (1.0 - k2));
         float3 body = oilC * CB_HUEC.w * lampG;
-        col = ShadeWax(p, n, v, rd, body, rimSrgb * lampG, m0, m1, grad, hot);
+        float2 dbg;
+        col = ShadeWax(p, n, v, rd, body, rimSrgb * lampG, m0, m1, grad, hot, dbg);
+        [branch] if (CB_MISC2.y > 0.5) {
+            int dv = (int)CB_MISC2.y;
+            float3 o = n * 0.5 + 0.5;
+            if (dv == 2) o = float3(holeK, smoothstep(0.50, 0.80, holeK), 0.0);
+            if (dv == 3) o = dbg.xxx;
+            if (dv == 4) o = saturate(dbg.yyy * 5.0);
+            if (dv == 5) o = DsToLin(body);
+            return float4(o, 0.0);
+        }
         // a hole-carved wall is the inside of a cavity: it takes the black
         // role (or the masses' dye), so a hole reads as a dark pocket even
         // where the tunnel does not pierce the whole mass
-        float cav = smoothstep(0.12, 0.45, holeK) * saturate(CB_MISC.y);
+        float cav = smoothstep(0.50, 0.80, holeK) * saturate(CB_MISC.y);
         col = lerp(col, DsToLin(massSrgb), cav);
         hot *= 1.0 - cav;
         // depth fog toward the backdrop

@@ -99,3 +99,25 @@ Budget: S1+S2 under +1.0 ms at 1440p; every key gets its useful slider range.
 reference/briefs/EXECUTOR-CARD.md (build2 only, gpu.lock, the proof block, identity). Every exe
 run carries --shot. Never touch the live FluidWallpaper.exe or Wallpaper Engine. GPU: the user
 said full GPU is fine right now (yield 0); drop to yield 30 if told the user is gaming.
+
+## C1 RULING (port chat, 2026-10-15 ~03:20, after the UE5 test) — BINDING, supersedes the floor-receiver text above
+1. DEPTH IN FRAME HEIGHTS, not metres. "1 m" was an intuition; under a ~22 cm frame it puts every shadow
+   off-screen. `tank_depth` 0..1 in frame heights (0 = today; useful 0.15-0.6; the morning sheet shows
+   0.2 / 0.35 / 0.6). `light_elev` default 60 deg, `light_azim` slow drift. The light is a LAMP, not the sun:
+   `light_size` (angular, deg) default ~8; penumbra = D * tan(light_size/2) (PCSS). Shadow offset = D * cot(elev).
+   "Infinite" = the haze-only limit of the same keys.
+2. THE FILM STAYS AT THE SURFACE, IN FOCUS, FLAT. The floor is NOT a colour source. Scene: the film at z=0
+   (today's transmitting/lit layer, plateaus untouched), the oil on it, below it the water column (the medium)
+   and a DARK floor (or none). The directional light passes through the translucent film (tinted by it), is
+   blocked by the oil, and lights the column: shafts in the film's colour + motes, seen THROUGH the film via
+   today's translucency path (oil_transparency / the ink under-layer), defocused by depth. Shadows live in that
+   under-layer: beside each mass the column/floor is darker, offset D*cot(elev), soft by light_size, read through
+   the film as a darker zone that does not break the plateau. Plus a weak direct shadow ON the film:
+   `shadow_on_film` 0..1, default 0; the sheet shows 0 and 0.3. Shafts need a lit medium against a darker
+   background, which the dark floor gives; the floor-lit case is NOT built.
+3. UE ground truth carried into the analytic terms: offset D*cot(elev); penumbra ~ D*tan(light_size/2);
+   in-scatter vs floor split by optical depth; shafts vanish over a lit floor. The footprint (the "whiting") =
+   the lamp's cone on the film + the column's in-scatter, replacing lamp_grey / rise_bottom_light as the 0-state.
+4. UE = ground-truth reference only. ONE rerun on the real dump with THIS config (depth 0.35 frame heights,
+   film at the surface, dark floor, lamp 8 deg), then stop UE work. Morning report sentence: "1 m would put
+   every shadow off-screen"; the user picks the depth by popup.

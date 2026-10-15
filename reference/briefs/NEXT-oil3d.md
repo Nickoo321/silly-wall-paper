@@ -261,7 +261,13 @@ the cloud smoke test, see below). Nothing under src/, src_oil/, src_acid/, src_i
    live throughout, z stays inside the slab, masses leave the top and re-enter from below, and
    the turnover is visibly active (the hole count changes as blobs are retired and regrown).
 
-Reference frames (lavapipe, seed 1234, t=15 s, 960x540): `reference/shots/oil3d-cloud/` --
+Independent review pass (a second agent, port vs src/): palette/config/D3D12 clean; six fixes
+landed (blob cap 56 so blob_turnover_s is not blocked; seam clamp 0.1; rim = the 2D seam delta;
+x-z flow truly divergence-free; lamp ramp on screen y; pow NaN guard).
+
+Reference frames (lavapipe, seed 1234, t=15 s, 960x540, AFTER the review fixes):
+`reference/shots/oil3d-cloud/contact.png` (note: at this size `shade=flat` reads close to gloss --
+its bands are faint; raise flat_bands contrast if the user wants the flat identity) --
 the local session can diff its first real-GPU shots against them (expect float-level
 differences, not a different picture).
 

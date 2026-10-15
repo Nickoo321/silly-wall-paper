@@ -2069,3 +2069,20 @@ Rollup of everything since the 2026-09-22 18:00 cutoff (git log + `reference/bri
 - `acid-rise-12.ini`: `dye_lum` reverted 0.44 -> 0, "black masses back for now" (`1553a7f`, 18:23) -- the user's immediate response to the BK bubbliness/darkness feedback, ahead of the fuller BK/BL rework. `FEATURES.md`'s `dye_lum` Live cell (last generated at `1b7901b`/`9999eba`, still shows 0.30) has not caught up with either the 0.44 value it carried during the day or tonight's revert to 0; not corrected in this pass.
 
 **In flight, no code landed yet:** two worktrees were branched off tonight and still sit at the same commit as `main`, ready for an executor: `fw-scratch` (branch `scratch`, at `bba8f00`, for BM's scratched-acrylic lid) and `fw-bk` (branch `bk`, at `1553a7f`, for BK's darkness levers -- candidate keys `dye_droplets`/`dye_smoke` so droplets stay dark while masses can still carry colour, per the brief's "too bubbly" plan). Also queued but not yet run: a dye colour-variation sheet (hue/sat/lum grid plus `dye_hue_follow` plus a dark variant) that the brief asks be done FIRST, before either BK's value tweaks or BL's structural rework, "because it's hard to say what's wrong with it."
+
+## 2026-10-14 -- Oil3D prototype: the live oil as a true 3D raymarched lava lamp (cloud executor, branch oil3d)
+
+Brief `reference/briefs/NEXT-oil3d.md` (its "Cloud report" has the detail). New headless target
+`Oil3DWallpaper` (`src_oil3d/`, `tools/oil3d-shot.ps1`, `reference/configs/oil3d-default.ini`):
+the 2D rise-mode blob sim ported with a depth axis, Wyvill metaballs raymarched with per-ray
+culling + compact-support sphere tracing, gloss and flat shading, and the live oil's colour
+machinery (sweep/tile9, rotation + anchor warp, start hue, schemes' hue2/hue3 + equal load,
+two-hue, 80-20, dye, split tone) loaded from the REAL preset files (`--ini` repeatable: base,
+layout, stage). Not built or timed on Windows yet -- the local session does that next.
+Cloud-side discovery worth keeping: a cloud session CAN smoke-test the D3D12 targets -- mingw-w64
+builds the PE, wine 9 + vkd3d + Mesa lavapipe run it under xvfb, and Microsoft's
+`d3dcompiler_47.dll` from the `cef.redist.x64` NuGet package (native override) gives the real
+fxc SM5.1 compile. That found four real bugs here before hand-back (12-float `sweep_oil_N` read
+as 3; cavity term blackening outer walls; light budget clipping; empty frame ~30-45 s after
+start). One forced change: vkd3d on lavapipe rejects root CBV/SRVs, so the root signature is a
+single descriptor table. Biggest open question: 1440p cost (estimated 2-5 ms; `--half-res 1`).

@@ -121,3 +121,20 @@ said full GPU is fine right now (yield 0); drop to yield 30 if told the user is 
 4. UE = ground-truth reference only. ONE rerun on the real dump with THIS config (depth 0.35 frame heights,
    film at the surface, dark floor, lamp 8 deg), then stop UE work. Morning report sentence: "1 m would put
    every shadow off-screen"; the user picks the depth by popup.
+
+## B RE-RULING (port chat, 2026-10-15 ~05:40, after stageB-crop-massedge) — BINDING; do after C1 (first thing after the 07:00 reset)
+1. CROSS-FADE, DON'T STACK. The transmission IS the lit edge band; the 2D thin-edge/penumbra band terms are its
+   0-state fake. When oil3d_absorb > 0, scale those fake band terms down by the absorb share (a smooth 0..1 from
+   the key) so the TOTAL band level at each sheet level matches today's 0.0859 within 3%; the WIDTH may change
+   (lambda-driven physics). The 3% rule applies to the total band, never to transmission alone. The rim
+   (rim_dark/rim_width) stays: it is the Fresnel grazing-angle darkening.
+2. NO OUTLINE. Multiply T by (1 - rim_dark * rimProfile) so the transmission cannot peak under the rim; let it decay
+   inward over lambda (oil_height_px). Acceptance on the 300% crop: the luma profile across the mass boundary =
+   rim minimum -> ONE soft hump of width >= 6 px -> monotone decay into the core; no secondary peak narrower than
+   3 px. A surviving line is a masking cut (wax-coverage mask or rim inset), not a key value: fix it.
+3. CORES CLEAN AT EVERY LEVEL: T reaches 0 deep inside a mass (h -> 1; gate with massDeep if lambda leaves h short);
+   at the sheet's highest level the dark patches move <= 0.5 code, no film texture in the cores. Drop any level
+   that fails from the sheet rather than showing it.
+4. DEFAULT STAYS 0 (byte for byte); the overlay preset carries the level; the morning popup asks the user
+   LOW/MID/HIGH only. Re-render the B sheet with the cross-fade (same 4 columns, both configs, HDR on + off, band
+   numbers per column).

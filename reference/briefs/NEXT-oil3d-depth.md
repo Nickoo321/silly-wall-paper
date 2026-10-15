@@ -138,3 +138,14 @@ said full GPU is fine right now (yield 0); drop to yield 30 if told the user is 
 4. DEFAULT STAYS 0 (byte for byte); the overlay preset carries the level; the morning popup asks the user
    LOW/MID/HIGH only. Re-render the B sheet with the cross-fade (same 4 columns, both configs, HDR on + off, band
    numbers per column).
+
+## C1 ACCEPTED + notes for C2 (port chat, 2026-10-15 ~07:20)
+- Do NOT inflate the under-layer share (0.19 at 0.35 is honest). With a lamp ABOVE, the shadow ON the film is the
+  physical PRIMARY term: shadow_on_film is the direct-light shadow; the through-film term is secondary. The user's
+  choice = "backlit panel" (today, no shadows) vs "top-lit film" (shadows) = shadow_on_film. Popups: tank_depth 0.35
+  with shadow_on_film 0 / 0.3 / 0.6 (recommended 0.3), labelled "how much the lamp from above lights the film
+  (0 = backlit panel like today, no shadows)"; then depth 0.2 / 0.35 / 0.6 at shadow_on_film 0.3.
+- C2 note 1: off-frame masses cast nothing -> pad the pre-pass target by D*cot(elev) px on the light's side (the blob
+  list is on the CPU; evaluate the padded area) so shadows enter from outside the frame.
+- C2 note 2: the footprint following light_azim (not the rig lamp) is right; when the clocks drive light_azim_drift
+  the footprint must glide with it (no jumps on a rig readjust).

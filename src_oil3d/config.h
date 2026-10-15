@@ -136,14 +136,14 @@ struct Oil3DConfig {
     float parallax3d = 0.5f;    // share of the 2D size parallax kept (depth gives the rest)
     // lights: direction TOWARD the light, world space (+y down, +z away)
     float light0Dir[3] = { 0.20f, 0.85f, -0.50f };   // the lamp under the column
-    float light0 = 0.62f;
+    float light0 = 0.45f;
     float light1Dir[3] = { -0.60f, -0.60f, -0.55f }; // top-left fill (the 2D rig lamp)
-    float light1 = 0.22f;
-    float wrap      = 0.30f;
+    float light1 = 0.42f;
+    float wrap      = 0.15f;
     float ambient   = 0.06f;
-    float spec      = 0.45f;    // small hot Blinn lobe
+    float spec      = 0.55f;    // small hot Blinn lobe
     float specPower = 240.0f;
-    float rim       = 0.60f;    // fresnel rim strength (x mass_rim when it is set)
+    float rim       = 0.90f;    // fresnel rim strength (x 0.65 + mass_rim)
     float rimPower  = 3.5f;
     float sss       = 0.30f;    // thickness glow ("lit from inside")
     float sssSigma  = 12.0f;    // per screen-height of wax

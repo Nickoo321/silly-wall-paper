@@ -27,6 +27,7 @@
 //                         (attaches to the parent console only; never opens one)
 // Look overrides (each also an [oil3d] ini key):
 //   --blobs N  --half-res 0|1  --steps N  --camera-drift X  --shade flat|gloss
+//   --debug-view N  (1 normal, 2 hole share, 3 AO, 4 thickness, 5 unlit fill)
 //
 // The sim runs at a FIXED 60 Hz step on simulated time, so the same flags
 // always give the same image.
@@ -290,6 +291,7 @@ static int wmain_shot() {
                 else
                     cfg.halfRes = true;
             }
+            else if (wcscmp(a, L"--debug-view") == 0)   cfg.debugView = nextI(i);
             else if (wcscmp(a, L"--shade") == 0 && i + 1 < argc)
                 cfg.shade = (_wcsicmp(argv[++i], L"flat") == 0) ? OIL3D_FLAT : OIL3D_GLOSS;
             else

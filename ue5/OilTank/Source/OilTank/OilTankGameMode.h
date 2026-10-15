@@ -45,6 +45,7 @@ private:
 	void SpawnLight();
 	void SpawnWater();
 	void SpawnFloor();
+	void SpawnFilmLayer();
 	void BuildOil();
 	void SpawnDroplets();
 	void SpawnMotes();
@@ -109,6 +110,9 @@ private:
 	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> Motes;
 	UPROPERTY() TObjectPtr<UInstancedStaticMeshComponent> Droplets;
 	UPROPERTY() TObjectPtr<UMaterialInterface> BaseMaterial;
+	UPROPERTY() TObjectPtr<UMaterialInterface> FilmMaterial;
+	UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> FilmMID;
+	UPROPERTY() TObjectPtr<UProceduralMeshComponent> FilmLayer;
 	UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> OilMID;
 	UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> FloorMID;
 	UPROPERTY() TObjectPtr<UMaterialInstanceDynamic> MoteMID;

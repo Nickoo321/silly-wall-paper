@@ -76,6 +76,13 @@ struct FOilTankSettings
 	float FloorMargin = 0.25f;
 	float FloorSpecular = 0.0f;
 	float FloorRoughness = 1.0f;
+	float FloorAlbedo = -1.0f;              // >=0: a grey (dark) floor; the film is then NOT on the floor
+
+	// C1 ruling (2026-10-15): the film stays at the SURFACE, in focus, flat; the column is seen through it.
+	bool bFilmAtSurface = false;            // film_png / film_rgb on a thin unlit translucent layer at z=0
+	float FilmOpacity = 0.7f;               // the column (shafts, motes, shadows) shows through 1 - this
+	float FilmGain = 1.0f;                  // emissive scale (the calibration: pixel ~= emissive at EV 0)
+	bool bMoteTintFilm = false;             // motes lit by film-tinted light (albedo * film colour)
 
 	// Motes
 	int32 MoteCount = 3000;

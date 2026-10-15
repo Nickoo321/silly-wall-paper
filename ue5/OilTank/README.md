@@ -273,6 +273,18 @@ texels, but UE's diaphragm DoF does nothing visible in ortho (motes stay sharp),
 planes lose the oil at 764 cm (use ortho_height_cm 300). CSM (r.Shadow.Virtual.Enable=0) is round but
 far softer than the physical penumbra.
 
+## C1 rerun on the real dump (2026-10-15 07:20, the port chat's C1 ruling)
+
+`Config/c1.json`: tank_depth_cm 7.875 (0.35 frame heights of the 22.5 cm frame), light 60 deg elevation,
+azimuth 300 (from the lower right, shadows fall up-left), light_source_angle_deg 8 (penumbra D*tan 4 deg),
+`film_at_surface: true` (new: film_png on an unlit translucent quad at z=0, emissive / opacity so the plateau keeps
+its colour; film_opacity 0.5), `floor_albedo: 0.02` (dark floor, not a colour source), water optical depth 1.0
+tinted by film_rgb (the film's tint on the light below it is carried by the water albedo and `mote_tint_film`:
+UE has no coloured translucent shadows without ray tracing), calib_gain 0.84 with calib_through_water false
+(a white card at the surface under the lamp reads 1.0). `c1-column.json` hides the film to show the column alone.
+Result: the column under a calibrated lamp is dim (p99 about 0.085 linear) so through the film it moves the plateau
+by only a few percent; even optical depth 4 barely shows. TSR 1440p: 20.2 ms (GPU 17-20 ms).
+
 ## Every VERIFY spot
 
 If a define in `OilTank.Build.cs` breaks the build, set it to 0 and the code falls back:

@@ -36,6 +36,7 @@
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
+#include "Materials/MaterialExpressionDivide.h"
 #endif
 #if WITH_EDITOR
 #include "ShaderCompiler.h"
@@ -148,6 +149,7 @@ void AOilTankGameMode::BeginPlay()
 	SpawnLight();
 	SpawnWater();
 	SpawnFloor();
+	SpawnFilmLayer();
 	BuildOil();
 	SpawnDroplets();
 	SpawnMotes();
@@ -376,6 +378,42 @@ void AOilTankGameMode::CreateMaterials()
 	Mat->PreEditChange(nullptr);
 	Mat->PostEditChange();
 	BaseMaterial = Mat;
+
+	// The surface film (C1): unlit translucent, Emissive = Color * Film(tex) / Opacity (UE's translucent blend
+	// multiplies emissive by opacity, so the film plateau keeps its colour and the column adds (1 - opacity)).
+	{
+		UMaterial* FM = NewObject<UMaterial>(GetTransientPackage(), TEXT("M_OilTankFilm"), RF_Transient);
+		UMaterialExpressionVectorParameter* FC = NewObject<UMaterialExpressionVectorParameter>(FM);
+		FC->ParameterName = TEXT("Color");
+		FC->DefaultValue = FLinearColor::White;
+		UMaterialExpressionTextureSampleParameter2D* FT = NewObject<UMaterialExpressionTextureSampleParameter2D>(FM);
+		FT->ParameterName = TEXT("Albedo");
+		FT->Texture = WhiteTex;
+		FT->SamplerType = SAMPLERTYPE_Color;
+		UMaterialExpressionScalarParameter* FO = NewObject<UMaterialExpressionScalarParameter>(FM);
+		FO->ParameterName = TEXT("Opacity");
+		FO->DefaultValue = 0.7f;
+		UMaterialExpressionMultiply* FMul = NewObject<UMaterialExpressionMultiply>(FM);
+		FMul->A.Connect(0, FC);
+		FMul->B.Connect(0, FT);
+		UMaterialExpressionDivide* FDiv = NewObject<UMaterialExpressionDivide>(FM);
+		FDiv->A.Connect(0, FMul);
+		FDiv->B.Connect(0, FO);
+		for (UMaterialExpression* E : TArray<UMaterialExpression*>{ FC, FT, FO, FMul, FDiv })
+		{
+			E->Material = FM;
+			FM->GetExpressionCollection().AddExpression(E);
+		}
+		UMaterialEditorOnlyData* FED = FM->GetEditorOnlyData();
+		FED->EmissiveColor.Connect(0, FDiv);
+		FED->Opacity.Connect(0, FO);
+		FM->SetShadingModel(MSM_Unlit);
+		FM->BlendMode = BLEND_Translucent;
+		FM->TwoSided = true;
+		FM->PreEditChange(nullptr);
+		FM->PostEditChange();
+		FilmMaterial = FM;
+	}
 #else
 	// Packaged build fallback: engine material with a "Color" parameter (no texture, default specular).
 	BaseMaterial = LoadObject<UMaterialInterface>(nullptr, TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
@@ -383,7 +421,15 @@ void AOilTankGameMode::CreateMaterials()
 #endif
 
 	OilMID = MakeMID(FLinearColor::Black, 0.0f, 1.0f, WhiteTex);
-	MoteMID = MakeMID(S.MoteAlbedo, S.MoteSpecular, S.MoteRoughness, WhiteTex);
+	FLinearColor MoteColor = S.MoteAlbedo;
+	if (S.bMoteTintFilm)
+	{
+		// below the film the lamp's light is film-coloured: carry that on the motes' albedo
+		const FLinearColor F = Dump.FilmRGB;
+		const float M = FMath::Max3(F.R, F.G, F.B);
+		if (M > 1e-6f) { MoteColor = FLinearColor(S.MoteAlbedo.R * F.R / M, S.MoteAlbedo.G * F.G / M, S.MoteAlbedo.B * F.B / M); }
+	}
+	MoteMID = MakeMID(MoteColor, S.MoteSpecular, S.MoteRoughness, WhiteTex);
 	FloorMID = MakeMID(FLinearColor::White, S.FloorSpecular, S.FloorRoughness, WhiteTex);
 }
 
@@ -746,6 +792,43 @@ void AOilTankGameMode::SpawnFloor()
 	ApplyFilm();
 }
 
+void AOilTankGameMode::SpawnFilmLayer()
+{
+	if (!S.bFilmAtSurface || !FilmMaterial)
+	{
+		return;
+	}
+	// Exactly the frame, just under the oil's top face (the oil's opaque top at z = 0 hides it where there is oil).
+	const double HX = S.FrameHeightCm * 0.5, HY = S.FrameWidthCm * 0.5;
+	const TArray<FVector> V = { FVector(HX, -HY, 0.0), FVector(HX, HY, 0.0), FVector(-HX, HY, 0.0), FVector(-HX, -HY, 0.0) };
+	const TArray<int32> T = { 0, 2, 1, 0, 3, 2 };
+	const TArray<FVector> N = { FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
+	const TArray<FVector2D> UV0 = { FVector2D(0, 0), FVector2D(1, 0), FVector2D(1, 1), FVector2D(0, 1) };
+	FilmLayer = NewObject<UProceduralMeshComponent>(SceneActor, TEXT("FilmLayer"));
+	FilmLayer->SetMobility(EComponentMobility::Movable);
+	FilmLayer->SetupAttachment(SceneRoot);
+	FilmLayer->RegisterComponent();
+	SceneActor->AddInstanceComponent(FilmLayer);
+	FilmLayer->SetRelativeLocation(FVector(0.0, 0.0, -0.002));
+	FilmLayer->CreateMeshSection(0, V, T, N, UV0, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
+	FilmLayer->SetCastShadow(false);   // the light passes the film (its tint is carried by the water albedo)
+	FilmLayer->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	FilmMID = UMaterialInstanceDynamic::Create(FilmMaterial, this);
+	FilmMID->SetScalarParameterValue(TEXT("Opacity"), FMath::Clamp(S.FilmOpacity, 0.05f, 1.0f));
+	if (FilmTex)
+	{
+		FilmMID->SetTextureParameterValue(TEXT("Albedo"), FilmTex);
+		FilmMID->SetVectorParameterValue(TEXT("Color"), FLinearColor::White * S.FilmGain);
+	}
+	else
+	{
+		FilmMID->SetTextureParameterValue(TEXT("Albedo"), WhiteTex);
+		FilmMID->SetVectorParameterValue(TEXT("Color"), Dump.FilmRGB * S.FilmGain);
+	}
+	FilmLayer->SetMaterial(0, FilmMID);
+	UE_LOG(LogOilTank, Log, TEXT("film at the surface: opacity %.2f gain %.2f tex=%d"), S.FilmOpacity, S.FilmGain, FilmTex ? 1 : 0);
+}
+
 void AOilTankGameMode::ApplyFilm()
 {
 	// The receiver: film_png (the film/ink without oil) as albedo, else the flat film colour.
@@ -756,6 +839,13 @@ void AOilTankGameMode::ApplyFilm()
 		if (Tex)
 		{
 			FilmTex = Tex;
+			if (S.FloorAlbedo >= 0.0f)
+			{
+				FloorMID->SetTextureParameterValue(TEXT("Albedo"), WhiteTex);
+				FloorMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(S.FloorAlbedo, S.FloorAlbedo, S.FloorAlbedo));
+				if (FilmMID) { FilmMID->SetTextureParameterValue(TEXT("Albedo"), FilmTex); }
+				return;
+			}
 			FloorMID->SetTextureParameterValue(TEXT("Albedo"), FilmTex);
 			FloorMID->SetVectorParameterValue(TEXT("Color"), FLinearColor::White);
 			return;
@@ -763,7 +853,8 @@ void AOilTankGameMode::ApplyFilm()
 		UE_LOG(LogOilTank, Warning, TEXT("film_png: %s -- using film_rgb"), *Err);
 	}
 	FloorMID->SetTextureParameterValue(TEXT("Albedo"), WhiteTex);
-	FloorMID->SetVectorParameterValue(TEXT("Color"), Dump.FilmRGB * (1.0f / FloorBoost));
+	FloorMID->SetVectorParameterValue(TEXT("Color"), S.FloorAlbedo >= 0.0f ? FLinearColor(S.FloorAlbedo, S.FloorAlbedo, S.FloorAlbedo)
+		: Dump.FilmRGB * (1.0f / FloorBoost));
 }
 
 void AOilTankGameMode::BuildOil()

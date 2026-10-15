@@ -173,6 +173,11 @@ bool FOilTankSettings::LoadFromFile(const FString& Path, FString& OutError)
 	GetF(O, TEXT("floor_margin"), FloorMargin);
 	GetF(O, TEXT("floor_specular"), FloorSpecular);
 	GetF(O, TEXT("floor_roughness"), FloorRoughness);
+	GetF(O, TEXT("floor_albedo"), FloorAlbedo);
+	GetB(O, TEXT("film_at_surface"), bFilmAtSurface);
+	GetF(O, TEXT("film_opacity"), FilmOpacity);
+	GetF(O, TEXT("film_gain"), FilmGain);
+	GetB(O, TEXT("mote_tint_film"), bMoteTintFilm);
 
 	GetI(O, TEXT("mote_count"), MoteCount);
 	GetF(O, TEXT("mote_size_mm"), MoteSizeMm);

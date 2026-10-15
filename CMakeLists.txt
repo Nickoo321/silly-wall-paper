@@ -42,3 +42,11 @@ add_executable(Ink3DWallpaper WIN32 src_ink3d/main.cpp src_ink3d/ink3d.cpp src_i
 target_compile_definitions(Ink3DWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(Ink3DWallpaper PRIVATE /utf-8)
 target_link_libraries(Ink3DWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)
+
+# Oil3DLab — HEADLESS look lab for the Oil3D prototype (src_oil3d_lab/): one
+# raymarch PS over ~50 3D metaballs, CPU blob sim, --shot only (no window, no
+# WorkerW, no swap chain). Proves the 3D shader on the real GPU for src_oil3d.
+add_executable(Oil3DLab WIN32 src_oil3d_lab/main.cpp src_oil3d_lab/lab.cpp)
+target_compile_definitions(Oil3DLab PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(Oil3DLab PRIVATE /utf-8)
+target_link_libraries(Oil3DLab PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)

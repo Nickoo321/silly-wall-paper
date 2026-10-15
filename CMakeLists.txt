@@ -42,3 +42,12 @@ add_executable(Ink3DWallpaper WIN32 src_ink3d/main.cpp src_ink3d/ink3d.cpp src_i
 target_compile_definitions(Ink3DWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(Ink3DWallpaper PRIVATE /utf-8)
 target_link_libraries(Ink3DWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)
+
+# Oil3DWallpaper — the live oil (style=liquid_acid) as a TRUE 3D raymarched
+# lava lamp (src_oil3d/, brief reference/briefs/NEXT-oil3d.md). Separate
+# launcher; shares no sources with the other targets. PROTOTYPE, HEADLESS:
+# --shot only, no window, no WorkerW, no tray. Agents build it into build2/.
+add_executable(Oil3DWallpaper WIN32 src_oil3d/main.cpp src_oil3d/oil3d.cpp src_oil3d/config.cpp)
+target_compile_definitions(Oil3DWallpaper PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(Oil3DWallpaper PRIVATE /utf-8)
+target_link_libraries(Oil3DWallpaper PRIVATE d3d12 dxgi d3dcompiler user32 shell32 ole32 windowscodecs)

@@ -62,15 +62,15 @@ struct FOilTankSettings
 	FString AA = TEXT("ssaa2");             // "ssaa2" | "tsr" | "taa" | "none"
 
 	// Water
-	FString WaterMode = TEXT("localfog");   // "localfog" | "heightfog"
+	FString WaterMode = TEXT("heightfog");  // "heightfog" (froxel grid spans only the water) | "localfog"
 	float WaterOpticalDepth = 0.6f;         // total vertical extinction through the column
 	float WaterAlbedo = 0.9f;
 	float WaterPhaseG = 0.3f;
 	bool bWaterColorFromFilm = true;
 	FLinearColor WaterColor = FLinearColor(0.2f, 0.6f, 0.8f);
 	float WaterDensityRaw = 0.0f;           // >0: use as the raw UE fog value, skip the unit guess
-	float LfvUnitRadiusCm = 100.0f;         // VERIFY: local fog volume radius at actor scale 1
-	float FogGridMarginCm = 20.0f;
+	float LfvUnitRadiusCm = 500.0f;         // unused: 5.8 fixes it (ULocalFogVolumeComponent::GetBaseVolumeSize() = 500)
+	float FogGridMarginCm = 5.0f;
 
 	// Floor
 	float FloorMargin = 0.25f;
@@ -106,6 +106,7 @@ struct FOilTankSettings
 	float StillSimFps = 72.0f;
 	float PerfSeconds = 20.0f;
 	int32 ResX = 2560;                      // only used for DoF px maths; the real size is -ResX
+	int32 ResY = 1440;                      // ortho framing + DoF aspect; the real size is -ResY
 
 	// Synthetic dump (no -OilDump)
 	int32 SyntheticBlobs = 14;
@@ -117,6 +118,7 @@ struct FOilTankSettings
 	bool bDebugNoMotes = false;
 
 	TArray<TPair<FString, FString>> CVars;
+	TArray<FString> ExecCmds;               // diagnostics: console commands run once at BeginPlay (e.g. "viewmode unlit")
 
 	bool LoadFromFile(const FString& Path, FString& OutError);
 	FString Summary() const;

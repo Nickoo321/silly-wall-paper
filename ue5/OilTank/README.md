@@ -20,14 +20,14 @@ Source/OilTank/OilTank.Build.cs  deps + the four OILTANK_* escape-hatch defines
 Source/OilTank/OilTankGameMode.* the scene, capture, perf log, calibration readback
 Source/OilTank/OilTankMesh.*     PNG loading (16-bit), marching-squares oil mesher, transient textures
 Source/OilTank/OilTankSettings.* json + dump parsing
-Tools/run-oiltank.ps1            the only sanctioned launcher (game check, gpu.lock, BelowNormal, timeout)
+Tools/run-oiltank.ps1            the only sanctioned launcher (game check, 3-GPU-process rule, BelowNormal, timeout)
 DUMP-SCHEMA.md                   what the FluidWallpaper exe must write
 ```
 
 ## Install, build, run
 
 1. Copy `ue5/OilTank` to `G:\UE\OilTank`. Use G:, never D: (SMR) and never C: for the DDC.
-2. **Build.** First time ~10 min. AGENTS.md says builds take the gpu.lock, so use the launcher:
+2. **Build.** First time ~1 min here (UBA). Builds take no GPU slot; use the launcher:
    ```
    powershell -ExecutionPolicy Bypass -File G:\UE\OilTank\Tools\run-oiltank.ps1 -Build -TimeoutMinutes 60
    ```
@@ -174,21 +174,21 @@ Outputs:
 | light_elev_deg / light_azim_deg | 55 / 210 | light direction (azimuth: 0 = from screen right, CCW) |
 | light_source_angle_deg | 0.5357 | sun disc; penumbra = depth * tan(angle) |
 | light_lux | 0 | 0 = auto-calibrated; >0 = fixed lux |
-| calib_gain | 1.0 | multiply the auto lux (set it from oiltank-calib.txt) |
+| calib_gain | 0.311 | multiply the auto lux (measured 2026-10-15: no-oil frame = film_rgb) |
 | calib_through_water | true | compensate the water's extinction in the auto lux |
 | light_volumetric_scattering | 1.0 | light's volumetric scattering intensity |
 | contact_shadow_length | 0.05 | screen-space contact shadows (fraction of screen) |
 | exposure_bias | 0 | manual exposure EV |
 | film_grain | 0 | UE film grain intensity |
 | aa | "ssaa2" | "ssaa2" / "tsr" / "taa" / "none" |
-| water_mode | "localfog" | "localfog" / "heightfog" |
+| water_mode | "heightfog" | "heightfog" (froxels only in the water) / "localfog" |
 | water_optical_depth | 0.6 | vertical extinction tau of the full column |
 | water_albedo | 0.9 | single-scattering albedo (times the normalised colour) |
 | water_phase_g | 0.3 | Henyey-Greenstein g (top-down view is back-scatter: keep it low) |
 | water_color | "film" | "film" or [r,g,b] |
 | water_density_raw | 0 | >0 bypasses my unit guess (raw FogDensity or LFV extinction) |
-| lfv_unit_radius_cm | 100 | local fog volume radius at scale 1 (VERIFY) |
-| fog_grid_margin_cm | 20 | volumetric fog distance margin past the floor |
+| lfv_unit_radius_cm | - | removed: 5.8 fixes it at 500 cm |
+| fog_grid_margin_cm | 5 | volumetric fog distance margin past the floor |
 | floor_margin | 0.25 | extra floor beyond the visible area (each side, fraction) |
 | floor_specular / floor_roughness | 0 / 1 | receiver BRDF |
 | mote_count | 3000 | motes (0 = none) |
@@ -215,7 +215,8 @@ Outputs:
 | res_x | 2560 | DoF maths width (overridden by -ResX) |
 | synthetic_blobs / synthetic_seed | 14 / 7 | test field when no dump is given |
 | debug_no_oil / debug_no_water / debug_no_motes | false | for calibration and isolation |
-| cvars | {...} | any cvar at runtime, e.g. r.VolumetricFog.DepthDistributionScale |
+| cvars | {...} | any cvar at runtime (default DepthDistributionScale 256: ~linear slices over the column) |
+| exec_cmds | [] | console commands at BeginPlay, e.g. "viewmode lightingonly" (diagnostics) |
 
 ## Fairness traps (section 6), where each is handled
 
@@ -234,6 +235,44 @@ Outputs:
    the report.
 10. DDC on G: (ini plus the launcher's `UE-LocalDataCachePath`).
 
+## Local build results (2026-10-15, UE 5.8.3, VS BuildTools 17.14 / MSVC 14.44, SDK 10.0.26100)
+
+Built and rendered on the user's RX 7900 GRE. First build 65 s (one compile-error class), rebuilds 5-8 s.
+First -game launch 58 s (the engine's shipped DDC pak covers the global shaders; only the runtime
+material compiled). Later runs ~10 s per still. DDC confirmed at G:\UE\OilTank\DerivedDataCache
+(log: "Local: Using data cache path ../../../../UE/OilTank/DerivedDataCache: Writable"), using
+ManhattanFPV's graph override (the README's original block was replaced).
+
+Bugs found and fixed (each would have silently corrupted the A/B):
+1. **Floor winding.** The floor quad (and the oil mesh's top faces) were emitted clockwise from above;
+   UE showed the back face, the two-sided material flipped the up normal to -Z, and the floor got NO
+   direct light. Every colour in the first renders was water in-scatter. Fixed: winding reversed.
+2. **Light direction.** `SpawnActor<ADirectionalLight>(FTransform(rot))` came out as P=-79 Y=90 R=-180
+   (light from screen LEFT at 79 deg instead of from the right at 55). Fixed with SetWorldRotation on the
+   component after the mobility change; the log line `light: toLight=... travel(GetDirection)=...` proves it.
+3. **Calibration.** calib_gain = 0.311 (verified: a no-oil, no-mote frame through the water shows film_rgb
+   exactly, sRGB 255,15,131). The readback's luma ratio is wrong when a channel clips (film R = 1.0):
+   calibrate on an unclipped channel.
+4. **debug_no_water** rendered the whole frame black with a height fog of density 0 or 1e-6; that mode
+   now spawns no fog actor.
+5. **A wrong -Config path silently ran the built-in defaults**; the launcher now refuses.
+6. **Water.** Default is now `heightfog`: VolumetricFogStartDistance = camera - 9.5 cm puts all 128
+   froxel slices inside the 1 m column (UE adds a 9.5 cm NearOffset; VolumetricFogDistance counts from the
+   start). The density was off by 2 (MatchHeightFogFactor 0.5). The `localfog` path is fixed too
+   (uniform-scale 500 cm unit sphere, radial term saturated, GlobalStartDistance lowered) but not default.
+7. Physics bodies were cooked for the 16 x 500k-tri oil tiles; now NoCollision.
+8. `exec_cmds` json key (e.g. `["viewmode lightingonly"]`) for diagnostics, routed through the player console.
+
+**Engine limitation (VSM + narrow FOV).** VirtualShadowMapClipmap.cpp clamps the clipmap
+ResolutionLodBias at >= 0 after adding log2(FOV/viewport scale), so a 3 deg camera 7.6 m away gets
+shadow texels sized for its DISTANCE (~0.5 cm on the 40 cm frame, ~40 px), not for its pixels;
+r.Shadow.Virtual.ResolutionLodBiasDirectional (tried -5) changes nothing. At tank_depth 1 m the 0.93 cm
+penumbra plus the floor's 24 px CoC hide it (no blocks at 300 %); at 15 cm the shadows are visibly blocky.
+`camera_mode: "ortho"` (now framed right: under -game OrthoWidth acts as width/aspect) gets ~0.125 cm
+texels, but UE's diaphragm DoF does nothing visible in ortho (motes stay sharp), and the auto ortho
+planes lose the oil at 764 cm (use ortho_height_cm 300). CSM (r.Shadow.Virtual.Enable=0) is round but
+far softer than the physical penumbra.
+
 ## Every VERIFY spot
 
 If a define in `OilTank.Build.cs` breaks the build, set it to 0 and the code falls back:
@@ -241,34 +280,33 @@ If a define in `OilTank.Build.cs` breaks the build, set it to 0 and the code fal
 `OILTANK_PP_EXTRAS` (ToneCurveAmount, LocalExposure*, physical-exposure toggle),
 `OILTANK_PERF_COUNTERS` (GPU/thread ms).
 
-1. `OilTankGameMode.cpp`: `#include "Components/LocalFogVolumeComponent.h"` path, and the
-   `ULocalFogVolumeComponent` fields `RadialFogExtinction`, `HeightFogExtinction`,
-   `HeightFogFalloff`, `HeightFogOffset`, `FogPhaseG`, `FogAlbedo`, `FogEmissive`. Their units
-   (per metre assumed), the sphere radius at scale 1 (`lfv_unit_radius_cm`), and whether
-   `r.LocalFogVolume.RenderIntoVolumetricFog=1` makes the volume take VSM shadows.
-2. `UExponentialHeightFogComponent::VolumetricFogStartDistance` (property name), and
-   `SetFogInscatteringColor` / `SetDirectionalInscatteringColor` (renamed to *Luminance in 5.1;
-   the setters should remain).
-3. Height-fog density units (per 1000 uu assumed) in heightfog mode; use `water_density_raw` to
-   override.
-4. Runtime UMaterial: `GetExpressionCollection().AddExpression`, `GetEditorOnlyData()`,
-   `FExpressionInput::Connect`, and `PostEditChange` compiling a transient material under `-game`.
-   Expected: the oil black, the floor textured. If the oil is checkered or grey, the material did
-   not compile and the engine default was used.
-5. `FPostProcessSettings`: `ToneCurveAmount`, `LocalExposure*`, `AutoExposureApplyPhysicalCameraExposure`.
-6. The manual exposure formula `pixel = L * 2^bias / 1.2`. The calibration readback corrects it
-   empirically.
-7. `r.ScreenPercentage 200` honoured in `-game` without TSR. If not, use `-ResX 5120 -ResY 2880`
-   with `aa: "none"` and downsample afterwards.
-8. Ortho camera near/far (`bAutoCalculateOrthoPlanes` in 5.4+), and fog in ortho.
-9. `UInstancedStaticMeshComponent::BatchUpdateInstancesTransforms` signature.
-10. `RHIGetGPUFrameCycles`, `GGameThreadTime`, `GRenderThreadTime` (RenderCore.h).
-11. `IImageWrapper::GetRaw(ERGBFormat::Gray, 16, TArray64)` on 16-bit grey PNGs. The byte order is
-    auto-detected and logged (`byte swap=`).
-12. `UDirectionalLightComponent::SetLightSourceAngle` (setter name).
-13. VSM resolution for a 40 cm frame seen from 7.6 m: `r.Shadow.Virtual.ResolutionLodBiasDirectional=-2`
-    in the ini. Look at the floor shadow edge at 300%.
-14. The DDC ini block: if `DerivedDataCache` does not fill under G:\UE\OilTank, copy ManhattanFPV's exact block.
+Results from the local build (2026-10-15). All four defines compile on 5.8 and stay 1.
+
+1. LFV: header path and every field name are right. Units: extinction per METRE (yes). But the volume is a
+   SPHERE with UNIFORM scale = max axis scale x 500 cm (`GetBaseVolumeSize()`), not 100 and not squashable,
+   and radial/height fog combine as coverage products (radial 0 = no fog at all), and
+   `r.LocalFogVolume.GlobalStartDistance` (1000 cm) hid it. Fixed in code; VSM-shadowed shafts through the
+   LFV were not separately verified because heightfog is now the default.
+2. `VolumetricFogStartDistance` exists (setter `SetVolumetricFogStartDistance` used). The *Color setters
+   remain. NEW: `VolumetricFogDistance` is measured from the start distance.
+3. Height-fog density: per 1000 uu, AND x0.5 (MatchHeightFogFactor) in the volumetric grid: FogDensity =
+   2000 * tau / depth_cm.
+4. Runtime UMaterial compiles and renders under -game (viewmode unlit shows the film; oil black). Only the
+   5.8 deprecation of `bUsedWithInstancedStaticMeshes` (now `SetUsageByFlag`). The default Albedo is now the
+   engine's WhiteSquareTexture.
+5. PP fields all exist (compiled; no filmic toe visible in the calibration: film_rgb round-trips exactly).
+6. The exposure formula is off by ~3.2x; calib_gain 0.311 closes it (see above).
+7. `r.ScreenPercentage 200` IS honoured without TSR (5.8 kMaxResolutionFraction = 4; edges are
+   anti-aliased; the SSAA2 frame costs ~3x). The froxel grid is in render pixels, so GridPixelSize is set to
+   8 under ssaa2 (= 4 output px).
+8. Ortho: OrthoWidth acts as width/aspect under -game (fixed); auto ortho planes lose the oil at 764 cm
+   (works at 300 cm); diaphragm DoF has no visible effect in ortho; VSM is ~4x finer than the narrow camera.
+9. `BatchUpdateInstancesTransforms(0, Xforms, false, true, true)` compiles; motes move in the clip.
+10. `RHIGetGPUFrameCycles`, `GGameThreadTime`, `GRenderThreadTime` compile and report plausible values.
+11. 16-bit grey `GetRaw(Gray, 16)` works; byte swap = 0 (native order) on this machine.
+12. `SetLightSourceAngle` exists. (The light ROTATION was wrong, see bug 2.)
+13. VSM: see the engine limitation above; the -2 bias is clamped away for a 3 deg camera.
+14. DDC: the README's block was replaced by ManhattanFPV's graph override; it fills G:/UE/OilTank/DerivedDataCache.
 
 ## Risks for the first local build
 

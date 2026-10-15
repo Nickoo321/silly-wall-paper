@@ -221,6 +221,16 @@ bool FOilTankSettings::LoadFromFile(const FString& Path, FString& OutError)
 		}
 	}
 
+	ExecCmds.Reset();
+	const TArray<TSharedPtr<FJsonValue>>* Cmds = nullptr;
+	if (O.TryGetArrayField(TEXT("exec_cmds"), Cmds) && Cmds)
+	{
+		for (const TSharedPtr<FJsonValue>& V : *Cmds)
+		{
+			if (V.IsValid()) { ExecCmds.Add(V->AsString()); }
+		}
+	}
+
 	// Sanity clamps (a bad json must not produce a degenerate scene).
 	OilGridX = FMath::Clamp(OilGridX, 16, 5120);
 	OilGridY = FMath::Clamp(OilGridY, 16, 2880);

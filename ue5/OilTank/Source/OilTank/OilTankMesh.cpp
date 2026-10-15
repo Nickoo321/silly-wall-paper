@@ -253,8 +253,8 @@ void OilTankMesh::MakeSyntheticGrid(int32 Nx, int32 Ny, float AspectWH, int32 Nu
 	for (int32 B = 0; B < NumBlobs; ++B)
 	{
 		const bool bBig = B < NumBlobs / 3;
-		Blobs.Add({ Rng.FRandRange(0.05f, 0.95f), Rng.FRandRange(0.05f, 0.95f),
-			bBig ? Rng.FRandRange(0.10f, 0.20f) : Rng.FRandRange(0.015f, 0.05f), 1.0f });
+		Blobs.Add({ (float)Rng.FRandRange(0.05f, 0.95f), (float)Rng.FRandRange(0.05f, 0.95f),
+			(float)(bBig ? Rng.FRandRange(0.10f, 0.20f) : Rng.FRandRange(0.015f, 0.05f)), 1.0f });
 	}
 	// One ring: a big blob with a negative core.
 	Blobs.Add({ 0.62f, 0.45f, 0.13f, 1.0f });
@@ -469,16 +469,21 @@ void OilTankMesh::BuildOilMesh(const TArray<float>& Grid, int32 Nx, int32 Ny, fl
 		Out.Normals[NumTop + K] = -FVector::UpVector;
 	}
 
+	// The cells are walked clockwise as seen from above, which UE's procedural mesh treats as a BACK face
+	// (found on the floor quad: it received no light). Top faces are therefore emitted reversed (face up),
+	// bottom faces in walk order (face down), walls with the matching flip.
 	Out.Triangles.Reserve(TopTris.Num() * 2 + Segments.Num() * 3);
-	Out.Triangles.Append(TopTris);
 	for (int32 K = 0; K + 2 < TopTris.Num(); K += 3)
 	{
-		// reversed winding: faces down
-		Out.Triangles.Append({ TopTris[K] + NumTop, TopTris[K + 2] + NumTop, TopTris[K + 1] + NumTop });
+		Out.Triangles.Append({ TopTris[K], TopTris[K + 2], TopTris[K + 1] });
+	}
+	for (int32 K = 0; K + 2 < TopTris.Num(); K += 3)
+	{
+		Out.Triangles.Append({ TopTris[K] + NumTop, TopTris[K + 1] + NumTop, TopTris[K + 2] + NumTop });
 	}
 	for (int32 K = 0; K + 1 < Segments.Num(); K += 2)
 	{
 		const int32 A = Segments[K], B = Segments[K + 1];
-		Out.Triangles.Append({ A, B, B + NumTop, A, B + NumTop, A + NumTop });
+		Out.Triangles.Append({ A, B + NumTop, B, A, A + NumTop, B + NumTop });
 	}
 }

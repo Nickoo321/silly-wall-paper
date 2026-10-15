@@ -127,6 +127,13 @@ void AOilTankGameMode::BeginPlay()
 	{
 		// on-screen debug text would land in the screenshots
 		GEngine->Exec(GetWorld(), TEXT("DisableAllScreenMessages"));
+		for (const FString& Cmd : S.ExecCmds)
+		{
+			// viewport commands (viewmode, show) need the player's console path, not GEngine->Exec
+			APlayerController* PC = GetWorld()->GetFirstPlayerController();
+			const FString Out = PC ? PC->ConsoleCommand(Cmd, true) : FString(TEXT("(no player controller)"));
+			UE_LOG(LogOilTank, Log, TEXT("exec '%s' -> '%s'"), *Cmd, *Out);
+		}
 	}
 
 	SceneActor = GetWorld()->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
@@ -201,7 +208,8 @@ void AOilTankGameMode::LoadInputs()
 		UE_LOG(LogOilTank, Warning, TEXT("config %s: %s -- using built-in defaults"), *ConfigPath, *Err);
 	}
 
-	FParse::Value(FCommandLine::Get(), TEXT("ResX="), S.ResX);   // DoF px maths follows the real output width
+	FParse::Value(FCommandLine::Get(), TEXT("ResX="), S.ResX);
+	FParse::Value(FCommandLine::Get(), TEXT("ResY="), S.ResY);   // DoF px maths follows the real output width
 	CmdValue(TEXT("OilShot="), ShotPath);
 	CmdValue(TEXT("OilClip="), ClipDir);
 	CmdValue(TEXT("OilDumpDir="), DumpDirSeq);
@@ -262,7 +270,10 @@ void AOilTankGameMode::ApplyCVars()
 	if (S.AA.Equals(TEXT("ssaa2"), ESearchCase::IgnoreCase))
 	{
 		Set(TEXT("r.AntiAliasingMethod"), TEXT("0"));
-		Set(TEXT("r.ScreenPercentage"), TEXT("200"));   // VERIFY: >100 honoured in -game without TSR
+		Set(TEXT("r.ScreenPercentage"), TEXT("200"));   // 5.8: kMaxResolutionFraction = 4, so 200 is legal without TSR
+		// The froxel grid is sized in RENDER pixels: 8 at 200% = the brief's 4 px at the 2560 output (and
+		// keeps the 3D textures at ~1/4 the VRAM of a 4 px grid on a 5120x2880 render).
+		Set(TEXT("r.VolumetricFog.GridPixelSize"), TEXT("8"));
 	}
 	else if (S.AA.Equals(TEXT("tsr"), ESearchCase::IgnoreCase))
 	{
@@ -312,7 +323,15 @@ void AOilTankGameMode::RemoveForeignActors()
 
 void AOilTankGameMode::CreateMaterials()
 {
-	WhiteTex = OilTankMesh::MakeSolidTexture(FColor::White);
+	// The engine's cooked white texture, not a transient one: with the transient 4x4 BGRA texture as the
+	// material's Albedo the sample came back BLACK under -game (floor unlit: every colour in the first
+	// renders was the water's in-scatter; the motes were specular glints only).
+	WhiteTex = LoadObject<UTexture2D>(nullptr, TEXT("/Engine/EngineResources/WhiteSquareTexture.WhiteSquareTexture"));
+	if (!WhiteTex)
+	{
+		UE_LOG(LogOilTank, Warning, TEXT("WhiteSquareTexture not found: falling back to a transient white texture"));
+		WhiteTex = OilTankMesh::MakeSolidTexture(FColor::White);
+	}
 
 #if WITH_EDITORONLY_DATA
 	// One runtime lit material: BaseColor = Color * Albedo(tex), Specular, Roughness. Built in C++ (no
@@ -353,7 +372,7 @@ void AOilTankGameMode::CreateMaterials()
 
 	Mat->SetShadingModel(MSM_DefaultLit);
 	Mat->TwoSided = true;                         // winding-proof for the procedural meshes
-	Mat->bUsedWithInstancedStaticMeshes = true;   // motes + droplets
+	Mat->SetUsageByFlag(MATUSAGE_InstancedStaticMeshes, true);   // motes + droplets (5.8: the bool fields are deprecated)
 	Mat->PreEditChange(nullptr);
 	Mat->PostEditChange();
 	BaseMaterial = Mat;
@@ -439,7 +458,7 @@ void AOilTankGameMode::SpawnCameraAndPost()
 	if (bOrtho)
 	{
 		CameraDistanceCm = S.OrthoHeightCm;
-		CameraFovDeg = 0.0;
+		CameraFovDeg = S.CameraFovDeg;   // only used for the DoF equivalence below
 	}
 	else if (S.CameraDistanceCm > 0.0f)
 	{
@@ -460,9 +479,11 @@ void AOilTankGameMode::SpawnCameraAndPost()
 	CC->PostProcessBlendWeight = 0.0f;   // the unbound volume owns all post
 	if (bOrtho)
 	{
-		// VERIFY (5.8): ortho near/far with bAutoCalculateOrthoPlanes; DoF/volumetric fog in ortho.
+		// Checked 5.8: under -game the player camera keeps the VERTICAL extent (MaintainYFOV), so OrthoWidth acts
+		// as width/aspect: OrthoWidth = W gave a 71 cm wide view. Pass W * ResY/ResX so the frame is W wide.
 		CC->SetProjectionMode(ECameraProjectionMode::Orthographic);
-		CC->SetOrthoWidth(W);
+		CC->SetAutoCalculateOrthoPlanes(true);   // false lost the VSM shadow entirely in ortho
+		CC->SetOrthoWidth((float)(W * (double)S.ResY / (double)S.ResX));
 		CC->SetOrthoNearClipPlane(1.0f);
 		CC->SetOrthoFarClipPlane(CameraDistanceCm + S.TankDepthCm + 100.0);
 	}
@@ -474,7 +495,6 @@ void AOilTankGameMode::SpawnCameraAndPost()
 
 	// Aperture: either fixed, or solved so a mote ON THE FLOOR has a CoC of dof_px_at_floor px
 	// (thin lens: c = f^2 / (N (s - f)) * |d - s| / d), matching our own dof_max_px for the A/B.
-	if (!bOrtho)
 	{
 		const double SensorMm = S.SensorWidthMm;
 		const double FMm = (SensorMm * 0.5) / FMath::Tan(FMath::DegreesToRadians(CameraFovDeg * 0.5));
@@ -483,6 +503,17 @@ void AOilTankGameMode::SpawnCameraAndPost()
 		const double CocMmAtN1 = (FMm * FMm) / (SMm - FMm) * (DMm - SMm) / DMm;
 		const double CocPxAtN1 = CocMmAtN1 / SensorMm * S.ResX;
 		ApertureFstop = S.ApertureFstop > 0.0f ? S.ApertureFstop : FMath::Clamp(CocPxAtN1 / FMath::Max(0.5f, S.DofPxAtFloor), 1.0, 64.0);
+		if (bOrtho)
+		{
+			// UE's diaphragm DoF (DiaphragmDOFUtils.cpp) derives the focal length from ViewToClip[1][1]; in ortho that
+			// is 1/half-height (uu), i.e. a "vertical half-FOV" of atan(half-height). Its CoC is still the thin-lens
+			// ((d - s) / d) * InfinityCoc with InfinityCoc ~ 1 / (N tan(vhalf)), so the same CoC-by-depth as the narrow
+			// camera is obtained by scaling the f-stop by tan(vhalf_narrow) / tan(vhalf_ortho).
+			const double Aspect = (double)S.ResX / (double)S.ResY;
+			const double TanNarrow = FMath::Tan(FMath::DegreesToRadians(CameraFovDeg * 0.5)) / Aspect;
+			const double TanOrtho = (W / Aspect) * 0.5;
+			ApertureFstop *= TanNarrow / TanOrtho;
+		}
 	}
 
 	PostVolume = World->SpawnActor<APostProcessVolume>(APostProcessVolume::StaticClass(), FTransform::Identity);
@@ -532,13 +563,13 @@ void AOilTankGameMode::SpawnCameraAndPost()
 
 	// Cinematic (diaphragm) DoF focused on the water surface; deep motes and the floor defocus.
 	P.bOverride_DepthOfFieldFocalDistance = true;
-	if (!bOrtho && S.bDof)
+	if (S.bDof)
 	{
 		P.DepthOfFieldFocalDistance = CameraDistanceCm;
 		P.bOverride_DepthOfFieldFstop = true;
 		P.DepthOfFieldFstop = ApertureFstop;
 		P.bOverride_DepthOfFieldMinFstop = true;
-		P.DepthOfFieldMinFstop = 1.2f;
+		P.DepthOfFieldMinFstop = FMath::Min(1.2f, (float)ApertureFstop);
 		P.bOverride_DepthOfFieldSensorWidth = true;
 		P.DepthOfFieldSensorWidth = S.SensorWidthMm;
 		P.bOverride_DepthOfFieldBladeCount = true;
@@ -547,10 +578,6 @@ void AOilTankGameMode::SpawnCameraAndPost()
 	else
 	{
 		P.DepthOfFieldFocalDistance = 0.0f;   // 0 = DoF off
-		if (bOrtho && S.bDof)
-		{
-			UE_LOG(LogOilTank, Warning, TEXT("camera_mode=ortho: DoF disabled (no physical CoC in ortho); use narrow for the A/B"));
-		}
 	}
 
 	EnsureViewTarget();
@@ -577,6 +604,9 @@ void AOilTankGameMode::SpawnLight()
 	UDirectionalLightComponent* L = Cast<UDirectionalLightComponent>(Light->GetLightComponent());
 	check(L);
 	L->SetMobility(EComponentMobility::Movable);   // dynamic only; r.AllowStaticLighting=False anyway
+	// Set the direction AFTER the mobility change and on the component itself: the rotation passed to SpawnActor
+	// came out as P=-79 Y=90 R=-180 (light from screen LEFT at 79 deg instead of from the right at 55 deg).
+	L->SetWorldRotation((-ToLight).Rotation());
 	L->SetIntensity(LightLuxCalibrated() * FloorBoost);   // lux
 	L->SetLightColor(FLinearColor::White);
 	L->SetCastShadows(true);
@@ -588,6 +618,10 @@ void AOilTankGameMode::SpawnLight()
 	L->bEnableLightShaftBloom = false;
 	L->DynamicShadowDistanceMovableLight = (float)(CameraDistanceCm + S.TankDepthCm * 4.0);   // CSM fallback only
 	L->MarkRenderStateDirty();
+	auto CV = [](const TCHAR* N) { IConsoleVariable* V = IConsoleManager::Get().FindConsoleVariable(N); return V ? V->GetString() : FString(TEXT("?")); };
+	UE_LOG(LogOilTank, Log, TEXT("light: toLight=%s rot=%s travel(GetDirection)=%s | VSM=%s RT=%s lumenHWRT=%s"),
+		*ToLight.ToString(), *Light->GetActorRotation().ToString(), *L->GetDirection().ToString(),
+		*CV(TEXT("r.Shadow.Virtual.Enable")), *CV(TEXT("r.RayTracing")), *CV(TEXT("r.Lumen.HardwareRayTracing")));
 }
 
 void AOilTankGameMode::SpawnWater()
@@ -597,33 +631,46 @@ void AOilTankGameMode::SpawnWater()
 	const bool bLfv = S.WaterMode.Equals(TEXT("localfog"), ESearchCase::IgnoreCase);
 	const FLinearColor Tint = WaterTint();
 
+	if (S.bDebugNoWater)
+	{
+		// No fog actor at all: a height fog with density 0 (or 1e-6) rendered the WHOLE frame black in 5.8.
+		UE_LOG(LogOilTank, Log, TEXT("water: none (debug_no_water)"));
+		return;
+	}
 	// Volumetric fog lives on the ExponentialHeightFog component, so one is always spawned.
 	HeightFog = World->SpawnActor<AExponentialHeightFog>(AExponentialHeightFog::StaticClass(), FTransform(FVector(0.0, 0.0, 0.0)));
 	OwnedActors.Add(HeightFog);
 	UExponentialHeightFogComponent* F = HeightFog->GetComponent();
 	F->SetVolumetricFog(true);
-	F->SetVolumetricFogDistance((float)(CameraDistanceCm + D + S.FogGridMarginCm));
 	F->SetVolumetricFogScatteringDistribution(S.WaterPhaseG);
 	F->SetVolumetricFogAlbedo(Tint.ToFColor(true));
 	F->SetVolumetricFogExtinctionScale(1.0f);
+	F->SetVolumetricFogNearFadeInDistance(0.0f);
 	F->SetFogMaxOpacity(1.0f);
-	F->SetFogInscatteringColor(FLinearColor::Black);          // VERIFY (5.8 name; 5.1 renamed the property to FogInscatteringLuminance)
-	F->SetDirectionalInscatteringColor(FLinearColor::Black);  // VERIFY (same)
-	F->SetFogHeightFalloff(0.001f);                           // ~uniform over 1 m
+	F->SetFogInscatteringColor(FLinearColor::Black);          // checked 5.8: setter kept (property is FogInscatteringLuminance)
+	F->SetDirectionalInscatteringColor(FLinearColor::Black);  // checked 5.8: same
+	F->SetFogHeightFalloff(0.001f);                           // UI value; /1000 in SceneCore -> 1e-6 per cm: uniform over 1 m
+
+	// Checked against 5.8 (SceneCore.cpp, VolumetricFog.cpp, RenderUtils.h CalculateGridZParams):
+	//  * VolumetricFogDistance is measured FROM VolumetricFogStartDistance (max distance = start + distance).
+	//  * the froxel grid's near plane = max(near clip, start) + 9.5 cm (NearOffset), so with start = cam - 9.5
+	//    the first slice begins exactly at the water surface and ALL GridSizeZ slices are spent on the
+	//    water column (not on 7.6 m of air), and depth < start gets no volumetric fog at all: clear air.
+	//  * ExponentialHeightFog density: extinction per cm = FogDensity / 1000 * 0.5 (MatchHeightFogFactor).
+	const double NearOffsetCm = 9.5;
+	const double VStart = FMath::Max(0.0, CameraDistanceCm - NearOffsetCm);
 #if OILTANK_HAS_VFOG_START
-	// VERIFY (5.8): property name. Starts the froxel fog at the water surface (camera -> z=0 distance):
-	// in heightfog mode this is what keeps the AIR above the water clear.
-	F->VolumetricFogStartDistance = (float)FMath::Max(0.0, CameraDistanceCm - (bLfv ? S.FogGridMarginCm : 0.0));
+	F->SetVolumetricFogStartDistance((float)VStart);
 #endif
+	F->SetVolumetricFogDistance((float)(NearOffsetCm + D + S.FogGridMarginCm));
 
 	const float Tau = S.bDebugNoWater ? 0.0f : S.WaterOpticalDepth;
 	if (!bLfv)
 	{
-		// VERIFY: UE height fog density is per 1000 uu (lessons: 0.006 washed a 10 km scene white).
-		const float Raw = S.WaterDensityRaw > 0.0f ? S.WaterDensityRaw : Tau / (float)D * 1000.0f;
-		F->SetFogDensity(S.bDebugNoWater ? 0.0f : Raw);
+		const float Raw = S.WaterDensityRaw > 0.0f ? S.WaterDensityRaw : Tau / (float)D * 2000.0f;
+		F->SetFogDensity(S.bDebugNoWater ? 1e-6f : Raw);   // exactly 0 rendered the whole frame black (NaN) in 5.8
 		F->SetStartDistance((float)CameraDistanceCm);
-		UE_LOG(LogOilTank, Log, TEXT("water: heightfog density=%.5f start=%.1fcm"), Raw, CameraDistanceCm);
+		UE_LOG(LogOilTank, Log, TEXT("water: heightfog density=%.5f (ext %.5f/cm) vfog start=%.1fcm dist=%.1fcm"), Raw, Raw / 2000.0f, VStart, NearOffsetCm + D + S.FogGridMarginCm);
 		return;
 	}
 
@@ -634,33 +681,38 @@ void AOilTankGameMode::SpawnWater()
 	{
 		return;
 	}
-	// A local fog volume is a sphere; squash it into a flat ellipsoid: centre at z=-D, half-height D
-	// (top touches the surface), XY radius R >> the lit region so the top is flat to <1 mm over it.
-	const FVector ToLight = ToLightDir();
-	const double Shift = D * FVector2D(ToLight.X, ToLight.Y).Size() / FMath::Max(ToLight.Z, 0.05);
-	const FVector2D Vis = VisibleFloorSizeCm();
-	const double Reach = Shift + FMath::Max(Vis.X, Vis.Y);
-	const double R = 20.0 * Reach;
-	const double Unit = FMath::Max(1.0f, S.LfvUnitRadiusCm);
+	// Checked against 5.8 (LocalFogVolumeSceneProxy.cpp, LocalFogVolumeCommon.ush, VolumetricFog.usf):
+	//  * a local fog volume is a SPHERE with a UNIFORM scale = max axis scale * 500 cm (GetBaseVolumeSize);
+	//    a non-uniform scale does NOT squash it. So: a huge sphere of radius R centred at z = -R, whose top
+	//    touches z = 0 and is flat to ~x^2 / 2R (0.06 mm at 25 cm for R = 50 m).
+	//  * extinction is per METRE (converted to 1/cm when voxelised, clamped by
+	//    r.LocalFogVolume.MaxDensityIntoVolumetricFog = 0.01/cm).
+	//  * radial and height fog are combined as coverage PRODUCTS: radial = 0 means NO fog at all. The radial
+	//    term is saturated (60000/m; the fp11 max is 65024) so the height term alone sets the density.
+	//  * r.LocalFogVolume.GlobalStartDistance (default 1000 cm) hides it nearer than 10 m: lowered here.
+	const double R = 5000.0;
+	const double Unit = ULocalFogVolumeComponent::GetBaseVolumeSize();
 
 	WaterVolumeActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform::Identity);
 	OwnedActors.Add(WaterVolumeActor);
 	ULocalFogVolumeComponent* LFV = NewObject<ULocalFogVolumeComponent>(WaterVolumeActor, TEXT("Water"));
 	WaterVolumeActor->SetRootComponent(LFV);
-	// VERIFY (5.8): property names/units. Extinction assumed per METRE; height fog with ~0 falloff =
-	// uniform density inside the volume; radial part off.
 	const float ExtPerM = S.WaterDensityRaw > 0.0f ? S.WaterDensityRaw : Tau / (float)(D / 100.0);
-	LFV->RadialFogExtinction = 0.0f;
+	LFV->RadialFogExtinction = 60000.0f;
 	LFV->HeightFogExtinction = ExtPerM;
-	LFV->HeightFogFalloff = 0.01f;
-	LFV->HeightFogOffset = 0.0f;
+	LFV->HeightFogFalloff = 1.0f;     // the minimum: 0.01 per unit-sphere unit = uniform over the column
+	LFV->HeightFogOffset = 1.0f;      // reference height at the sphere top (unit space)
 	LFV->FogPhaseG = S.WaterPhaseG;
 	LFV->FogAlbedo = Tint;
 	LFV->FogEmissive = FLinearColor::Black;
 	LFV->RegisterComponent();
-	WaterVolumeActor->SetActorTransform(FTransform(FRotator::ZeroRotator, FVector(0.0, 0.0, -D), FVector(R / Unit, R / Unit, D / Unit)));
+	WaterVolumeActor->SetActorTransform(FTransform(FRotator::ZeroRotator, FVector(0.0, 0.0, -R), FVector(R / Unit)));
 	LFV->MarkRenderStateDirty();
-	UE_LOG(LogOilTank, Log, TEXT("water: localfog ext=%.4f/m R=%.0fcm half-height=%.0fcm unit=%.0fcm"), ExtPerM, R, D, Unit);
+	if (IConsoleVariable* GS = IConsoleManager::Get().FindConsoleVariable(TEXT("r.LocalFogVolume.GlobalStartDistance")))
+	{
+		GS->Set(10.0f, ECVF_SetByCode);
+	}
+	UE_LOG(LogOilTank, Log, TEXT("water: localfog ext=%.4f/m sphere R=%.0fcm centre z=%.0f unit=%.0fcm"), ExtPerM, R, -R, Unit);
 #else
 	UE_LOG(LogOilTank, Error, TEXT("water_mode=localfog but OILTANK_WITH_LFV=0: NO WATER. Use water_mode=heightfog."));
 #endif
@@ -675,7 +727,9 @@ void AOilTankGameMode::SpawnFloor()
 
 	// Clockwise from above: TL, TR, BR, BL (screen up = +X, right = +Y).
 	const TArray<FVector> V = { FVector(HX, -HY, 0.0), FVector(HX, HY, 0.0), FVector(-HX, HY, 0.0), FVector(-HX, -HY, 0.0) };
-	const TArray<int32> T = { 0, 1, 2, 0, 2, 3 };
+	// Winding: UE treats these as front faces only in this order (checked: with { 0,1,2, 0,2,3 } the camera saw
+	// the BACK face, the two-sided material flipped the up normal to -Z, and the floor received no light at all).
+	const TArray<int32> T = { 0, 2, 1, 0, 3, 2 };
 	const TArray<FVector> N = { FVector::UpVector, FVector::UpVector, FVector::UpVector, FVector::UpVector };
 	const TArray<FVector2D> UV0 = { UV(HX, -HY), UV(HX, HY), UV(-HX, HY), UV(-HX, -HY) };
 
@@ -687,6 +741,7 @@ void AOilTankGameMode::SpawnFloor()
 	Floor->SetRelativeLocation(FVector(0.0, 0.0, -S.TankDepthCm));
 	Floor->CreateMeshSection(0, V, T, N, UV0, TArray<FColor>(), TArray<FProcMeshTangent>(), false);
 	Floor->SetCastShadow(false);
+	Floor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Floor->SetMaterial(0, FloorMID);
 	ApplyFilm();
 }
@@ -760,6 +815,7 @@ void AOilTankGameMode::BuildOil()
 				Tile->SetRelativeTransform(FTransform(FRotator::ZeroRotator, FVector(I * H, J * W, 0.0),
 					FVector((I & 1) ? -1.0 : 1.0, (J & 1) ? -1.0 : 1.0, 1.0)));
 				Tile->SetCastShadow(true);
+		Tile->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 				Tile->bCastShadowAsTwoSided = true;
 				OilTiles.Add(Tile);
 			}
@@ -795,6 +851,7 @@ void AOilTankGameMode::SpawnDroplets()
 		Droplets->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")));
 		Droplets->SetMaterial(0, OilMID);
 		Droplets->SetCastShadow(true);
+		Droplets->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		Droplets->RegisterComponent();
 		SceneActor->AddInstanceComponent(Droplets);
 	}
@@ -831,6 +888,7 @@ void AOilTankGameMode::SpawnMotes()
 	Motes->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Sphere.Sphere")));
 	Motes->SetMaterial(0, MoteMID);
 	Motes->SetCastShadow(false);   // receive the oil's shadow, cast none
+	Motes->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Motes->RegisterComponent();
 	SceneActor->AddInstanceComponent(Motes);
 

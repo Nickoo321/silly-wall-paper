@@ -34,6 +34,30 @@ static const float kSeam[3] = {0.36f, 0.16f, 1.00f};
 static const float kInk[3]  = {0.45f, 0.20f, 1.00f};   // only ever at ink_level (~3%)
 
 static float Luma(const float* c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
+// chroma gain around luma, never below 0, then a level
+static void ChromaK(const float* src, float chroma, float k, float* out) {
+    const float y = Luma(src);
+    for (int ch = 0; ch < 3; ch++) out[ch] = fmaxf(y + (src[ch] - y) * chroma, 0.0f) * k;
+}
+
+// Per-look quick post (approximate; the faithful 2D stack is ported separately):
+// halation amount + tint, aberration, grain, vignette, DOF (amount, focus depth,
+// range), blur tap spacing, and the far wall: backLit > 0 = the lit 2D film.
+struct LookPost {
+    float hal, tint[3], aberr, grain, vignette, dof, focus, range, spread, backLit;
+};
+static const LookPost kLookPost[9] = {
+    // hal   tint                 aberr grain vign  dof  focus range spread backLit
+    { 0.12f, {1.0f, 0.72f, 0.48f}, 1.0f, 0.10f, 0.50f, 0.0f, 0.3f, 0.2f, 1.5f, 0.00f },  // 0 round 1
+    { 0.35f, {1.0f, 0.72f, 0.48f}, 0.8f, 0.10f, 0.55f, 0.0f, 0.3f, 0.2f, 1.8f, 0.00f },  // 1 lamp wax
+    { 0.12f, {1.0f, 0.90f, 0.80f}, 1.2f, 0.08f, 0.50f, 1.0f, 0.30f, 0.22f, 2.2f, 0.30f }, // 2 macro oil
+    { 0.18f, {1.0f, 0.90f, 0.80f}, 1.0f, 0.10f, 0.50f, 0.0f, 0.3f, 0.2f, 1.5f, 0.00f },  // 3 thin film
+    { 0.22f, {1.0f, 0.90f, 0.80f}, 1.0f, 0.10f, 0.50f, 0.0f, 0.3f, 0.2f, 1.5f, 0.00f },  // 4 chrome
+    { 1.00f, {1.0f, 1.00f, 1.00f}, 0.8f, 0.08f, 0.45f, 0.0f, 0.3f, 0.2f, 3.0f, 0.00f },  // 5 neon
+    { 0.30f, {1.0f, 0.72f, 0.48f}, 0.8f, 0.10f, 0.50f, 0.0f, 0.3f, 0.2f, 2.0f, 0.00f },  // 6 gummy
+    { 0.10f, {1.0f, 0.72f, 0.48f}, 1.0f, 0.12f, 0.55f, 0.0f, 0.3f, 0.2f, 1.5f, 0.50f },  // 7 inverted
+    { 0.25f, {1.0f, 0.82f, 0.65f}, 1.1f, 0.19f, 0.60f, 0.0f, 0.3f, 0.2f, 1.5f, 0.00f },  // 8 flat acid+
+};
 
 static float HalfToFloat(uint16_t h) {   // copied from src_ink3d/ink3d.cpp
     uint32_t sign = (uint32_t)(h & 0x8000) << 16;
@@ -308,9 +332,10 @@ void LabRenderer::InitOffscreen(int width, int height, const LabConfig& cfg, uns
     CreateDevice();
     CreatePipelines();
     CreateTargets();
-    LabLog("[lab] %dx%d raymarch %dx%d blobs=%d holes=%d steps=%d shade=%s camDist=%.3f\n",
+    LabLog("[lab] %dx%d raymarch %dx%d blobs=%d holes=%d steps=%d shade=%s look=%d "
+           "ink_level=%.3f camDist=%.3f\n",
            m_width, m_height, m_rayW, m_rayH, (int)m_blobs.size(), m_cfg.holes, m_cfg.steps,
-           m_cfg.shade == LAB_FLAT ? "flat" : "gloss", m_camDist);
+           m_cfg.shade == LAB_FLAT ? "flat" : "gloss", m_cfg.look, m_cfg.inkLevel, m_camDist);
 }
 
 void LabRenderer::CreateDevice() {
@@ -331,13 +356,13 @@ void LabRenderer::CreateDevice() {
 
     D3D12_DESCRIPTOR_HEAP_DESC hd = {};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    hd.NumDescriptors = 2;                 // 0 = shot target, 1 = raymarch target
+    hd.NumDescriptors = 4;                 // shot, raymarch, down, blur
     HR(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_rtvHeap)));
     m_rtvStride = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     D3D12_DESCRIPTOR_HEAP_DESC sh = {};
     sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    sh.NumDescriptors = 1;                 // the raymarch target's SRV
+    sh.NumDescriptors = 3;                 // SRVs t1..t3: raymarch, down, blur
     sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     HR(m_device->CreateDescriptorHeap(&sh, IID_PPV_ARGS(&m_srvHeap)));
 
@@ -378,10 +403,10 @@ void LabRenderer::CreateDevice() {
 void LabRenderer::CreatePipelines() {
     // one RS for both passes: b0 = 40 root constants, t0 = root SRV (blobs),
     // t1 = table (raymarch target, display pass), s0 = linear clamp
-    D3D12_DESCRIPTOR_RANGE r = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 1, 0, 0 };
+    D3D12_DESCRIPTOR_RANGE r = { D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 1, 0, 0 };
     D3D12_ROOT_PARAMETER p[3] = {};
     p[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    p[0].Constants = { 0, 0, 40 };
+    p[0].Constants = { 0, 0, 48 };
     p[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     p[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
     p[1].Descriptor = { 0, 0 };
@@ -402,9 +427,9 @@ void LabRenderer::CreatePipelines() {
     HR(m_device->CreateRootSignature(0, sig->GetBufferPointer(), sig->GetBufferSize(),
                                      IID_PPV_ARGS(&m_rs)));
 
-    auto gfx = [&](const char* src, ComPtr<ID3D12PipelineState>& pso) {
+    auto gfx = [&](const char* src, const char* entry, ComPtr<ID3D12PipelineState>& pso) {
         ComPtr<ID3DBlob> vs = Compile(src, "VSMain", "vs_5_1");
-        ComPtr<ID3DBlob> ps = Compile(src, "PSMain", "ps_5_1");
+        ComPtr<ID3DBlob> ps = Compile(src, entry, "ps_5_1");
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = {};
         d.pRootSignature = m_rs.Get();
         d.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
@@ -419,8 +444,11 @@ void LabRenderer::CreatePipelines() {
         d.SampleDesc.Count = 1;
         HR(m_device->CreateGraphicsPipelineState(&d, IID_PPV_ARGS(&pso)));
     };
-    gfx(kRaySrc, m_psoRay);
-    gfx(kDisplaySrc, m_psoDisplay);
+    gfx(kRaySrc, "PSMain", m_psoRay);
+    gfx(kPostSrc, "PSDown", m_psoDown);
+    gfx(kPostSrc, "PSBlur", m_psoBlur);
+    gfx(kPostSrc, "PSBlurB", m_psoBlurB);
+    gfx(kPostSrc, "PSPost", m_psoPost);
 }
 
 void LabRenderer::CreateTargets() {
@@ -439,16 +467,26 @@ void LabRenderer::CreateTargets() {
         rtv.ptr += (SIZE_T)rtvSlot * m_rtvStride;
         m_device->CreateRenderTargetView(out.Get(), nullptr, rtv);
     };
+    m_qW = std::max(1, (m_width + 3) / 4);
+    m_qH = std::max(1, (m_height + 3) / 4);
     tex(m_width, m_height, m_shotTex, 0);
     tex(m_rayW, m_rayH, m_rayTex, 1);
+    tex(m_qW, m_qH, m_downTex, 2);
+    tex(m_qW, m_qH, m_blurTex, 3);
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sv = {};
     sv.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     sv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     sv.Texture2D.MipLevels = 1;
-    m_device->CreateShaderResourceView(m_rayTex.Get(), &sv,
-                                       m_srvHeap->GetCPUDescriptorHandleForHeapStart());
+    const UINT srvStride =
+        m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    ID3D12Resource* srvs[3] = { m_rayTex.Get(), m_downTex.Get(), m_blurTex.Get() };
+    for (int i = 0; i < 3; i++) {
+        auto h = m_srvHeap->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += (SIZE_T)i * srvStride;
+        m_device->CreateShaderResourceView(srvs[i], &sv, h);
+    }
 
     m_shotPitch = ((UINT)m_width * 8 + 255) & ~255u;
     D3D12_RESOURCE_DESC bd = {};
@@ -582,11 +620,7 @@ void LabRenderer::Render(float sdrScale, float hiGain, float maxOut) {
             float la = Luma(src);
             k *= 1.0f + 0.5f * (mainLuma / la - 1.0f);
         }
-        {   // chroma gain around luma, never below 0 (dark_sat: deeper = more saturated)
-            const float y = Luma(src);
-            for (int ch = 0; ch < 3; ch++)
-                o.b[ch] = fmaxf(y + (src[ch] - y) * c.chroma, 0.0f) * k;
-        }
+        ChromaK(src, c.chroma, k, o.b);   // dark_sat: deeper = more saturated
         o.b[3] = b.wgt;
         o.c[0] = 1.0f; o.c[1] = 1.0f / e;
         o.c[2] = (b.kind == 3) ? 1.0f / fmaxf(c.holeTunnel, 1.0f) : 1.0f;
@@ -616,23 +650,30 @@ void LabRenderer::Render(float sdrScale, float hiGain, float maxOut) {
     norm3(-0.78f, 0.76f, -0.65f, key);     // [post] light_x/y/z, upper-left-front
     norm3(0.15f, -1.0f, 0.25f, lamp);      // the lamp under the slab
 
-    float cb[40] = {};
+    const int look = (c.look >= 0 && c.look <= 8) ? c.look : 0;
+    const LookPost& lp = kLookPost[look];
+    float cb[48] = {};
     cb[0] = 1.0f / m_rayW; cb[1] = 1.0f / m_rayH; cb[2] = (float)m_width / m_height; cb[3] = t;
     cb[4] = cam[0]; cb[5] = cam[1]; cb[6] = cam[2];
     cb[7] = tanf(c.fovDeg * 0.5f * kPi / 180.0f);
     cb[8] = right[0]; cb[9] = right[1]; cb[10] = right[2]; cb[11] = c.threshold;
     cb[12] = up[0]; cb[13] = up[1]; cb[14] = up[2]; cb[15] = c.depth;
     cb[16] = fwd[0]; cb[17] = fwd[1]; cb[18] = fwd[2]; cb[19] = (float)n;
-    cb[20] = kMain[0][0] * c.level; cb[21] = kMain[0][1] * c.level; cb[22] = kMain[0][2] * c.level;
+    ChromaK(kMain[0], c.chroma, c.level, &cb[20]);
     cb[23] = (float)c.steps;
     cb[24] = kInk[0]; cb[25] = kInk[1]; cb[26] = kInk[2]; cb[27] = c.inkLevel;
     {
         float ls = Luma(kSeam), k = c.level * mainLuma / ls;
         cb[28] = kSeam[0] * k; cb[29] = kSeam[1] * k; cb[30] = kSeam[2] * k;
     }
-    cb[31] = (float)c.shade;
+    cb[31] = (look == 8) ? (float)LAB_FLAT : (float)c.shade;
     cb[32] = key[0]; cb[33] = key[1]; cb[34] = key[2]; cb[35] = hiGain;
-    cb[36] = lamp[0]; cb[37] = lamp[1]; cb[38] = lamp[2];
+    cb[36] = lamp[0]; cb[37] = lamp[1]; cb[38] = lamp[2]; cb[39] = (float)look;
+    {
+        const float ka = c.level * (1.0f + 0.5f * (mainLuma / Luma(kAccent[0]) - 1.0f));
+        ChromaK(kAccent[0], c.chroma, ka, &cb[40]);
+    }
+    cb[43] = lp.backLit;
 
     Mark("raymarch");
     Barrier(m_rayTex.Get(), m_rayState, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -645,26 +686,56 @@ void LabRenderer::Render(float sdrScale, float hiGain, float maxOut) {
     m_cmd->RSSetScissorRects(1, &sc);
     m_cmd->SetGraphicsRootSignature(m_rs.Get());
     m_cmd->SetPipelineState(m_psoRay.Get());
-    m_cmd->SetGraphicsRoot32BitConstants(0, 40, cb, 0);
+    m_cmd->SetGraphicsRoot32BitConstants(0, 48, cb, 0);
     m_cmd->SetGraphicsRootShaderResourceView(1, m_blobBuf->GetGPUVirtualAddress() +
                                                 (UINT64)slot * kMaxBlobs * sizeof(BlobGPU));
     m_cmd->SetGraphicsRootDescriptorTable(2, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
     m_cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_cmd->DrawInstanced(3, 1, 0, 0);
 
-    Mark("display");
+    // --- quick post: quarter-res box down, 9x9 blur, then the full-res post --
+    float pc[20] = {};
+    pc[2] = sdrScale; pc[3] = maxOut;
+    // odd pass count, each pass at spacing <= 1.3 texels, same total radius
+    const int blurPasses = lp.spread <= 1.3f ? 1 : (lp.spread <= 2.25f ? 3 : 5);
+    pc[4] = 1.0f / m_rayW; pc[5] = 1.0f / m_rayH;
+    pc[6] = lp.spread / sqrtf((float)blurPasses); pc[7] = 1.0f;
+    pc[8] = lp.hal; pc[9] = lp.tint[0]; pc[10] = lp.tint[1]; pc[11] = lp.tint[2];
+    pc[12] = lp.aberr; pc[13] = lp.grain; pc[14] = lp.vignette;
+    pc[16] = lp.dof; pc[17] = lp.focus; pc[18] = lp.range;
+    auto pass = [&](ID3D12PipelineState* pso, int rtvSlot, int w, int h) {
+        auto r = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+        r.ptr += (SIZE_T)rtvSlot * m_rtvStride;
+        m_cmd->OMSetRenderTargets(1, &r, FALSE, nullptr);
+        D3D12_VIEWPORT v = { 0, 0, (float)w, (float)h, 0, 1 };
+        D3D12_RECT rc = { 0, 0, w, h };
+        m_cmd->RSSetViewports(1, &v);
+        m_cmd->RSSetScissorRects(1, &rc);
+        pc[0] = 1.0f / w; pc[1] = 1.0f / h;
+        m_cmd->SetPipelineState(pso);
+        m_cmd->SetGraphicsRoot32BitConstants(0, 20, pc, 0);
+        m_cmd->DrawInstanced(3, 1, 0, 0);
+    };
+    Mark("down");
     Barrier(m_rayTex.Get(), m_rayState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Barrier(m_downTex.Get(), m_downState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    pass(m_psoDown.Get(), 2, m_qW, m_qH);
+    Mark("blur");
+    for (int bp = 0; bp < blurPasses; bp++) {
+        if ((bp & 1) == 0) {      // down -> blur
+            Barrier(m_downTex.Get(), m_downState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Barrier(m_blurTex.Get(), m_blurState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            pass(m_psoBlur.Get(), 3, m_qW, m_qH);
+        } else {                  // blur -> down
+            Barrier(m_blurTex.Get(), m_blurState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            Barrier(m_downTex.Get(), m_downState, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            pass(m_psoBlurB.Get(), 2, m_qW, m_qH);
+        }
+    }
+    Mark("post");
+    Barrier(m_blurTex.Get(), m_blurState, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     Barrier(m_shotTex.Get(), m_shotState, D3D12_RESOURCE_STATE_RENDER_TARGET);
-    rtv = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    m_cmd->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
-    D3D12_VIEWPORT vp2 = { 0, 0, (float)m_width, (float)m_height, 0, 1 };
-    D3D12_RECT sc2 = { 0, 0, m_width, m_height };
-    m_cmd->RSSetViewports(1, &vp2);
-    m_cmd->RSSetScissorRects(1, &sc2);
-    float dc[4] = { 1.0f / m_width, 1.0f / m_height, sdrScale, maxOut };
-    m_cmd->SetPipelineState(m_psoDisplay.Get());
-    m_cmd->SetGraphicsRoot32BitConstants(0, 4, dc, 0);
-    m_cmd->DrawInstanced(3, 1, 0, 0);
+    pass(m_psoPost.Get(), 0, m_width, m_height);
     Mark(nullptr);
     EndFrame();
 }

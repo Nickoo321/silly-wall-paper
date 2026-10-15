@@ -17,7 +17,10 @@
 //   --console             attach to the PARENT console only (never creates one)
 // Look overrides:
 //   --shade gloss|flat  --blobs N  --holes N  --steps N  --half-res 0|1
-//   --camera-drift X  --level X  --ink-level X  --depth X  --fov DEG  --size X
+//   --camera-drift X  --level X  --ink-level X  --depth X  --fov DEG  --size X  --chroma X
+//   --look N   exploration directions: 1 lamp wax, 2 macro oil-in-water, 3 thin film,
+//              4 liquid chrome, 5 neon emissive, 6 gummy, 7 inverted/silhouette,
+//              8 flat acid+ (0 = the round-1 gloss/flat by --shade); quick post on all
 
 #include <windows.h>
 #include <shellapi.h>
@@ -226,6 +229,7 @@ static int ShotMain() {
         else if (wcscmp(a, L"--fov") == 0)          cfg.fovDeg = nextF(i);
         else if (wcscmp(a, L"--size") == 0)         cfg.size = nextF(i);
         else if (wcscmp(a, L"--chroma") == 0)       cfg.chroma = nextF(i);
+        else if (wcscmp(a, L"--look") == 0)         cfg.look = nextI(i);
     }
     LocalFree(argv);
 

@@ -55,7 +55,8 @@ struct LabConfig {
     int   shade        = LAB_GLOSS;
     float level        = 0.85f;   // palette level
     float chroma       = 1.30f;   // linear chroma gain on the palette ([hdr] saturation x post_chroma)
-    float inkLevel     = 0.035f;  // backdrop marbling (the scheme's ink is black)
+    float inkLevel     = 0.02f;   // backdrop marbling (the scheme's ink is black)
+    int   look         = 0;       // --look 1..8 exploration directions (0 = round-1 gloss/flat)
     float peakNits     = 1000.0f;
 };
 
@@ -135,12 +136,16 @@ private:
     UINT                              m_frameIndex = 0;
 
     ComPtr<ID3D12RootSignature>  m_rs;
-    ComPtr<ID3D12PipelineState>  m_psoRay, m_psoDisplay;
+    ComPtr<ID3D12PipelineState>  m_psoRay, m_psoDown, m_psoBlur, m_psoBlurB, m_psoPost;
     ComPtr<ID3D12DescriptorHeap> m_rtvHeap, m_srvHeap;
     UINT m_rtvStride = 0;
 
     ComPtr<ID3D12Resource> m_rayTex, m_shotTex, m_shotReadback, m_blobBuf;
+    ComPtr<ID3D12Resource> m_downTex, m_blurTex;         // quarter res: halation / DOF
+    int m_qW = 0, m_qH = 0;
     D3D12_RESOURCE_STATES  m_rayState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    D3D12_RESOURCE_STATES  m_downState = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    D3D12_RESOURCE_STATES  m_blurState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     D3D12_RESOURCE_STATES  m_shotState = D3D12_RESOURCE_STATE_RENDER_TARGET;
     UINT   m_shotPitch = 0;
     uint8_t* m_blobMapped = nullptr;

@@ -251,9 +251,9 @@ float MixAt(float3 pw) {
 
 // film_hue2 / film_hue3 rotation + film_equal_load (src/shaders.h:1883-2084,
 // same bands, same seam narrowing, same equal-load target at 325 deg).
-float3 SchemeColor(float3 oilC, float3 pw, out float k2) {
+float3 SchemeColor(float3 oilC, float3 pw, out float k2, out float k3) {
     k2 = 0.0;
-    float k3 = 0.0;
+    k3 = 0.0;
     [branch] if (CB_HUE.y > 0.0005 || CB_HUE.w > 0.0005) {
         float mixV = MixAt(pw);
         const float MIXSEAM = 0.62;
@@ -507,11 +507,16 @@ R"hlsl(
         float3 n = -normalize(grad + float3(0.0, 0.0, -1e-6));
         float3 v = -rd;
         // screen-space y of the hit for the 2D lamp-under-the-column ramp
-        float lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, saturate(p.y)), saturate(CB_MISC.x));
-        float k2;
-        float3 oilC = SchemeColor(fill, p, k2);
-        // the edge light keeps the full palette; the film level dims the body
-        rimSrgb = AcidHueShift(oilC, CB_HUED.y * (1.0 - k2));
+        // screen-space y of the hit (world y is spread by the perspective)
+        float camDist = 0.5 / max(CB_CAMPOS.w, 1e-4);
+        float sy = 0.5 + (p.y - 0.5) * camDist / (camDist + max(p.z, 0.0));
+        float lampG = lerp(1.0, 0.80 + 0.50 * smoothstep(0.0, 1.0, saturate(sy)), saturate(CB_MISC.x));
+        float k2, k3;
+        float3 oilC = SchemeColor(fill, p, k2, k3);
+        // the edge light keeps the full palette; the film level dims the body.
+        // The rim turns to the SEAM colour (half the hue2 rotation) from
+        // wherever it stands: the 2D boundary-reflect delta (seam - here).
+        rimSrgb = AcidHueShift(oilC, CB_HUED.y - CB_HUE.x * k2 - CB_HUE.z * k3);
         float3 body = oilC * CB_HUEC.w * lampG;
         float2 dbg;
         col = ShadeWax(p, n, v, rd, body, rimSrgb * lampG, m0, m1, grad, hot, dbg);

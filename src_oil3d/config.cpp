@@ -121,7 +121,6 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
     r.F(S, L"rise_stretch", a.riseStretch);
     r.F(S, L"rise_bottom_light", a.riseBottomLight);
     r.F(S, L"rise_parallax", a.riseParallax);
-    r.F(S, L"rise_parallax_dim", a.riseParallaxDim);
     r.F(S, L"oil_viscosity", a.oilViscosity);
     r.F(S, L"conserve_mass", a.conserveMass);
     r.F(S, L"spawn_grow_s", a.spawnGrowS);
@@ -160,7 +159,6 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
         swprintf_s(key, L"ink_stop_%d", ci + 1);
         r.Vec(S, key, &a.inkRamp[ci * 3], 3);
     }
-    r.Vec(S, L"meniscus_color", a.meniscusCol, 3);
     r.I(S, L"accent_mode", a.accentMode);
     r.F(S, L"accent_max_r", a.accentMaxR);
     r.F(S, L"accent_frac", a.accentFrac);
@@ -176,7 +174,6 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
     r.F(S, L"film_hue3_share", a.filmHue3Share);
     r.F(S, L"film_equal_load", a.filmEqualLoad);
     r.F(S, L"film_equal_load_patches", a.filmEqualLoadP);
-    r.F(S, L"crust_hue_mix", a.crustHueMix);
     r.F(S, L"film_level", a.filmLevel);
     r.F(S, L"mass_rim", a.massRim);
 
@@ -206,7 +203,7 @@ void ReadOne(const std::wstring& path, Oil3DConfig& cfg, std::vector<std::wstrin
 
     r.I(S, L"droplets", a.droplets);
     r.F(S, L"droplet_r_min", a.dropletRMin);  r.F(S, L"droplet_r_max", a.dropletRMax);
-    r.F(S, L"droplet_bias", a.dropletBias);   r.F(S, L"droplet_rise", a.dropletRise);
+    r.F(S, L"droplet_bias", a.dropletBias);
     r.F(S, L"droplet_racer_frac", a.dropletRacerFrac);
     r.F(S, L"droplet_racer_speed", a.dropletRacerSpeed);
     r.F(S, L"droplet_racer_wobble", a.dropletRacerWobble);
@@ -353,6 +350,8 @@ void FinalizeOil3DConfig(Oil3DConfig& cfg) {
     if (cfg.dropletCap < 0)  cfg.dropletCap = 0;
     if (cfg.dropletCap > 64) cfg.dropletCap = 64;
     if (cfg.flatBands < 1) cfg.flatBands = 1;
+    if (cfg.specPower < 0.5f) cfg.specPower = 0.5f;   // pow(0, 0) = NaN
+    if (cfg.rimPower < 0.5f)  cfg.rimPower = 0.5f;
     if (cfg.oil.supportScale < 0.5f) cfg.oil.supportScale = 0.5f;
     if (cfg.oil.threshold < 0.01f) cfg.oil.threshold = 0.01f;
     if (cfg.oil.threshold > 0.99f) cfg.oil.threshold = 0.99f;

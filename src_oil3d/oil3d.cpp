@@ -192,10 +192,13 @@ void Oil3DSim::Init(const Oil3DConfig& cfg, unsigned seed, float aspect) {
     m_seed = seed;
     m_time = 0.0;
     int want = cfg.blobs > 0 ? cfg.blobs : cfg.oil.blobCount;
-    if (want > kOil3DMaxBlobs) {
+    // headroom for blobs still dissolving: the turnover only retires while the
+    // vector has a free slot (2D: 96 of 128; a full 64 of 64 would block it)
+    const int kWantMax = kOil3DMaxBlobs - 8;
+    if (want > kWantMax) {
         Oil3DLog("[oil3d] blob_count %d capped at %d (3D prototype limit; [oil3d] blobs "
-                 "overrides)\n", want, kOil3DMaxBlobs);
-        want = kOil3DMaxBlobs;
+                 "overrides)\n", want, kWantMax);
+        want = kWantMax;
     }
     if (want < 1) want = 1;
     m_want = want;
@@ -470,7 +473,8 @@ void Oil3DSim::StepBlobs(float dt) {
             const float ph = 2.3f * u + 0.031f * t + g2 + 0.6f * b.s3;
             const float amp = m_cfg.zDrift;
             tx += amp * 0.25f * kPi * sinf(ph) * cosf(kPi * zn);
-            tz += -amp * 2.3f * cosf(ph) * sinf(kPi * zn) * D;
+            // vz chosen so d(vx)/dx + d(vz)/dz = 0 in (X, z): divergence-free
+            tz += -amp * 0.25f * 2.3f * cosf(ph) * sinf(kPi * zn) * D;
         }
         // buoyancy (uv y is down, so "up" is negative); holes sink
         ty += (b.wgt > 0.0f ? -1.0f : 1.0f) * a.buoyancy * (b.baseR / 0.12f);
@@ -580,7 +584,7 @@ void Oil3DSim::StepBlobs(float dt) {
         }
     }
     if (cons0) {
-        const float gone = 0.2f / (1440.0f * fmaxf(a.supportScale, 0.5f));
+        const float gone = 0.2f / (1440.0f * fmaxf(a.supportScale, 0.5f));   // 1440 px nominal
         for (size_t i = m_blobs.size(); i-- > 0; )
             if (m_blobs[i].rTarget <= 0.0f && m_blobs[i].baseR < gone)
                 m_blobs.erase(m_blobs.begin() + (ptrdiff_t)i);
@@ -1444,7 +1448,7 @@ void Oil3DRenderer::UploadFrame(float sdrScale) {
     // ---- scheme hues: the patch field rises with the wax (+ film_hue2_rise)
     {
         const float seam = (fabsf(a.filmHue2Seam - 1.0f) < 1e-6f) ? 1.0f
-                         : fminf(fmaxf(a.filmHue2Seam, 0.05f), 1.0f);
+                         : fminf(fmaxf(a.filmHue2Seam, 0.1f), 1.0f);
         const float freq = 0.6f / fmaxf(a.filmHue2Scale, 0.05f);
         const float rise = t * (a.riseSpeed + a.filmHue2Rise / 60.0f);
         const float drift = t * 0.004f * a.filmHue2Drift;
